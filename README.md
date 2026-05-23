@@ -18,6 +18,7 @@ packages/
 docs/
   architecture.md       Folder boundaries and dependency rules
   eeg-workflow.md       Initial EEG workflow outline
+  phase-1-ingestion.md  External experiment upload and event-log plan
   storage.md            Versioned fixture and local data rules
   decisions/            Architecture decision notes
 scripts/
@@ -71,16 +72,42 @@ Phase 0 uses local per-app environments:
 
 Use CPython 3.12 or 3.13 for the API environment. Python 3.14 mingw builds may not have compatible wheels for the Phase 0 dependencies yet. On Windows, prefer the setup script because `python` may resolve to MSYS Python instead of CPython.
 
-### API
+### Phase 0 Quickstart
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\setup_api.ps1
+.\apps\api\.venv\Scripts\python.exe .\scripts\generate_sample_eeg.py
+
 cd apps/api
 .\.venv\Scripts\Activate.ps1
 uvicorn main:app --reload
 ```
 
 API URL: `http://127.0.0.1:8000`
+
+In a second terminal:
+
+```powershell
+cd apps/web
+npm install
+npm run dev
+```
+
+Web URL: `http://127.0.0.1:5173`
+
+The Phase 0 web screen displays API health, sample EEG datasets, and selected sample metadata.
+
+### Smoke Test
+
+Run this after dependency setup or before committing Phase 0 changes:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\smoke_phase0.ps1
+```
+
+The smoke test generates sample EEG files, runs API/package tests, checks sample API endpoints, and builds the web app.
+
+### API Checks
 
 Health check:
 
@@ -105,14 +132,16 @@ Generate deterministic Phase 0 sample EEG files:
 
 This writes committed test fixtures to `tests/fixtures/eeg/` and local app samples to `data/raw/samples/`.
 
-### Web
+## Product Pipeline
 
-```powershell
-cd apps/web
-npm install
-npm run dev
+The long-term workflow is organized around external experiment sessions:
+
+```text
+upload EEG recording and event log
+  -> validate metadata and timing
+  -> preprocess signal
+  -> run analysis
+  -> produce plots, tables, and export bundles
 ```
 
-Web URL: `http://127.0.0.1:5173`
-
-The Phase 0 web screen displays API health, sample EEG datasets, and selected sample metadata.
+See `docs/phase-1-ingestion.md` for the next phase, including PsychoPy-style event and behavior logs.
