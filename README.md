@@ -69,15 +69,14 @@ Phase 0 uses local per-app environments:
 - API: Python `.venv` inside `apps/api`
 - Web: npm dependencies inside `apps/web/node_modules`
 
-Use CPython 3.12 or 3.13 for the API environment. Python 3.14 mingw builds may not have compatible wheels for the Phase 0 dependencies yet.
+Use CPython 3.12 or 3.13 for the API environment. Python 3.14 mingw builds may not have compatible wheels for the Phase 0 dependencies yet. On Windows, prefer the setup script because `python` may resolve to MSYS Python instead of CPython.
 
 ### API
 
 ```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\setup_api.ps1
 cd apps/api
-python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 

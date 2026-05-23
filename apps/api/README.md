@@ -4,13 +4,11 @@ Server-side entrypoint for EEG workflows.
 
 ## Local Development
 
-Use CPython 3.12 or 3.13 for the local API environment.
+Use CPython 3.12 or 3.13 for the local API environment. On Windows, prefer the repository setup script because `python` may resolve to MSYS Python instead of CPython.
 
 ```powershell
-cd apps/api
-python -m venv .venv
+powershell -ExecutionPolicy Bypass -File ..\..\scripts\setup_api.ps1
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 
