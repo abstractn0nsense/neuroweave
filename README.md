@@ -35,3 +35,38 @@ apps -> packages/shared
 ```
 
 `eeg-core` should not import app code, UI frameworks, database clients, or vendor SDKs. The chat layer is intentionally thin for now and should depend on the workflow layer instead of becoming the source of EEG domain rules.
+
+## Local Development
+
+Phase 0 uses local per-app environments:
+
+- API: Python `.venv` inside `apps/api`
+- Web: npm dependencies inside `apps/web/node_modules`
+
+### API
+
+```powershell
+cd apps/api
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+uvicorn main:app --reload
+```
+
+API URL: `http://127.0.0.1:8000`
+
+Health check:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health
+```
+
+### Web
+
+```powershell
+cd apps/web
+npm install
+npm run dev
+```
+
+Web URL: `http://127.0.0.1:5173`

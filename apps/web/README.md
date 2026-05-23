@@ -2,6 +2,18 @@
 
 Browser-facing EEG workflow application.
 
+## Local Development
+
+```powershell
+cd apps/web
+npm install
+npm run dev
+```
+
+The development server runs on `http://127.0.0.1:5173`.
+
+Copy `.env.example` to `.env` when local API URL overrides are needed.
+
 Expected responsibilities:
 
 - upload or select EEG datasets

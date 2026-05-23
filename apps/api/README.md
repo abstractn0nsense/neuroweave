@@ -2,6 +2,24 @@
 
 Server-side entrypoint for EEG workflows.
 
+## Local Development
+
+```powershell
+cd apps/api
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+uvicorn main:app --reload
+```
+
+The development server runs on `http://127.0.0.1:8000`.
+
+Health check:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health
+```
+
 Expected responsibilities:
 
 - expose dataset, workflow, job, and result endpoints
