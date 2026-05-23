@@ -1,22 +1,26 @@
 # NeuroWeave
 
-NeuroWeave is being prepared as a chat-based project.
+NeuroWeave is being prepared as a neuroscience and EEG workflow project.
 
 ## Structure
 
 ```text
 apps/
-  api/                  Server/API entrypoint for chat features
-  web/                  Web chat UI entrypoint
+  api/                  Server/API entrypoint for EEG workflows
+  web/                  Web UI for EEG workflow setup and review
 packages/
-  chat-core/            Framework-independent chat domain and use cases
-  chat-adapters/        LLM, storage, realtime, and external integrations
+  eeg-core/             EEG domain models and pipeline contracts
+  eeg-processing/       Signal preprocessing and analysis steps
+  eeg-io/               EEG file readers, writers, and dataset adapters
+  workflow-engine/      Pipeline execution graph and job state
+  chat-interface/       Future chat layer for controlling EEG workflows
   shared/               Shared config, types, and small utilities
 docs/
   architecture.md       Folder boundaries and dependency rules
+  eeg-workflow.md       Initial EEG workflow outline
   decisions/            Architecture decision notes
 tests/
-  fixtures/             Shared test fixtures
+  fixtures/eeg/         Shared EEG test fixtures
 ```
 
 ## Dependency Direction
@@ -24,10 +28,10 @@ tests/
 Keep dependencies flowing inward:
 
 ```text
-apps -> packages/chat-adapters -> packages/chat-core
+apps -> packages/workflow-engine -> packages/eeg-processing -> packages/eeg-core
+apps -> packages/eeg-io -> packages/eeg-core
+apps -> packages/chat-interface -> packages/workflow-engine
 apps -> packages/shared
-packages/chat-adapters -> packages/shared
-packages/chat-core -> packages/shared only when the dependency is truly generic
 ```
 
-`chat-core` should not import app code, framework code, database clients, or LLM SDKs.
+`eeg-core` should not import app code, UI frameworks, database clients, or vendor SDKs. The chat layer is intentionally thin for now and should depend on the workflow layer instead of becoming the source of EEG domain rules.

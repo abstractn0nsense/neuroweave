@@ -1,12 +1,13 @@
 # API App
 
-Server-side entrypoint for chat workflows.
+Server-side entrypoint for EEG workflows.
 
 Expected responsibilities:
 
-- expose chat endpoints
+- expose dataset, workflow, job, and result endpoints
 - validate request and response shapes
-- compose `chat-core` use cases with infrastructure from `chat-adapters`
+- compose workflow use cases with EEG I/O and processing packages
 - handle authentication and runtime configuration when those features are added
+- expose future chat-command endpoints without placing chat logic directly in the API layer
 
-Do not put reusable chat domain rules here. Move them to `packages/chat-core`.
+Do not put reusable EEG domain rules here. Move them to `packages/eeg-core`.

@@ -1,6 +1,6 @@
 # Shared
 
-Shared utilities that are not specific to the chat domain.
+Shared utilities that are not specific to the EEG domain, workflow execution, or chat interface.
 
 Suggested internal layout:
 
@@ -11,4 +11,4 @@ src/
   utils/   Small pure utilities
 ```
 
-If a utility starts encoding chat behavior, move it to `packages/chat-core`.
+If a utility starts encoding EEG behavior, move it to `packages/eeg-core`. If it starts encoding workflow behavior, move it to `packages/workflow-engine`.

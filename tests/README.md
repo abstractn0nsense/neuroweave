@@ -2,4 +2,4 @@
 
 Repository-level test support lives here.
 
-Use `tests/fixtures` for shared fixtures. Package-local tests can be added near the source code when the implementation stack is chosen.
+Use `tests/fixtures/eeg` for shared EEG fixtures. Package-local tests can be added near the source code when the implementation stack is chosen.

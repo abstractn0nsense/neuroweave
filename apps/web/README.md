@@ -1,12 +1,13 @@
 # Web App
 
-Browser-facing chat application.
+Browser-facing EEG workflow application.
 
 Expected responsibilities:
 
-- render conversation lists and message threads
-- collect user input
-- call API or realtime endpoints
-- manage UI-only state
+- upload or select EEG datasets
+- configure workflow steps
+- inspect channel, event, and preprocessing state
+- review results and exports
+- provide a future chat panel for workflow assistance
 
-Do not put server, storage, or LLM provider logic here.
+Do not put server, storage, signal processing, or LLM provider logic here.
