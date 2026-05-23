@@ -12,3 +12,7 @@ src/
 ```
 
 This package should remain easy to test without a browser, server framework, database, plotting library, or EEG vendor SDK.
+
+Phase 0 domain contract:
+
+- `eeg_core.domain.RecordingMetadata`: minimal metadata returned by EEG readers before full dataset ingestion exists.

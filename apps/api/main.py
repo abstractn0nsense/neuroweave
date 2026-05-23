@@ -1,4 +1,5 @@
 from pathlib import Path
+import sys
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,14 +7,14 @@ from pydantic import BaseModel
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+for package_src in ("packages/eeg-core/src", "packages/eeg-io/src"):
+    sys.path.insert(0, str(REPO_ROOT / package_src))
+
+from eeg_io.datasets import find_eeg_file_by_id, list_eeg_files  # noqa: E402
+from eeg_io.readers import EegMetadataReadError, read_eeg_metadata  # noqa: E402
+
+
 SAMPLE_DATASET_DIR = REPO_ROOT / "data" / "raw" / "samples"
-SUPPORTED_EEG_EXTENSIONS = {
-    ".fif",
-    ".edf",
-    ".bdf",
-    ".vhdr",
-    ".set",
-}
 
 
 class HealthResponse(BaseModel):
@@ -58,81 +59,33 @@ def health() -> HealthResponse:
 
 @app.get("/datasets/samples", response_model=SampleDatasetsResponse)
 def list_sample_datasets() -> SampleDatasetsResponse:
-    SAMPLE_DATASET_DIR.mkdir(parents=True, exist_ok=True)
     samples = [
         SampleDataset(
-            id=_dataset_id_from_path(path),
-            filename=path.name,
-            format=_dataset_format_from_path(path),
+            id=eeg_file.dataset_id,
+            filename=eeg_file.filename,
+            format=eeg_file.file_format,
         )
-        for path in sorted(SAMPLE_DATASET_DIR.iterdir())
-        if _is_supported_eeg_file(path)
+        for eeg_file in list_eeg_files(SAMPLE_DATASET_DIR)
     ]
     return SampleDatasetsResponse(samples=samples)
 
 
 @app.get("/datasets/samples/{dataset_id}/metadata", response_model=DatasetMetadata)
 def get_sample_dataset_metadata(dataset_id: str) -> DatasetMetadata:
-    path = _find_sample_dataset(dataset_id)
-    if path is None:
+    eeg_file = find_eeg_file_by_id(SAMPLE_DATASET_DIR, dataset_id)
+    if eeg_file is None:
         raise HTTPException(status_code=404, detail="Sample dataset not found")
 
-    raw = _read_raw_eeg(path)
-    sampling_rate = float(raw.info["sfreq"])
-    samples = int(raw.n_times)
+    try:
+        metadata = read_eeg_metadata(eeg_file.path, dataset_id=eeg_file.dataset_id)
+    except EegMetadataReadError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return DatasetMetadata(
-        id=dataset_id,
-        format=_dataset_format_from_path(path),
-        channels=len(raw.ch_names),
-        sampling_rate=sampling_rate,
-        duration_seconds=samples / sampling_rate if sampling_rate else 0,
-        channel_names=list(raw.ch_names),
+        id=metadata.dataset_id,
+        format=metadata.file_format,
+        channels=metadata.channel_count,
+        sampling_rate=metadata.sampling_rate_hz,
+        duration_seconds=metadata.duration_seconds,
+        channel_names=metadata.channel_names,
     )
-
-
-def _find_sample_dataset(dataset_id: str) -> Path | None:
-    SAMPLE_DATASET_DIR.mkdir(parents=True, exist_ok=True)
-    for path in SAMPLE_DATASET_DIR.iterdir():
-        if _is_supported_eeg_file(path) and _dataset_id_from_path(path) == dataset_id:
-            return path
-    return None
-
-
-def _is_supported_eeg_file(path: Path) -> bool:
-    return path.is_file() and _dataset_format_from_path(path) in {
-        extension.removeprefix(".") for extension in SUPPORTED_EEG_EXTENSIONS
-    }
-
-
-def _dataset_id_from_path(path: Path) -> str:
-    if path.name.endswith(".fif.gz"):
-        return path.name.removesuffix(".fif.gz")
-    return path.stem
-
-
-def _dataset_format_from_path(path: Path) -> str:
-    if path.name.endswith(".fif.gz"):
-        return "fif"
-    return path.suffix.lower().removeprefix(".")
-
-
-def _read_raw_eeg(path: Path):
-    import mne
-
-    readers = {
-        "fif": mne.io.read_raw_fif,
-        "edf": mne.io.read_raw_edf,
-        "bdf": mne.io.read_raw_bdf,
-        "vhdr": mne.io.read_raw_brainvision,
-        "set": mne.io.read_raw_eeglab,
-    }
-    file_format = _dataset_format_from_path(path)
-    reader = readers.get(file_format)
-    if reader is None:
-        raise HTTPException(status_code=415, detail="Unsupported EEG file format")
-
-    try:
-        return reader(path, preload=False, verbose=False)
-    except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"Could not read EEG metadata: {exc}") from exc
