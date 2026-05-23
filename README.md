@@ -114,3 +114,5 @@ npm run dev
 ```
 
 Web URL: `http://127.0.0.1:5173`
+
+The Phase 0 web screen displays API health, sample EEG datasets, and selected sample metadata.
