@@ -18,7 +18,10 @@ packages/
 docs/
   architecture.md       Folder boundaries and dependency rules
   eeg-workflow.md       Initial EEG workflow outline
+  storage.md            Versioned fixture and local data rules
   decisions/            Architecture decision notes
+scripts/
+  README.md             Repeatable local setup and fixture generation scripts
 tests/
   fixtures/eeg/         Shared EEG test fixtures
 ```
@@ -35,6 +38,29 @@ apps -> packages/shared
 ```
 
 `eeg-core` should not import app code, UI frameworks, database clients, or vendor SDKs. The chat layer is intentionally thin for now and should depend on the workflow layer instead of becoming the source of EEG domain rules.
+
+## Storage Rules
+
+Versioned repository assets:
+
+```text
+scripts/                Repeatable setup and fixture generation scripts
+tests/fixtures/eeg/     Small EEG fixtures used by tests
+```
+
+Local runtime data is ignored by git:
+
+```text
+data/
+  raw/
+    samples/            Local sample EEG files used by the app
+    uploads/            User-uploaded EEG files
+  processed/            Derived EEG outputs
+  runs/                 Workflow run state and result bundles
+  cache/                Temporary or rebuildable cache files
+```
+
+Do not commit `data/` contents or add `data/.gitkeep`. Scripts and app startup code should create local data folders when needed. See `docs/storage.md` for the full policy.
 
 ## Local Development
 
