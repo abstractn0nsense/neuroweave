@@ -102,14 +102,20 @@ Warnings:
 data/
   raw/
     uploads/
-      {dataset_id}/
-        eeg/
-        events/
-        metadata.json
+      projects.json
+      experiments.json
+      participants.json
+      datasets/
+        {dataset_id}/
+          metadata.json
+          eeg/
+          events/
   processed/
   runs/
   cache/
 ```
+
+The API should use repository functions rather than reading or writing these files directly. The initial JSON-backed repository lives in `eeg_io.registry.JsonRegistryRepository`.
 
 Phase 1 can use JSON metadata files before introducing a database. The API should hide this detail behind repository/storage functions so a later database migration does not change route behavior.
 
