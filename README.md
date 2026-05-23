@@ -97,6 +97,14 @@ GET /datasets/samples/{id}/metadata
 
 Sample EEG files are read from `data/raw/samples/`, which is created locally by the API and ignored by git.
 
+Generate deterministic Phase 0 sample EEG files:
+
+```powershell
+.\apps\api\.venv\Scripts\python.exe .\scripts\generate_sample_eeg.py
+```
+
+This writes committed test fixtures to `tests/fixtures/eeg/` and local app samples to `data/raw/samples/`.
+
 ### Web
 
 ```powershell

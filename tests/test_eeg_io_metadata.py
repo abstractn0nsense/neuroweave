@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 
 from eeg_io.datasets import find_eeg_file_by_id, list_eeg_files
@@ -37,3 +39,25 @@ def test_list_and_find_eeg_files(tmp_path):
     assert files[0].filename == "sample-001_raw.fif"
     assert files[0].file_format == "fif"
     assert find_eeg_file_by_id(tmp_path, "sample-001_raw") == files[0]
+
+
+def test_committed_event_fixture_has_annotations():
+    fixture_path = Path("tests/fixtures/eeg/sample_events_raw.fif")
+
+    metadata = read_eeg_metadata(fixture_path, dataset_id="sample-events")
+    raw = _read_fixture_raw(fixture_path)
+
+    assert metadata.dataset_id == "sample-events"
+    assert metadata.channel_count == 8
+    assert len(raw.annotations) == 3
+    assert list(raw.annotations.description) == [
+        "stim/left",
+        "stim/right",
+        "response/button",
+    ]
+
+
+def _read_fixture_raw(path):
+    import mne
+
+    return mne.io.read_raw_fif(path, preload=False, verbose=False)
