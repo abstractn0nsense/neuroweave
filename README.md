@@ -69,6 +69,8 @@ Phase 0 uses local per-app environments:
 - API: Python `.venv` inside `apps/api`
 - Web: npm dependencies inside `apps/web/node_modules`
 
+Use CPython 3.12 or 3.13 for the API environment. Python 3.14 mingw builds may not have compatible wheels for the Phase 0 dependencies yet.
+
 ### API
 
 ```powershell
@@ -86,6 +88,15 @@ Health check:
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/health
 ```
+
+Sample dataset endpoints:
+
+```text
+GET /datasets/samples
+GET /datasets/samples/{id}/metadata
+```
+
+Sample EEG files are read from `data/raw/samples/`, which is created locally by the API and ignored by git.
 
 ### Web
 

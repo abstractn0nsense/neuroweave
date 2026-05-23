@@ -4,6 +4,8 @@ Server-side entrypoint for EEG workflows.
 
 ## Local Development
 
+Use CPython 3.12 or 3.13 for the local API environment.
+
 ```powershell
 cd apps/api
 python -m venv .venv
@@ -19,6 +21,15 @@ Health check:
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/health
 ```
+
+Sample dataset endpoints:
+
+```text
+GET /datasets/samples
+GET /datasets/samples/{id}/metadata
+```
+
+The API reads app-visible sample EEG files from `data/raw/samples/`. Supported Phase 0 formats are FIF, EDF, BDF, BrainVision VHDR, and EEGLAB SET.
 
 Expected responsibilities:
 
