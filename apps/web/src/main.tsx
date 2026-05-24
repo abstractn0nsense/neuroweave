@@ -832,39 +832,40 @@ function App() {
           <div className={`notice notice-${notice.tone}`}>{notice.message}</div>
         ) : null}
 
-        <div className="ingest-grid">
-          <aside className="panel setup-panel" aria-labelledby="setup-title">
-            <div className="panel-header">
-              <h2 id="setup-title">Study Setup</h2>
-            </div>
-            <StudySetup
-              busyAction={busyAction}
-              experimentForm={experimentForm}
-              experiments={experiments}
-              onCreateExperiment={createExperiment}
-              onCreateProject={createProject}
-              onExperimentFormChange={setExperimentForm}
-              onProjectFormChange={setProjectForm}
-              onSelectExperiment={setSelectedExperimentId}
-              onSelectProject={setSelectedProjectId}
-              projectForm={projectForm}
-              projects={projects}
-              selectedExperimentId={selectedExperimentId}
-              selectedProjectId={selectedProjectId}
-            />
-          </aside>
-
-          <section className="workflow-stack">
-            <section className="panel" aria-labelledby="datasets-title">
+        <div className="workbench-grid">
+          <aside className="workbench-sidebar" aria-label="Study and dataset setup">
+            <section className="panel setup-panel" aria-labelledby="setup-title">
               <div className="panel-header">
+                <h2 id="setup-title">Study Setup</h2>
+              </div>
+              <StudySetup
+                busyAction={busyAction}
+                experimentForm={experimentForm}
+                experiments={experiments}
+                onCreateExperiment={createExperiment}
+                onCreateProject={createProject}
+                onExperimentFormChange={setExperimentForm}
+                onProjectFormChange={setProjectForm}
+                onSelectExperiment={setSelectedExperimentId}
+                onSelectProject={setSelectedProjectId}
+                projectForm={projectForm}
+                projects={projects}
+                selectedExperimentId={selectedExperimentId}
+                selectedProjectId={selectedProjectId}
+              />
+            </section>
+
+            <section className="panel dataset-panel" aria-labelledby="datasets-title">
+              <div className="panel-header compact-header">
                 <div>
-                  <h2 id="datasets-title">Datasets</h2>
-                  {selectedProject ? (
-                    <p className="subtle">
-                      {selectedProject.name}
-                      {selectedExperiment ? ` / ${selectedExperiment.name}` : ""}
-                    </p>
-                  ) : null}
+                  <h2 id="datasets-title">Dataset Queue</h2>
+                  <p className="subtle">
+                    {selectedProject
+                      ? selectedExperiment
+                        ? `${selectedProject.name} / ${selectedExperiment.name}`
+                        : selectedProject.name
+                      : "Select study context"}
+                  </p>
                 </div>
               </div>
               <DatasetSection
@@ -884,11 +885,16 @@ function App() {
                 selectedProjectId={selectedProjectId}
               />
             </section>
+          </aside>
 
-            <section className="panel" aria-labelledby="intake-title">
+          <section className="workbench-main">
+            <section
+              className="panel active-context-panel"
+              aria-labelledby="active-context-title"
+            >
               <div className="panel-header">
                 <div>
-                  <h2 id="intake-title">Dataset Intake</h2>
+                  <h2 id="active-context-title">Active Dataset</h2>
                   <p className="subtle">
                     {activeDataset
                       ? `${activeDataset.dataset_id} / ${activeDataset.status}`
@@ -901,50 +907,161 @@ function App() {
                   </span>
                 ) : null}
               </div>
-              <IntakeSection
+              <ActiveDatasetSummary
                 activeDataset={activeDataset}
-                busyAction={busyAction}
-                eegFile={eegFile}
-                eventFile={eventFile}
                 eventLog={eventLog}
-                eventPreview={eventPreview}
-                mapping={mapping}
-                onBeginPreprocessing={beginPreprocessingHandoff}
-                onEegFileChange={setEegFile}
-                onEventFileChange={setEventFile}
-                onMappingChange={setMapping}
-                onPreprocessingConfigChange={setPreprocessingConfig}
-                onCancelPreprocessingRun={cancelPreprocessingRun}
-                onSubmitEventMapping={submitEventMapping}
-                onUploadEeg={uploadEegFile}
-                onUploadEvent={uploadEventFile}
-                onValidate={validateDataset}
-                preprocessingConfig={preprocessingConfig}
-                preprocessingRuns={preprocessingRuns}
+                selectedExperiment={selectedExperiment}
+                selectedProject={selectedProject}
                 validation={validation}
               />
             </section>
 
-            <section className="panel" aria-labelledby="sample-list-title">
-              <div className="panel-header">
-                <h2 id="sample-list-title">Sample Metadata</h2>
-                {selectedSample ? (
-                  <span className="file-pill">{selectedSample.filename}</span>
-                ) : null}
-              </div>
-              <div className="sample-grid">
-                <SampleList
-                  onSelect={setSelectedSampleId}
-                  samples={samples}
-                  selectedSampleId={selectedSampleId}
+            <section className="workflow-stack">
+              <section className="panel" aria-labelledby="intake-title">
+                <div className="panel-header">
+                  <div>
+                    <h2 id="intake-title">Ingestion And Preprocessing</h2>
+                    <p className="subtle">
+                      {activeDataset
+                        ? "Files, event mapping, validation, and preprocessing runs"
+                        : "Create or select a dataset"}
+                    </p>
+                  </div>
+                </div>
+                <IntakeSection
+                  activeDataset={activeDataset}
+                  busyAction={busyAction}
+                  eegFile={eegFile}
+                  eventFile={eventFile}
+                  eventLog={eventLog}
+                  eventPreview={eventPreview}
+                  mapping={mapping}
+                  onBeginPreprocessing={beginPreprocessingHandoff}
+                  onEegFileChange={setEegFile}
+                  onEventFileChange={setEventFile}
+                  onMappingChange={setMapping}
+                  onPreprocessingConfigChange={setPreprocessingConfig}
+                  onCancelPreprocessingRun={cancelPreprocessingRun}
+                  onSubmitEventMapping={submitEventMapping}
+                  onUploadEeg={uploadEegFile}
+                  onUploadEvent={uploadEventFile}
+                  onValidate={validateDataset}
+                  preprocessingConfig={preprocessingConfig}
+                  preprocessingRuns={preprocessingRuns}
+                  validation={validation}
                 />
-                <MetadataView metadata={metadata} selectedSample={selectedSample} />
-              </div>
+              </section>
+
+              <section className="panel" aria-labelledby="sample-list-title">
+                <div className="panel-header">
+                  <h2 id="sample-list-title">Sample Metadata</h2>
+                  {selectedSample ? (
+                    <span className="file-pill">{selectedSample.filename}</span>
+                  ) : null}
+                </div>
+                <div className="sample-grid">
+                  <SampleList
+                    onSelect={setSelectedSampleId}
+                    samples={samples}
+                    selectedSampleId={selectedSampleId}
+                  />
+                  <MetadataView metadata={metadata} selectedSample={selectedSample} />
+                </div>
+              </section>
             </section>
           </section>
         </div>
       </section>
     </main>
+  );
+}
+
+function ActiveDatasetSummary({
+  activeDataset,
+  eventLog,
+  selectedExperiment,
+  selectedProject,
+  validation,
+}: {
+  activeDataset: Dataset | null;
+  eventLog: EventLogResponse | null;
+  selectedExperiment: Experiment | null;
+  selectedProject: Project | null;
+  validation: ValidationReport | null;
+}) {
+  const stageItems = [
+    {
+      label: "Study",
+      state: selectedProject && selectedExperiment ? "ready" : "waiting",
+      value: selectedExperiment?.name ?? selectedProject?.name ?? "No selection",
+    },
+    {
+      label: "Dataset",
+      state: activeDataset ? "ready" : "waiting",
+      value: activeDataset?.dataset_id ?? "No dataset",
+    },
+    {
+      label: "Files",
+      state:
+        activeDataset?.status === "needs_mapping" ||
+        activeDataset?.status === "valid" ||
+        activeDataset?.status === "invalid"
+          ? "ready"
+          : "waiting",
+      value: activeDataset ? activeDataset.status : "Pending",
+    },
+    {
+      label: "Events",
+      state: eventLog ? "ready" : "waiting",
+      value: eventLog ? `${eventLog.events.length} normalized` : "Unmapped",
+    },
+    {
+      label: "Validation",
+      state:
+        validation?.valid || activeDataset?.status === "valid" ? "ready" : "waiting",
+      value:
+        validation?.valid || activeDataset?.status === "valid"
+          ? "Ready"
+          : validation
+            ? `${validation.errors.length} errors`
+            : "Not run",
+    },
+  ];
+
+  return (
+    <div className="active-context-grid">
+      <dl className="context-table">
+        <div>
+          <dt>Project</dt>
+          <dd>{selectedProject?.name ?? "Unselected"}</dd>
+        </div>
+        <div>
+          <dt>Experiment</dt>
+          <dd>{selectedExperiment?.name ?? "Unselected"}</dd>
+        </div>
+        <div>
+          <dt>Participant</dt>
+          <dd>{activeDataset?.metadata.participant_label ?? "None"}</dd>
+        </div>
+        <div>
+          <dt>Session</dt>
+          <dd>{activeDataset?.metadata.session_label ?? "None"}</dd>
+        </div>
+      </dl>
+      <div className="stage-rail" aria-label="Dataset readiness">
+        {stageItems.map((item, index) => (
+          <div
+            className="stage-item"
+            data-state={item.state}
+            key={item.label}
+          >
+            <span>{String(index + 1).padStart(2, "0")}</span>
+            <strong>{item.label}</strong>
+            <small>{item.value}</small>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -1272,121 +1389,144 @@ function IntakeSection({
 
   return (
     <div className="intake-stack">
-      <div className="upload-grid">
-        <div className="upload-group">
-          <h3>EEG Recording</h3>
-          <input
-            data-testid="eeg-file-input"
-            disabled={disabled}
-            onChange={(event) => onEegFileChange(event.target.files?.[0] ?? null)}
-            type="file"
-          />
-          <button
-            className="secondary-button"
-            data-testid="upload-eeg-button"
-            disabled={disabled || !eegFile || busyAction === "eeg-upload"}
-            onClick={onUploadEeg}
-            type="button"
-          >
-            Upload EEG
-          </button>
+      <section className="tool-section" aria-labelledby="files-title">
+        <div className="tool-section-header">
+          <span>01</span>
+          <h3 id="files-title">Files</h3>
         </div>
-        <div className="upload-group">
-          <h3>Event Log</h3>
-          <input
-            accept=".csv,.tsv,text/csv,text/tab-separated-values"
-            data-testid="event-file-input"
-            disabled={disabled}
-            onChange={(event) => onEventFileChange(event.target.files?.[0] ?? null)}
-            type="file"
-          />
-          <button
-            className="secondary-button"
-            data-testid="upload-events-button"
-            disabled={disabled || !eventFile || busyAction === "event-upload"}
-            onClick={onUploadEvent}
-            type="button"
-          >
-            Upload Events
-          </button>
-        </div>
-      </div>
-
-      {eventPreview ? (
-        <div className="mapping-layout">
-          <div>
-            <h3>Column Mapping</h3>
-            <div className="mapping-grid">
-              {MAPPING_FIELDS.map((field) => (
-                <label key={field.key}>
-                  <span>
-                    {field.label}
-                    {field.required ? " *" : ""}
-                  </span>
-                  <select
-                    data-testid={`mapping-${field.key}-select`}
-                    onChange={(event) =>
-                      onMappingChange({
-                        ...mapping,
-                        [field.key]: event.target.value,
-                      })
-                    }
-                    value={mapping[field.key]}
-                  >
-                    <option value="">Unmapped</option>
-                    {eventPreview.columns.map((column) => (
-                      <option key={column} value={column}>
-                        {column}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ))}
-            </div>
+        <div className="upload-grid">
+          <div className="upload-group">
+            <h4>EEG Recording</h4>
+            <input
+              data-testid="eeg-file-input"
+              disabled={disabled}
+              onChange={(event) => onEegFileChange(event.target.files?.[0] ?? null)}
+              type="file"
+            />
             <button
-              className="primary-button"
-              data-testid="save-mapping-button"
-              disabled={!mapping.onset_seconds || busyAction === "event-mapping"}
-              onClick={onSubmitEventMapping}
+              className="secondary-button"
+              data-testid="upload-eeg-button"
+              disabled={disabled || !eegFile || busyAction === "eeg-upload"}
+              onClick={onUploadEeg}
               type="button"
             >
-              Save Mapping
+              Upload EEG
             </button>
           </div>
-
-          <EventPreviewTable preview={eventPreview} />
+          <div className="upload-group">
+            <h4>Event Log</h4>
+            <input
+              accept=".csv,.tsv,text/csv,text/tab-separated-values"
+              data-testid="event-file-input"
+              disabled={disabled}
+              onChange={(event) => onEventFileChange(event.target.files?.[0] ?? null)}
+              type="file"
+            />
+            <button
+              className="secondary-button"
+              data-testid="upload-events-button"
+              disabled={disabled || !eventFile || busyAction === "event-upload"}
+              onClick={onUploadEvent}
+              type="button"
+            >
+              Upload Events
+            </button>
+          </div>
         </div>
-      ) : (
-        <p className="muted">Upload a CSV or TSV event log to preview columns.</p>
-      )}
+      </section>
 
-      <div className="validation-bar">
-        <button
-          className="primary-button"
-          data-testid="validate-dataset-button"
-          disabled={disabled || busyAction === "validation"}
-          onClick={onValidate}
-          type="button"
-        >
-          Validate Dataset
-        </button>
-        {eventLog ? (
-          <span className="muted">{eventLog.events.length} normalized events</span>
+      <section className="tool-section" aria-labelledby="mapping-title">
+        <div className="tool-section-header">
+          <span>02</span>
+          <h3 id="mapping-title">Event Mapping</h3>
+        </div>
+        {eventPreview ? (
+          <div className="mapping-layout">
+            <div>
+              <div className="mapping-grid">
+                {MAPPING_FIELDS.map((field) => (
+                  <label key={field.key}>
+                    <span>
+                      {field.label}
+                      {field.required ? " *" : ""}
+                    </span>
+                    <select
+                      data-testid={`mapping-${field.key}-select`}
+                      onChange={(event) =>
+                        onMappingChange({
+                          ...mapping,
+                          [field.key]: event.target.value,
+                        })
+                      }
+                      value={mapping[field.key]}
+                    >
+                      <option value="">Unmapped</option>
+                      {eventPreview.columns.map((column) => (
+                        <option key={column} value={column}>
+                          {column}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ))}
+              </div>
+              <button
+                className="primary-button"
+                data-testid="save-mapping-button"
+                disabled={!mapping.onset_seconds || busyAction === "event-mapping"}
+                onClick={onSubmitEventMapping}
+                type="button"
+              >
+                Save Mapping
+              </button>
+            </div>
+
+            <EventPreviewTable preview={eventPreview} />
+          </div>
         ) : (
-          <span className="muted">No mapped event log yet</span>
+          <p className="muted">Upload a CSV or TSV event log to preview columns.</p>
         )}
-      </div>
+      </section>
 
-      {validation ? <ValidationPanel report={validation} /> : null}
+      <section className="tool-section" aria-labelledby="validation-title">
+        <div className="tool-section-header">
+          <span>03</span>
+          <h3 id="validation-title">Validation</h3>
+        </div>
+        <div className="validation-bar">
+          <button
+            className="primary-button"
+            data-testid="validate-dataset-button"
+            disabled={disabled || busyAction === "validation"}
+            onClick={onValidate}
+            type="button"
+          >
+            Validate Dataset
+          </button>
+          {eventLog ? (
+            <span className="muted">{eventLog.events.length} normalized events</span>
+          ) : (
+            <span className="muted">No mapped event log yet</span>
+          )}
+        </div>
+        {validation ? <ValidationPanel report={validation} /> : null}
+      </section>
 
-      <div className="preprocessing-panel">
-        <div>
-          <h3>Preprocessing Handoff</h3>
-          <p className="muted">
-            {canContinue
-              ? "Configure filters and create a run for this valid dataset."
-              : "A dataset must pass validation before preprocessing can start."}
-          </p>
+      <section
+        className="tool-section preprocessing-section"
+        aria-labelledby="preprocessing-title"
+      >
+        <div className="tool-section-header">
+          <span>04</span>
+          <h3 id="preprocessing-title">Preprocessing</h3>
+          <small>{canContinue ? "ready" : "blocked"}</small>
+        </div>
+        <div className="preprocessing-copy">
+          {canContinue ? (
+            <p className="muted">Configure filters and create a run.</p>
+          ) : (
+            <p className="muted">Validation must pass before preprocessing starts.</p>
+          )}
           {configError ? <p className="error-text">{configError}</p> : null}
         </div>
         <div className="preprocessing-grid">
@@ -1488,7 +1628,7 @@ function IntakeSection({
           onCancel={onCancelPreprocessingRun}
           runs={preprocessingRuns}
         />
-      </div>
+      </section>
     </div>
   );
 }
