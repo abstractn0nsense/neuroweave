@@ -6,7 +6,9 @@ import { fileURLToPath } from "node:url";
 const webDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(webDir, "../..");
 const apiDir = path.join(repoRoot, "apps", "api");
-const e2eDataDir = path.join(repoRoot, "data", "cache", "phase2-e2e");
+const e2eDataDir =
+  process.env.NEUROWEAVE_E2E_DATA_DIR ??
+  path.join(repoRoot, "data", "cache", "browser-e2e");
 const apiPort = 8010;
 const webPort = 5174;
 const apiBaseUrl = `http://127.0.0.1:${apiPort}`;
@@ -44,6 +46,8 @@ export default defineConfig({
         NEUROWEAVE_UPLOADS_DIR: path.join(e2eDataDir, "uploads"),
         NEUROWEAVE_RUNS_DIR: path.join(e2eDataDir, "runs"),
         NEUROWEAVE_PROCESSED_DIR: path.join(e2eDataDir, "processed"),
+        NEUROWEAVE_EPOCHS_DIR: path.join(e2eDataDir, "epochs"),
+        NEUROWEAVE_ERP_DIR: path.join(e2eDataDir, "erp"),
         NEUROWEAVE_SAMPLE_DATASET_DIR: path.join(repoRoot, "data", "raw", "samples"),
       },
       reuseExistingServer: !process.env.CI,

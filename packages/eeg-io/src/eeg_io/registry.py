@@ -11,6 +11,12 @@ import time
 from eeg_core.domain import (
     Dataset,
     DatasetStatus,
+    EpochConfig,
+    EpochRun,
+    EpochRunStatus,
+    ErpConfig,
+    ErpRun,
+    ErpRunStatus,
     EventColumnMapping,
     EventLog,
     Experiment,
@@ -21,6 +27,7 @@ from eeg_core.domain import (
     PreprocessingRunStatus,
     Project,
     Recording,
+    RunKind,
     UploadedFile,
     UploadedFileKind,
     recording_metadata_from_dict,
@@ -280,21 +287,81 @@ class JsonRunRepository:
         _write_json(self.preprocessing_run_path(run.run_id), asdict(run))
         return run
 
+    def save_epoch_run(self, run: EpochRun) -> EpochRun:
+        self.initialize()
+        _write_json(self.epoch_run_path(run.run_id), asdict(run))
+        return run
+
+    def save_erp_run(self, run: ErpRun) -> ErpRun:
+        self.initialize()
+        _write_json(self.erp_run_path(run.run_id), asdict(run))
+        return run
+
     def get_preprocessing_run(self, run_id: str) -> PreprocessingRun | None:
         path = self.preprocessing_run_path(run_id)
         if not path.exists():
             return None
-        return _preprocessing_run_from_json(_read_json_object(path))
+        data = _read_json_object(path)
+        if _run_kind_from_json(data) != RunKind.PREPROCESSING:
+            return None
+        return _preprocessing_run_from_json(data)
+
+    def get_epoch_run(self, run_id: str) -> EpochRun | None:
+        path = self.epoch_run_path(run_id)
+        if not path.exists():
+            return None
+        data = _read_json_object(path)
+        if _run_kind_from_json(data) != RunKind.EPOCH:
+            return None
+        return _epoch_run_from_json(data)
+
+    def get_erp_run(self, run_id: str) -> ErpRun | None:
+        path = self.erp_run_path(run_id)
+        if not path.exists():
+            return None
+        data = _read_json_object(path)
+        if _run_kind_from_json(data) != RunKind.ERP:
+            return None
+        return _erp_run_from_json(data)
 
     def list_preprocessing_runs(
         self,
         dataset_id: str | None = None,
     ) -> list[PreprocessingRun]:
         self.initialize()
-        runs = [
-            _preprocessing_run_from_json(_read_json_object(path))
-            for path in sorted(self.runs_root.glob("*/run.json"))
-        ]
+        runs = []
+        for path in sorted(self.runs_root.glob("*/run.json")):
+            data = _read_json_object(path)
+            if _run_kind_from_json(data) == RunKind.PREPROCESSING:
+                runs.append(_preprocessing_run_from_json(data))
+        if dataset_id is None:
+            return runs
+        return [run for run in runs if run.dataset_id == dataset_id]
+
+    def list_epoch_runs(
+        self,
+        dataset_id: str | None = None,
+    ) -> list[EpochRun]:
+        self.initialize()
+        runs = []
+        for path in sorted(self.runs_root.glob("*/run.json")):
+            data = _read_json_object(path)
+            if _run_kind_from_json(data) == RunKind.EPOCH:
+                runs.append(_epoch_run_from_json(data))
+        if dataset_id is None:
+            return runs
+        return [run for run in runs if run.dataset_id == dataset_id]
+
+    def list_erp_runs(
+        self,
+        dataset_id: str | None = None,
+    ) -> list[ErpRun]:
+        self.initialize()
+        runs = []
+        for path in sorted(self.runs_root.glob("*/run.json")):
+            data = _read_json_object(path)
+            if _run_kind_from_json(data) == RunKind.ERP:
+                runs.append(_erp_run_from_json(data))
         if dataset_id is None:
             return runs
         return [run for run in runs if run.dataset_id == dataset_id]
@@ -304,6 +371,18 @@ class JsonRunRepository:
 
     def preprocessing_run_path(self, run_id: str) -> Path:
         return self.preprocessing_run_directory(run_id) / "run.json"
+
+    def epoch_run_directory(self, run_id: str) -> Path:
+        return self.runs_root / run_id
+
+    def epoch_run_path(self, run_id: str) -> Path:
+        return self.epoch_run_directory(run_id) / "run.json"
+
+    def erp_run_directory(self, run_id: str) -> Path:
+        return self.runs_root / run_id
+
+    def erp_run_path(self, run_id: str) -> Path:
+        return self.erp_run_directory(run_id) / "run.json"
 
 
 def _project_from_json(data: JsonObject) -> Project:
@@ -398,11 +477,42 @@ def _preprocessing_config_from_json(data: JsonObject) -> PreprocessingConfig:
     )
 
 
+def _epoch_config_from_json(data: JsonObject) -> EpochConfig:
+    return EpochConfig(
+        preprocessing_run_id=str(data["preprocessing_run_id"]),
+        condition_field=str(data["condition_field"]),
+        tmin_seconds=float(data["tmin_seconds"]),
+        tmax_seconds=float(data["tmax_seconds"]),
+        baseline_start_seconds=_optional_float(data.get("baseline_start_seconds")),
+        baseline_end_seconds=_optional_float(data.get("baseline_end_seconds")),
+        reject_eeg_uv=_optional_float(data.get("reject_eeg_uv")),
+    )
+
+
+def _erp_config_from_json(data: JsonObject) -> ErpConfig:
+    conditions = data.get("conditions")
+    picks = data.get("picks")
+    return ErpConfig(
+        epoch_run_id=str(data["epoch_run_id"]),
+        conditions=(
+            [str(condition) for condition in conditions]
+            if isinstance(conditions, list)
+            else None
+        ),
+        picks=[str(pick) for pick in picks] if isinstance(picks, list) else None,
+        method=str(data.get("method", "mean")),
+        plot_mode=str(data.get("plot_mode", "gfp")),
+        plot_channel=data.get("plot_channel"),
+    )
+
+
 def _preprocessing_run_from_json(data: JsonObject) -> PreprocessingRun:
     return PreprocessingRun(
         run_id=str(data["run_id"]),
         dataset_id=str(data["dataset_id"]),
         config=_preprocessing_config_from_json(data.get("config", {})),
+        run_kind=_run_kind_from_json(data) or RunKind.PREPROCESSING,
+        schema_version=int(data.get("schema_version", 1)),
         status=PreprocessingRunStatus(
             data.get("status", PreprocessingRunStatus.PENDING)
         ),
@@ -414,6 +524,52 @@ def _preprocessing_run_from_json(data: JsonObject) -> PreprocessingRun:
         warnings=[str(warning) for warning in data.get("warnings", [])],
         errors=[str(error) for error in data.get("errors", [])],
     )
+
+
+def _epoch_run_from_json(data: JsonObject) -> EpochRun:
+    return EpochRun(
+        run_id=str(data["run_id"]),
+        dataset_id=str(data["dataset_id"]),
+        config=_epoch_config_from_json(data.get("config", {})),
+        run_kind=_run_kind_from_json(data) or RunKind.EPOCH,
+        schema_version=int(data.get("schema_version", 1)),
+        status=EpochRunStatus(data.get("status", EpochRunStatus.PENDING)),
+        started_at_utc=data.get("started_at_utc"),
+        finished_at_utc=data.get("finished_at_utc"),
+        cancel_requested_at_utc=data.get("cancel_requested_at_utc"),
+        output_path=data.get("output_path"),
+        output_metadata=dict(data.get("output_metadata", {})),
+        warnings=[str(warning) for warning in data.get("warnings", [])],
+        errors=[str(error) for error in data.get("errors", [])],
+    )
+
+
+def _erp_run_from_json(data: JsonObject) -> ErpRun:
+    return ErpRun(
+        run_id=str(data["run_id"]),
+        dataset_id=str(data["dataset_id"]),
+        config=_erp_config_from_json(data.get("config", {})),
+        run_kind=_run_kind_from_json(data) or RunKind.ERP,
+        schema_version=int(data.get("schema_version", 1)),
+        status=ErpRunStatus(data.get("status", ErpRunStatus.PENDING)),
+        started_at_utc=data.get("started_at_utc"),
+        finished_at_utc=data.get("finished_at_utc"),
+        cancel_requested_at_utc=data.get("cancel_requested_at_utc"),
+        output_path=data.get("output_path"),
+        output_metadata=dict(data.get("output_metadata", {})),
+        warnings=[str(warning) for warning in data.get("warnings", [])],
+        errors=[str(error) for error in data.get("errors", [])],
+    )
+
+
+def _run_kind_from_json(data: JsonObject) -> RunKind | None:
+    value = data.get("run_kind")
+    if value is None:
+        return RunKind.PREPROCESSING
+    try:
+        return RunKind(str(value))
+    except ValueError:
+        return None
 
 
 def _normalized_event_from_json(data: JsonObject) -> NormalizedEvent:

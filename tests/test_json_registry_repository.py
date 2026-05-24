@@ -4,6 +4,12 @@ import json
 from eeg_core.domain import (
     Dataset,
     DatasetStatus,
+    EpochConfig,
+    EpochRun,
+    EpochRunStatus,
+    ErpConfig,
+    ErpRun,
+    ErpRunStatus,
     EventColumnMapping,
     EventLog,
     Experiment,
@@ -15,6 +21,7 @@ from eeg_core.domain import (
     Project,
     Recording,
     RecordingMetadata,
+    RunKind,
     UploadedFile,
     UploadedFileKind,
 )
@@ -252,7 +259,7 @@ def test_run_repository_persists_preprocessing_runs(tmp_path):
         started_at_utc="2026-05-24T00:00:00+00:00",
         finished_at_utc="2026-05-24T00:01:00+00:00",
         cancel_requested_at_utc="2026-05-24T00:00:30+00:00",
-        output_path="data/processed/dataset-001/preprocess-001/raw_preprocessed.fif",
+        output_path="data/processed/dataset-001/preprocess-001/raw_preprocessed_raw.fif",
         output_metadata={"sampling_rate_hz": 128.0},
         warnings=["reference unchanged"],
     )
@@ -262,3 +269,175 @@ def test_run_repository_persists_preprocessing_runs(tmp_path):
     assert repository.get_preprocessing_run("preprocess-001") == run
     assert repository.list_preprocessing_runs(dataset_id="dataset-001") == [run]
     assert repository.preprocessing_run_path("preprocess-001").is_file()
+
+    stored = json.loads(
+        repository.preprocessing_run_path("preprocess-001").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert stored["run_kind"] == RunKind.PREPROCESSING
+    assert stored["schema_version"] == 1
+
+
+def test_run_repository_persists_epoch_runs(tmp_path):
+    repository = JsonRunRepository(tmp_path / "runs")
+    run = EpochRun(
+        run_id="epoch-001",
+        dataset_id="dataset-001",
+        config=EpochConfig(
+            preprocessing_run_id="preprocess-001",
+            condition_field="trial_type",
+            tmin_seconds=-0.2,
+            tmax_seconds=0.8,
+            baseline_start_seconds=-0.2,
+            baseline_end_seconds=0.0,
+            reject_eeg_uv=150.0,
+        ),
+        status=EpochRunStatus.COMPLETED,
+        started_at_utc="2026-05-25T00:00:00+00:00",
+        finished_at_utc="2026-05-25T00:01:00+00:00",
+        cancel_requested_at_utc="2026-05-25T00:00:30+00:00",
+        output_path="data/epochs/dataset-001/epoch-001/epochs-epo.fif",
+        output_metadata={
+            "artifact_root": "data/epochs/dataset-001/epoch-001",
+            "condition_count": 2,
+        },
+        warnings=["some events were skipped"],
+    )
+
+    repository.save_epoch_run(run)
+
+    assert repository.get_epoch_run("epoch-001") == run
+    assert repository.list_epoch_runs(dataset_id="dataset-001") == [run]
+    assert repository.list_preprocessing_runs(dataset_id="dataset-001") == []
+    assert repository.epoch_run_path("epoch-001").is_file()
+
+    stored = json.loads(
+        repository.epoch_run_path("epoch-001").read_text(encoding="utf-8")
+    )
+    assert stored["run_kind"] == RunKind.EPOCH
+    assert stored["schema_version"] == 1
+    assert stored["config"]["preprocessing_run_id"] == "preprocess-001"
+    assert stored["config"]["condition_field"] == "trial_type"
+
+
+def test_run_repository_persists_erp_runs(tmp_path):
+    repository = JsonRunRepository(tmp_path / "runs")
+    run = ErpRun(
+        run_id="erp-001",
+        dataset_id="dataset-001",
+        config=ErpConfig(
+            epoch_run_id="epoch-001",
+            conditions=["target", "standard"],
+            picks=["Fp1", "Fp2"],
+            plot_mode="channel",
+            plot_channel="Fp1",
+        ),
+        status=ErpRunStatus.COMPLETED,
+        started_at_utc="2026-05-25T00:00:00+00:00",
+        finished_at_utc="2026-05-25T00:01:00+00:00",
+        output_path="data/erp/dataset-001/erp-001/erp_metadata.json",
+        output_metadata={
+            "artifact_root": "data/erp/dataset-001/erp-001",
+            "evoked_count": 2,
+        },
+        warnings=["mne filename warning"],
+    )
+
+    repository.save_erp_run(run)
+
+    assert repository.get_erp_run("erp-001") == run
+    assert repository.list_erp_runs(dataset_id="dataset-001") == [run]
+    assert repository.list_preprocessing_runs(dataset_id="dataset-001") == []
+    assert repository.list_epoch_runs(dataset_id="dataset-001") == []
+    assert repository.erp_run_path("erp-001").is_file()
+
+    stored = json.loads(repository.erp_run_path("erp-001").read_text(encoding="utf-8"))
+    assert stored["run_kind"] == RunKind.ERP
+    assert stored["schema_version"] == 1
+    assert stored["config"]["epoch_run_id"] == "epoch-001"
+    assert stored["config"]["conditions"] == ["target", "standard"]
+    assert stored["config"]["plot_mode"] == "channel"
+    assert stored["config"]["plot_channel"] == "Fp1"
+
+
+def test_run_repository_lists_epoch_runs_by_dataset(tmp_path):
+    repository = JsonRunRepository(tmp_path / "runs")
+    first = EpochRun(
+        run_id="epoch-001",
+        dataset_id="dataset-001",
+        config=EpochConfig(
+            preprocessing_run_id="preprocess-001",
+            condition_field="trial_type",
+            tmin_seconds=-0.2,
+            tmax_seconds=0.8,
+        ),
+    )
+    second = EpochRun(
+        run_id="epoch-002",
+        dataset_id="dataset-002",
+        config=EpochConfig(
+            preprocessing_run_id="preprocess-002",
+            condition_field="stimulus",
+            tmin_seconds=-0.1,
+            tmax_seconds=0.5,
+        ),
+    )
+
+    repository.save_epoch_run(second)
+    repository.save_epoch_run(first)
+
+    assert repository.list_epoch_runs(dataset_id="dataset-001") == [first]
+    assert repository.list_epoch_runs(dataset_id="dataset-002") == [second]
+    assert repository.list_epoch_runs() == [first, second]
+
+
+def test_run_repository_loads_legacy_preprocessing_runs_without_schema_marker(
+    tmp_path,
+):
+    repository = JsonRunRepository(tmp_path / "runs")
+    path = repository.preprocessing_run_path("preprocess-legacy")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "run_id": "preprocess-legacy",
+                "dataset_id": "dataset-001",
+                "config": {"reference": "average"},
+                "status": "completed",
+                "output_metadata": {"legacy_key": "legacy-value"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    run = repository.get_preprocessing_run("preprocess-legacy")
+
+    assert run is not None
+    assert run.run_kind == RunKind.PREPROCESSING
+    assert run.schema_version == 1
+    assert run.output_metadata["legacy_key"] == "legacy-value"
+
+
+def test_run_repository_skips_non_preprocessing_run_records(tmp_path):
+    repository = JsonRunRepository(tmp_path / "runs")
+    future_path = repository.preprocessing_run_path("epoch-001")
+    future_path.parent.mkdir(parents=True, exist_ok=True)
+    future_path.write_text(
+        json.dumps(
+            {
+                "run_id": "epoch-001",
+                "dataset_id": "dataset-001",
+                "run_kind": "epoch",
+                "schema_version": 1,
+                "config": {},
+                "status": "completed",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert repository.get_preprocessing_run("epoch-001") is None
+    assert repository.list_preprocessing_runs() == []

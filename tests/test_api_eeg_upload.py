@@ -1,4 +1,5 @@
 from pathlib import Path
+import warnings
 
 from fastapi.testclient import TestClient
 
@@ -97,13 +98,21 @@ def test_upload_eeg_file_rejects_unreadable_eeg(tmp_path, monkeypatch):
         },
     )
 
-    response = client.post(
-        "/datasets/dataset-001/files/eeg",
-        files={"file": ("not-eeg.fif", b"not an eeg file")},
-    )
+    with warnings.catch_warnings(record=True) as warning_records:
+        warnings.simplefilter("always")
+        response = client.post(
+            "/datasets/dataset-001/files/eeg",
+            files={"file": ("not-eeg.fif", b"not an eeg file")},
+        )
 
     assert response.status_code == 422
     assert "Could not read EEG metadata" in response.json()["detail"]
+    warning_messages = [str(record.message) for record in warning_records]
+    assert any(
+        "does not conform to MNE naming conventions" in warning
+        for warning in warning_messages
+    )
+    assert any("Invalid tag" in warning for warning in warning_messages)
 
 
 def test_upload_eeg_file_does_not_overwrite_existing_filename(tmp_path, monkeypatch):
@@ -138,5 +147,6 @@ def test_upload_eeg_file_does_not_overwrite_existing_filename(tmp_path, monkeypa
         stored_paths.append(response.json()["uploaded_file"]["stored_path"])
 
     assert stored_paths[0] != stored_paths[1]
+    assert Path(stored_paths[1]).name == "sample_resting-1_raw.fif"
     assert Path(stored_paths[0]).is_file()
     assert Path(stored_paths[1]).is_file()

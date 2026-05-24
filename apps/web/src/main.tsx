@@ -140,6 +140,8 @@ type PreprocessingConfig = {
 type PreprocessingRun = {
   run_id: string;
   dataset_id: string;
+  run_kind: string;
+  schema_version: number;
   config: PreprocessingConfig;
   status: string;
   started_at_utc: string | null;
@@ -155,6 +157,80 @@ type PreprocessingRunsResponse = {
   runs: PreprocessingRun[];
 };
 
+type EpochConfig = {
+  preprocessing_run_id: string;
+  condition_field: string;
+  tmin_seconds: number;
+  tmax_seconds: number;
+  baseline_start_seconds: number | null;
+  baseline_end_seconds: number | null;
+  reject_eeg_uv: number | null;
+};
+
+type EpochRun = {
+  run_id: string;
+  dataset_id: string;
+  run_kind: string;
+  schema_version: number;
+  config: EpochConfig;
+  status: string;
+  started_at_utc: string | null;
+  finished_at_utc: string | null;
+  cancel_requested_at_utc: string | null;
+  output_path: string | null;
+  output_metadata: Record<string, MetadataValue>;
+  warnings: string[];
+  errors: string[];
+};
+
+type EpochRunsResponse = {
+  runs: EpochRun[];
+};
+
+type ErpConfig = {
+  epoch_run_id: string;
+  conditions: string[] | null;
+  picks: string[] | null;
+  method: string;
+  plot_mode: string;
+  plot_channel: string | null;
+};
+
+type ErpRun = {
+  run_id: string;
+  dataset_id: string;
+  run_kind: string;
+  schema_version: number;
+  config: ErpConfig;
+  status: string;
+  started_at_utc: string | null;
+  finished_at_utc: string | null;
+  cancel_requested_at_utc: string | null;
+  output_path: string | null;
+  output_metadata: Record<string, MetadataValue>;
+  warnings: string[];
+  errors: string[];
+};
+
+type ErpRunsResponse = {
+  runs: ErpRun[];
+};
+
+type ComparisonConfig = {
+  condition_a: string;
+  condition_b: string;
+  channel: string | null;
+  use_gfp: boolean;
+  window_start_seconds: number;
+  window_end_seconds: number;
+  metric: string;
+};
+
+type ComparisonSummaryResponse = {
+  summary: Record<string, unknown>;
+  erp_run: ErpRun;
+};
+
 type MetadataValue = string | number | boolean | null;
 
 type NoticeState = {
@@ -163,9 +239,11 @@ type NoticeState = {
 } | null;
 
 type MappingKey = keyof EventColumnMapping;
+type ThemeMode = "dark" | "light";
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
+const THEME_STORAGE_KEY = "neuroweave-theme";
 
 const MAPPING_FIELDS: { key: MappingKey; label: string; required?: boolean }[] = [
   { key: "onset_seconds", label: "Onset", required: true },
@@ -195,7 +273,41 @@ const DEFAULT_PREPROCESSING_CONFIG = {
   reference: "average",
 };
 
+const CONDITION_FIELDS = ["trial_type", "stimulus", "response", "correct"] as const;
+
+const DEFAULT_EPOCH_CONFIG = {
+  preprocessing_run_id: "",
+  condition_field: "trial_type",
+  tmin_seconds: "-0.2",
+  tmax_seconds: "0.8",
+  baseline_enabled: true,
+  baseline_start_seconds: "-0.2",
+  baseline_end_seconds: "0",
+  reject_eeg_uv: "",
+};
+
+const DEFAULT_ERP_CONFIG = {
+  epoch_run_id: "",
+  conditions: "",
+  picks: "",
+  method: "mean",
+  plot_mode: "gfp",
+  plot_channel: "",
+};
+
+const DEFAULT_COMPARISON_CONFIG = {
+  erp_run_id: "",
+  condition_a: "",
+  condition_b: "",
+  use_gfp: true,
+  channel: "",
+  window_start_seconds: "-0.05",
+  window_end_seconds: "0.2",
+  metric: "mean_amplitude_uv",
+};
+
 function App() {
+  const [theme, setTheme] = useState<ThemeMode>(getInitialTheme);
   const [health, setHealth] = useState<LoadState<HealthResponse>>({
     status: "idle",
     data: null,
@@ -259,6 +371,21 @@ function App() {
     data: null,
     error: null,
   });
+  const [epochConfig, setEpochConfig] = useState(DEFAULT_EPOCH_CONFIG);
+  const [epochRuns, setEpochRuns] = useState<LoadState<EpochRun[]>>({
+    status: "idle",
+    data: null,
+    error: null,
+  });
+  const [erpConfig, setErpConfig] = useState(DEFAULT_ERP_CONFIG);
+  const [erpRuns, setErpRuns] = useState<LoadState<ErpRun[]>>({
+    status: "idle",
+    data: null,
+    error: null,
+  });
+  const [comparisonConfig, setComparisonConfig] = useState(
+    DEFAULT_COMPARISON_CONFIG,
+  );
   const [notice, setNotice] = useState<NoticeState>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
@@ -285,6 +412,37 @@ function App() {
     () => samples.data?.find((sample) => sample.id === selectedSampleId) ?? null,
     [samples.data, selectedSampleId],
   );
+  const completedPreprocessingRuns = useMemo(
+    () =>
+      (preprocessingRuns.data ?? []).filter(
+        (run) => run.status === "completed" && Boolean(run.output_path),
+      ),
+    [preprocessingRuns.data],
+  );
+  const completedEpochRuns = useMemo(
+    () =>
+      (epochRuns.data ?? []).filter(
+        (run) => run.status === "completed" && Boolean(run.output_path),
+      ),
+    [epochRuns.data],
+  );
+  const completedErpRuns = useMemo(
+    () =>
+      (erpRuns.data ?? []).filter((run) => {
+        const conditionCount = run.output_metadata.condition_count;
+        return (
+          run.status === "completed" &&
+          typeof conditionCount === "number" &&
+          conditionCount >= 2
+        );
+      }),
+    [erpRuns.data],
+  );
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+  }, [theme]);
 
   useEffect(() => {
     void refreshWorkspace();
@@ -365,11 +523,73 @@ function App() {
   useEffect(() => {
     if (!activeDatasetId) {
       setPreprocessingRuns({ status: "idle", data: null, error: null });
+      setEpochRuns({ status: "idle", data: null, error: null });
+      setErpRuns({ status: "idle", data: null, error: null });
+      setComparisonConfig(DEFAULT_COMPARISON_CONFIG);
       return;
     }
 
     void refreshPreprocessingRuns(activeDatasetId);
+    void refreshEpochRuns(activeDatasetId);
+    void refreshErpRuns(activeDatasetId);
   }, [activeDatasetId]);
+
+  useEffect(() => {
+    setEpochConfig((current) => {
+      if (
+        current.preprocessing_run_id &&
+        completedPreprocessingRuns.some(
+          (run) => run.run_id === current.preprocessing_run_id,
+        )
+      ) {
+        return current;
+      }
+      return {
+        ...current,
+        preprocessing_run_id: completedPreprocessingRuns[0]?.run_id ?? "",
+      };
+    });
+  }, [completedPreprocessingRuns]);
+
+  useEffect(() => {
+    setErpConfig((current) => {
+      if (
+        current.epoch_run_id &&
+        completedEpochRuns.some((run) => run.run_id === current.epoch_run_id)
+      ) {
+        return current;
+      }
+      return {
+        ...current,
+        epoch_run_id: completedEpochRuns[0]?.run_id ?? "",
+      };
+    });
+  }, [completedEpochRuns]);
+
+  useEffect(() => {
+    setComparisonConfig((current) => {
+      const selectedRun =
+        completedErpRuns.find((run) => run.run_id === current.erp_run_id) ??
+        completedErpRuns[0] ??
+        null;
+      if (!selectedRun) {
+        return { ...current, erp_run_id: "", condition_a: "", condition_b: "" };
+      }
+      const labels = getErpConditionLabels(selectedRun);
+      const conditionA = labels.includes(current.condition_a)
+        ? current.condition_a
+        : labels[0] ?? "";
+      const conditionB = labels.includes(current.condition_b)
+        ? current.condition_b
+        : labels.find((label) => label !== conditionA) ?? "";
+      return {
+        ...current,
+        erp_run_id: selectedRun.run_id,
+        condition_a: conditionA,
+        condition_b: conditionB,
+      };
+    });
+  }, [completedErpRuns]);
 
   useEffect(() => {
     const hasActiveRun =
@@ -386,6 +606,38 @@ function App() {
 
     return () => window.clearInterval(intervalId);
   }, [activeDatasetId, preprocessingRuns.data]);
+
+  useEffect(() => {
+    const hasActiveRun =
+      epochRuns.data?.some((run) =>
+        ["pending", "running", "cancelling"].includes(run.status),
+      ) ?? false;
+    if (!activeDatasetId || !hasActiveRun) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void refreshEpochRuns(activeDatasetId, { silent: true });
+    }, 2000);
+
+    return () => window.clearInterval(intervalId);
+  }, [activeDatasetId, epochRuns.data]);
+
+  useEffect(() => {
+    const hasActiveRun =
+      erpRuns.data?.some((run) =>
+        ["pending", "running", "cancelling"].includes(run.status),
+      ) ?? false;
+    if (!activeDatasetId || !hasActiveRun) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void refreshErpRuns(activeDatasetId, { silent: true });
+    }, 2000);
+
+    return () => window.clearInterval(intervalId);
+  }, [activeDatasetId, erpRuns.data]);
 
   async function refreshWorkspace() {
     setNotice(null);
@@ -536,6 +788,11 @@ function App() {
       setEventLog(null);
       setValidation(null);
       setPreprocessingRuns({ status: "success", data: [], error: null });
+      setEpochRuns({ status: "success", data: [], error: null });
+      setErpRuns({ status: "success", data: [], error: null });
+      setEpochConfig(DEFAULT_EPOCH_CONFIG);
+      setErpConfig(DEFAULT_ERP_CONFIG);
+      setComparisonConfig(DEFAULT_COMPARISON_CONFIG);
       await refreshDatasets();
       setNotice({ tone: "ok", message: "Dataset created." });
     });
@@ -673,6 +930,92 @@ function App() {
     });
   }
 
+  async function beginEpochRun() {
+    if (!activeDataset) {
+      setNotice({ tone: "error", message: "Select a dataset first." });
+      return;
+    }
+
+    const configError = getEpochConfigError(epochConfig);
+    if (configError) {
+      setNotice({ tone: "error", message: configError });
+      return;
+    }
+
+    await runAction("epoch", async () => {
+      const run = await postJson<EpochRun>(
+        `/datasets/${encodeURIComponent(activeDataset.dataset_id)}/epoch-runs`,
+        normalizeEpochConfig(epochConfig),
+      );
+      setEpochRuns((current) => ({
+        status: "success",
+        data: [run, ...(current.data ?? [])],
+        error: null,
+      }));
+      setNotice({
+        tone: "neutral",
+        message: `Epoch run ${run.run_id} queued.`,
+      });
+    });
+  }
+
+  async function beginErpRun() {
+    if (!activeDataset) {
+      setNotice({ tone: "error", message: "Select a dataset first." });
+      return;
+    }
+
+    const configError = getErpConfigError(erpConfig);
+    if (configError) {
+      setNotice({ tone: "error", message: configError });
+      return;
+    }
+
+    await runAction("erp", async () => {
+      const run = await postJson<ErpRun>(
+        `/datasets/${encodeURIComponent(activeDataset.dataset_id)}/erp-runs`,
+        normalizeErpConfig(erpConfig),
+      );
+      setErpRuns((current) => ({
+        status: "success",
+        data: [run, ...(current.data ?? [])],
+        error: null,
+      }));
+      setNotice({
+        tone: "neutral",
+        message: `ERP run ${run.run_id} queued.`,
+      });
+    });
+  }
+
+  async function beginComparisonSummary() {
+    const configError = getComparisonConfigError(comparisonConfig);
+    if (configError) {
+      setNotice({ tone: "error", message: configError });
+      return;
+    }
+
+    await runAction("comparison", async () => {
+      const response = await postJson<ComparisonSummaryResponse>(
+        `/erp-runs/${encodeURIComponent(
+          comparisonConfig.erp_run_id,
+        )}/comparison-summary`,
+        normalizeComparisonConfig(comparisonConfig),
+      );
+      setErpRuns((current) => ({
+        status: "success",
+        data: (current.data ?? []).map((run) =>
+          run.run_id === response.erp_run.run_id ? response.erp_run : run,
+        ),
+        error: null,
+      }));
+      setNotice({
+        tone: "ok",
+        message: "Comparison summary generated.",
+      });
+    });
+  }
+
   async function cancelPreprocessingRun(runId: string) {
     await runAction(`cancel-${runId}`, async () => {
       const run = await requestJson<PreprocessingRun>(
@@ -747,6 +1090,56 @@ function App() {
     }
   }
 
+  async function refreshEpochRuns(
+    datasetId: string,
+    options: { silent?: boolean } = {},
+  ) {
+    if (!options.silent) {
+      setEpochRuns({ status: "loading", data: null, error: null });
+    }
+    try {
+      const response = await fetchJson<EpochRunsResponse>(
+        `/datasets/${encodeURIComponent(datasetId)}/epoch-runs`,
+      );
+      setEpochRuns({
+        status: "success",
+        data: response.runs,
+        error: null,
+      });
+    } catch (error: unknown) {
+      setEpochRuns({
+        status: "error",
+        data: null,
+        error: getErrorMessage(error),
+      });
+    }
+  }
+
+  async function refreshErpRuns(
+    datasetId: string,
+    options: { silent?: boolean } = {},
+  ) {
+    if (!options.silent) {
+      setErpRuns({ status: "loading", data: null, error: null });
+    }
+    try {
+      const response = await fetchJson<ErpRunsResponse>(
+        `/datasets/${encodeURIComponent(datasetId)}/erp-runs`,
+      );
+      setErpRuns({
+        status: "success",
+        data: response.runs,
+        error: null,
+      });
+    } catch (error: unknown) {
+      setErpRuns({
+        status: "error",
+        data: null,
+        error: getErrorMessage(error),
+      });
+    }
+  }
+
   function updateDatasetInState(dataset: Dataset) {
     setDatasets((current) => {
       const data = current.data ?? [];
@@ -767,11 +1160,36 @@ function App() {
         <header className="workspace-header">
           <div>
             <p className="eyebrow">NeuroWeave</p>
-            <h1 id="workspace-title">EEG ingestion workspace</h1>
+            <h1 id="workspace-title">EEG research workbench</h1>
+            <p className="subtle">
+              {activeDataset
+                ? `${activeDataset.dataset_id} / ${activeDataset.status}`
+                : "No active dataset"}
+            </p>
           </div>
-          <button className="primary-button" type="button" onClick={refreshWorkspace}>
-            Refresh
-          </button>
+          <div className="workspace-actions">
+            <div className="theme-toggle" aria-label="Theme">
+              <button
+                aria-pressed={theme === "dark"}
+                className="theme-toggle-button"
+                onClick={() => setTheme("dark")}
+                type="button"
+              >
+                Dark
+              </button>
+              <button
+                aria-pressed={theme === "light"}
+                className="theme-toggle-button"
+                onClick={() => setTheme("light")}
+                type="button"
+              >
+                Light
+              </button>
+            </div>
+            <button className="primary-button" type="button" onClick={refreshWorkspace}>
+              Refresh
+            </button>
+          </div>
         </header>
 
         <div className="status-strip">
@@ -797,39 +1215,40 @@ function App() {
           <div className={`notice notice-${notice.tone}`}>{notice.message}</div>
         ) : null}
 
-        <div className="ingest-grid">
-          <aside className="panel setup-panel" aria-labelledby="setup-title">
-            <div className="panel-header">
-              <h2 id="setup-title">Study Setup</h2>
-            </div>
-            <StudySetup
-              busyAction={busyAction}
-              experimentForm={experimentForm}
-              experiments={experiments}
-              onCreateExperiment={createExperiment}
-              onCreateProject={createProject}
-              onExperimentFormChange={setExperimentForm}
-              onProjectFormChange={setProjectForm}
-              onSelectExperiment={setSelectedExperimentId}
-              onSelectProject={setSelectedProjectId}
-              projectForm={projectForm}
-              projects={projects}
-              selectedExperimentId={selectedExperimentId}
-              selectedProjectId={selectedProjectId}
-            />
-          </aside>
-
-          <section className="workflow-stack">
-            <section className="panel" aria-labelledby="datasets-title">
+        <div className="workbench-grid">
+          <aside className="workbench-sidebar" aria-label="Study and dataset setup">
+            <section className="panel setup-panel" aria-labelledby="setup-title">
               <div className="panel-header">
+                <h2 id="setup-title">Study Setup</h2>
+              </div>
+              <StudySetup
+                busyAction={busyAction}
+                experimentForm={experimentForm}
+                experiments={experiments}
+                onCreateExperiment={createExperiment}
+                onCreateProject={createProject}
+                onExperimentFormChange={setExperimentForm}
+                onProjectFormChange={setProjectForm}
+                onSelectExperiment={setSelectedExperimentId}
+                onSelectProject={setSelectedProjectId}
+                projectForm={projectForm}
+                projects={projects}
+                selectedExperimentId={selectedExperimentId}
+                selectedProjectId={selectedProjectId}
+              />
+            </section>
+
+            <section className="panel dataset-panel" aria-labelledby="datasets-title">
+              <div className="panel-header compact-header">
                 <div>
-                  <h2 id="datasets-title">Datasets</h2>
-                  {selectedProject ? (
-                    <p className="subtle">
-                      {selectedProject.name}
-                      {selectedExperiment ? ` / ${selectedExperiment.name}` : ""}
-                    </p>
-                  ) : null}
+                  <h2 id="datasets-title">Dataset Queue</h2>
+                  <p className="subtle">
+                    {selectedProject
+                      ? selectedExperiment
+                        ? `${selectedProject.name} / ${selectedExperiment.name}`
+                        : selectedProject.name
+                      : "Select study context"}
+                  </p>
                 </div>
               </div>
               <DatasetSection
@@ -844,16 +1263,22 @@ function App() {
                   setEventPreview(null);
                   setEventLog(null);
                   setValidation(null);
+                  setEpochConfig(DEFAULT_EPOCH_CONFIG);
                 }}
                 selectedExperimentId={selectedExperimentId}
                 selectedProjectId={selectedProjectId}
               />
             </section>
+          </aside>
 
-            <section className="panel" aria-labelledby="intake-title">
+          <section className="workbench-main">
+            <section
+              className="panel active-context-panel"
+              aria-labelledby="active-context-title"
+            >
               <div className="panel-header">
                 <div>
-                  <h2 id="intake-title">Dataset Intake</h2>
+                  <h2 id="active-context-title">Active Dataset</h2>
                   <p className="subtle">
                     {activeDataset
                       ? `${activeDataset.dataset_id} / ${activeDataset.status}`
@@ -866,50 +1291,209 @@ function App() {
                   </span>
                 ) : null}
               </div>
-              <IntakeSection
+              <ActiveDatasetSummary
                 activeDataset={activeDataset}
-                busyAction={busyAction}
-                eegFile={eegFile}
-                eventFile={eventFile}
                 eventLog={eventLog}
-                eventPreview={eventPreview}
-                mapping={mapping}
-                onBeginPreprocessing={beginPreprocessingHandoff}
-                onEegFileChange={setEegFile}
-                onEventFileChange={setEventFile}
-                onMappingChange={setMapping}
-                onPreprocessingConfigChange={setPreprocessingConfig}
-                onCancelPreprocessingRun={cancelPreprocessingRun}
-                onSubmitEventMapping={submitEventMapping}
-                onUploadEeg={uploadEegFile}
-                onUploadEvent={uploadEventFile}
-                onValidate={validateDataset}
-                preprocessingConfig={preprocessingConfig}
-                preprocessingRuns={preprocessingRuns}
+                selectedExperiment={selectedExperiment}
+                selectedProject={selectedProject}
                 validation={validation}
               />
             </section>
 
-            <section className="panel" aria-labelledby="sample-list-title">
-              <div className="panel-header">
-                <h2 id="sample-list-title">Sample Metadata</h2>
-                {selectedSample ? (
-                  <span className="file-pill">{selectedSample.filename}</span>
-                ) : null}
-              </div>
-              <div className="sample-grid">
-                <SampleList
-                  onSelect={setSelectedSampleId}
-                  samples={samples}
-                  selectedSampleId={selectedSampleId}
+            <section className="workflow-stack">
+              <section className="panel" aria-labelledby="intake-title">
+                <div className="panel-header">
+                  <div>
+                    <h2 id="intake-title">Ingestion And Preprocessing</h2>
+                    <p className="subtle">
+                      {activeDataset
+                        ? "Files, event mapping, validation, and preprocessing runs"
+                        : "Create or select a dataset"}
+                    </p>
+                  </div>
+                </div>
+                <IntakeSection
+                  activeDataset={activeDataset}
+                  busyAction={busyAction}
+                  eegFile={eegFile}
+                  eventFile={eventFile}
+                  eventLog={eventLog}
+                  eventPreview={eventPreview}
+                  mapping={mapping}
+                  onBeginPreprocessing={beginPreprocessingHandoff}
+                  onEegFileChange={setEegFile}
+                  onEventFileChange={setEventFile}
+                  onMappingChange={setMapping}
+                  onPreprocessingConfigChange={setPreprocessingConfig}
+                  onCancelPreprocessingRun={cancelPreprocessingRun}
+                  onSubmitEventMapping={submitEventMapping}
+                  onUploadEeg={uploadEegFile}
+                  onUploadEvent={uploadEventFile}
+                  onValidate={validateDataset}
+                  preprocessingConfig={preprocessingConfig}
+                  preprocessingRuns={preprocessingRuns}
+                  validation={validation}
                 />
-                <MetadataView metadata={metadata} selectedSample={selectedSample} />
-              </div>
+              </section>
+
+              <section className="panel" aria-labelledby="epoch-title">
+                <div className="panel-header">
+                  <div>
+                    <h2 id="epoch-title">Epoch Controls</h2>
+                    <p className="subtle">
+                      {activeDataset
+                        ? "Create epochs from completed preprocessing output"
+                        : "Create or select a dataset"}
+                    </p>
+                  </div>
+                </div>
+                <EpochSection
+                  activeDataset={activeDataset}
+                  busyAction={busyAction}
+                  completedPreprocessingRuns={completedPreprocessingRuns}
+                  epochConfig={epochConfig}
+                  epochRuns={epochRuns}
+                  onEpochConfigChange={setEpochConfig}
+                  onStartEpochRun={beginEpochRun}
+                />
+              </section>
+
+              <section className="panel" aria-labelledby="erp-title">
+                <div className="panel-header">
+                  <div>
+                    <h2 id="erp-title">ERP Preview</h2>
+                    <p className="subtle">
+                      {activeDataset
+                        ? "Generate condition averages and plot previews"
+                        : "Create or select a dataset"}
+                    </p>
+                  </div>
+                </div>
+                <ErpSection
+                  activeDataset={activeDataset}
+                  busyAction={busyAction}
+                  comparisonConfig={comparisonConfig}
+                  completedEpochRuns={completedEpochRuns}
+                  completedErpRuns={completedErpRuns}
+                  erpConfig={erpConfig}
+                  erpRuns={erpRuns}
+                  onComparisonConfigChange={setComparisonConfig}
+                  onErpConfigChange={setErpConfig}
+                  onStartComparisonSummary={beginComparisonSummary}
+                  onStartErpRun={beginErpRun}
+                />
+              </section>
+
+              <section className="panel" aria-labelledby="sample-list-title">
+                <div className="panel-header">
+                  <h2 id="sample-list-title">Sample Metadata</h2>
+                  {selectedSample ? (
+                    <span className="file-pill">{selectedSample.filename}</span>
+                  ) : null}
+                </div>
+                <div className="sample-grid">
+                  <SampleList
+                    onSelect={setSelectedSampleId}
+                    samples={samples}
+                    selectedSampleId={selectedSampleId}
+                  />
+                  <MetadataView metadata={metadata} selectedSample={selectedSample} />
+                </div>
+              </section>
             </section>
           </section>
         </div>
       </section>
     </main>
+  );
+}
+
+function ActiveDatasetSummary({
+  activeDataset,
+  eventLog,
+  selectedExperiment,
+  selectedProject,
+  validation,
+}: {
+  activeDataset: Dataset | null;
+  eventLog: EventLogResponse | null;
+  selectedExperiment: Experiment | null;
+  selectedProject: Project | null;
+  validation: ValidationReport | null;
+}) {
+  const stageItems = [
+    {
+      label: "Study",
+      state: selectedProject && selectedExperiment ? "ready" : "waiting",
+      value: selectedExperiment?.name ?? selectedProject?.name ?? "No selection",
+    },
+    {
+      label: "Dataset",
+      state: activeDataset ? "ready" : "waiting",
+      value: activeDataset?.dataset_id ?? "No dataset",
+    },
+    {
+      label: "Files",
+      state:
+        activeDataset?.status === "needs_mapping" ||
+        activeDataset?.status === "valid" ||
+        activeDataset?.status === "invalid"
+          ? "ready"
+          : "waiting",
+      value: activeDataset ? activeDataset.status : "Pending",
+    },
+    {
+      label: "Events",
+      state: eventLog ? "ready" : "waiting",
+      value: eventLog ? `${eventLog.events.length} normalized` : "Unmapped",
+    },
+    {
+      label: "Validation",
+      state:
+        validation?.valid || activeDataset?.status === "valid" ? "ready" : "waiting",
+      value:
+        validation?.valid || activeDataset?.status === "valid"
+          ? "Ready"
+          : validation
+            ? `${validation.errors.length} errors`
+            : "Not run",
+    },
+  ];
+
+  return (
+    <div className="active-context-grid">
+      <dl className="context-table">
+        <div>
+          <dt>Project</dt>
+          <dd>{selectedProject?.name ?? "Unselected"}</dd>
+        </div>
+        <div>
+          <dt>Experiment</dt>
+          <dd>{selectedExperiment?.name ?? "Unselected"}</dd>
+        </div>
+        <div>
+          <dt>Participant</dt>
+          <dd>{activeDataset?.metadata.participant_label ?? "None"}</dd>
+        </div>
+        <div>
+          <dt>Session</dt>
+          <dd>{activeDataset?.metadata.session_label ?? "None"}</dd>
+        </div>
+      </dl>
+      <div className="stage-rail" aria-label="Dataset readiness">
+        {stageItems.map((item, index) => (
+          <div
+            className="stage-item"
+            data-state={item.state}
+            key={item.label}
+          >
+            <span>{String(index + 1).padStart(2, "0")}</span>
+            <strong>{item.label}</strong>
+            <small>{item.value}</small>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -1237,121 +1821,144 @@ function IntakeSection({
 
   return (
     <div className="intake-stack">
-      <div className="upload-grid">
-        <div className="upload-group">
-          <h3>EEG Recording</h3>
-          <input
-            data-testid="eeg-file-input"
-            disabled={disabled}
-            onChange={(event) => onEegFileChange(event.target.files?.[0] ?? null)}
-            type="file"
-          />
-          <button
-            className="secondary-button"
-            data-testid="upload-eeg-button"
-            disabled={disabled || !eegFile || busyAction === "eeg-upload"}
-            onClick={onUploadEeg}
-            type="button"
-          >
-            Upload EEG
-          </button>
+      <section className="tool-section" aria-labelledby="files-title">
+        <div className="tool-section-header">
+          <span>01</span>
+          <h3 id="files-title">Files</h3>
         </div>
-        <div className="upload-group">
-          <h3>Event Log</h3>
-          <input
-            accept=".csv,.tsv,text/csv,text/tab-separated-values"
-            data-testid="event-file-input"
-            disabled={disabled}
-            onChange={(event) => onEventFileChange(event.target.files?.[0] ?? null)}
-            type="file"
-          />
-          <button
-            className="secondary-button"
-            data-testid="upload-events-button"
-            disabled={disabled || !eventFile || busyAction === "event-upload"}
-            onClick={onUploadEvent}
-            type="button"
-          >
-            Upload Events
-          </button>
-        </div>
-      </div>
-
-      {eventPreview ? (
-        <div className="mapping-layout">
-          <div>
-            <h3>Column Mapping</h3>
-            <div className="mapping-grid">
-              {MAPPING_FIELDS.map((field) => (
-                <label key={field.key}>
-                  <span>
-                    {field.label}
-                    {field.required ? " *" : ""}
-                  </span>
-                  <select
-                    data-testid={`mapping-${field.key}-select`}
-                    onChange={(event) =>
-                      onMappingChange({
-                        ...mapping,
-                        [field.key]: event.target.value,
-                      })
-                    }
-                    value={mapping[field.key]}
-                  >
-                    <option value="">Unmapped</option>
-                    {eventPreview.columns.map((column) => (
-                      <option key={column} value={column}>
-                        {column}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ))}
-            </div>
+        <div className="upload-grid">
+          <div className="upload-group">
+            <h4>EEG Recording</h4>
+            <input
+              data-testid="eeg-file-input"
+              disabled={disabled}
+              onChange={(event) => onEegFileChange(event.target.files?.[0] ?? null)}
+              type="file"
+            />
             <button
-              className="primary-button"
-              data-testid="save-mapping-button"
-              disabled={!mapping.onset_seconds || busyAction === "event-mapping"}
-              onClick={onSubmitEventMapping}
+              className="secondary-button"
+              data-testid="upload-eeg-button"
+              disabled={disabled || !eegFile || busyAction === "eeg-upload"}
+              onClick={onUploadEeg}
               type="button"
             >
-              Save Mapping
+              Upload EEG
             </button>
           </div>
-
-          <EventPreviewTable preview={eventPreview} />
+          <div className="upload-group">
+            <h4>Event Log</h4>
+            <input
+              accept=".csv,.tsv,text/csv,text/tab-separated-values"
+              data-testid="event-file-input"
+              disabled={disabled}
+              onChange={(event) => onEventFileChange(event.target.files?.[0] ?? null)}
+              type="file"
+            />
+            <button
+              className="secondary-button"
+              data-testid="upload-events-button"
+              disabled={disabled || !eventFile || busyAction === "event-upload"}
+              onClick={onUploadEvent}
+              type="button"
+            >
+              Upload Events
+            </button>
+          </div>
         </div>
-      ) : (
-        <p className="muted">Upload a CSV or TSV event log to preview columns.</p>
-      )}
+      </section>
 
-      <div className="validation-bar">
-        <button
-          className="primary-button"
-          data-testid="validate-dataset-button"
-          disabled={disabled || busyAction === "validation"}
-          onClick={onValidate}
-          type="button"
-        >
-          Validate Dataset
-        </button>
-        {eventLog ? (
-          <span className="muted">{eventLog.events.length} normalized events</span>
+      <section className="tool-section" aria-labelledby="mapping-title">
+        <div className="tool-section-header">
+          <span>02</span>
+          <h3 id="mapping-title">Event Mapping</h3>
+        </div>
+        {eventPreview ? (
+          <div className="mapping-layout">
+            <div>
+              <div className="mapping-grid">
+                {MAPPING_FIELDS.map((field) => (
+                  <label key={field.key}>
+                    <span>
+                      {field.label}
+                      {field.required ? " *" : ""}
+                    </span>
+                    <select
+                      data-testid={`mapping-${field.key}-select`}
+                      onChange={(event) =>
+                        onMappingChange({
+                          ...mapping,
+                          [field.key]: event.target.value,
+                        })
+                      }
+                      value={mapping[field.key]}
+                    >
+                      <option value="">Unmapped</option>
+                      {eventPreview.columns.map((column) => (
+                        <option key={column} value={column}>
+                          {column}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ))}
+              </div>
+              <button
+                className="primary-button"
+                data-testid="save-mapping-button"
+                disabled={!mapping.onset_seconds || busyAction === "event-mapping"}
+                onClick={onSubmitEventMapping}
+                type="button"
+              >
+                Save Mapping
+              </button>
+            </div>
+
+            <EventPreviewTable preview={eventPreview} />
+          </div>
         ) : (
-          <span className="muted">No mapped event log yet</span>
+          <p className="muted">Upload a CSV or TSV event log to preview columns.</p>
         )}
-      </div>
+      </section>
 
-      {validation ? <ValidationPanel report={validation} /> : null}
+      <section className="tool-section" aria-labelledby="validation-title">
+        <div className="tool-section-header">
+          <span>03</span>
+          <h3 id="validation-title">Validation</h3>
+        </div>
+        <div className="validation-bar">
+          <button
+            className="primary-button"
+            data-testid="validate-dataset-button"
+            disabled={disabled || busyAction === "validation"}
+            onClick={onValidate}
+            type="button"
+          >
+            Validate Dataset
+          </button>
+          {eventLog ? (
+            <span className="muted">{eventLog.events.length} normalized events</span>
+          ) : (
+            <span className="muted">No mapped event log yet</span>
+          )}
+        </div>
+        {validation ? <ValidationPanel report={validation} /> : null}
+      </section>
 
-      <div className="preprocessing-panel">
-        <div>
-          <h3>Preprocessing Handoff</h3>
-          <p className="muted">
-            {canContinue
-              ? "Configure filters and create a run for this valid dataset."
-              : "A dataset must pass validation before preprocessing can start."}
-          </p>
+      <section
+        className="tool-section preprocessing-section"
+        aria-labelledby="preprocessing-title"
+      >
+        <div className="tool-section-header">
+          <span>04</span>
+          <h3 id="preprocessing-title">Preprocessing</h3>
+          <small>{canContinue ? "ready" : "blocked"}</small>
+        </div>
+        <div className="preprocessing-copy">
+          {canContinue ? (
+            <p className="muted">Configure filters and create a run.</p>
+          ) : (
+            <p className="muted">Validation must pass before preprocessing starts.</p>
+          )}
           {configError ? <p className="error-text">{configError}</p> : null}
         </div>
         <div className="preprocessing-grid">
@@ -1453,7 +2060,7 @@ function IntakeSection({
           onCancel={onCancelPreprocessingRun}
           runs={preprocessingRuns}
         />
-      </div>
+      </section>
     </div>
   );
 }
@@ -1508,6 +2115,712 @@ function PreprocessingRunList({
         </div>
       ))}
     </div>
+  );
+}
+
+function EpochSection({
+  activeDataset,
+  busyAction,
+  completedPreprocessingRuns,
+  epochConfig,
+  epochRuns,
+  onEpochConfigChange,
+  onStartEpochRun,
+}: {
+  activeDataset: Dataset | null;
+  busyAction: string | null;
+  completedPreprocessingRuns: PreprocessingRun[];
+  epochConfig: typeof DEFAULT_EPOCH_CONFIG;
+  epochRuns: LoadState<EpochRun[]>;
+  onEpochConfigChange: (config: typeof DEFAULT_EPOCH_CONFIG) => void;
+  onStartEpochRun: () => void;
+}) {
+  const disabled = !activeDataset || completedPreprocessingRuns.length === 0;
+  const configError = getEpochConfigError(epochConfig);
+
+  return (
+    <div className="intake-stack">
+      <section className="tool-section" aria-labelledby="epoch-config-title">
+        <div className="tool-section-header">
+          <span>05</span>
+          <h3 id="epoch-config-title">Epoch Run</h3>
+          <small>{disabled ? "blocked" : "ready"}</small>
+        </div>
+        {completedPreprocessingRuns.length === 0 ? (
+          <p className="muted">No completed preprocessing runs yet.</p>
+        ) : null}
+        {configError ? <p className="error-text">{configError}</p> : null}
+        <div className="epoch-grid">
+          <label className="wide-field">
+            <span>Preprocessing Run</span>
+            <select
+              data-testid="epoch-preprocessing-run-select"
+              disabled={disabled}
+              onChange={(event) =>
+                onEpochConfigChange({
+                  ...epochConfig,
+                  preprocessing_run_id: event.target.value,
+                })
+              }
+              value={epochConfig.preprocessing_run_id}
+            >
+              <option value="">Select completed run</option>
+              {completedPreprocessingRuns.map((run) => (
+                <option key={run.run_id} value={run.run_id}>
+                  {run.run_id}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Condition Field</span>
+            <select
+              data-testid="epoch-condition-field-select"
+              disabled={disabled}
+              onChange={(event) =>
+                onEpochConfigChange({
+                  ...epochConfig,
+                  condition_field: event.target.value,
+                })
+              }
+              value={epochConfig.condition_field}
+            >
+              {CONDITION_FIELDS.map((field) => (
+                <option key={field} value={field}>
+                  {field}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>tmin s</span>
+            <input
+              data-testid="epoch-tmin-input"
+              disabled={disabled}
+              onChange={(event) =>
+                onEpochConfigChange({
+                  ...epochConfig,
+                  tmin_seconds: event.target.value,
+                })
+              }
+              step="0.01"
+              type="number"
+              value={epochConfig.tmin_seconds}
+            />
+          </label>
+          <label>
+            <span>tmax s</span>
+            <input
+              data-testid="epoch-tmax-input"
+              disabled={disabled}
+              onChange={(event) =>
+                onEpochConfigChange({
+                  ...epochConfig,
+                  tmax_seconds: event.target.value,
+                })
+              }
+              step="0.01"
+              type="number"
+              value={epochConfig.tmax_seconds}
+            />
+          </label>
+          <label>
+            <span>Baseline Start</span>
+            <input
+              disabled={disabled || !epochConfig.baseline_enabled}
+              onChange={(event) =>
+                onEpochConfigChange({
+                  ...epochConfig,
+                  baseline_start_seconds: event.target.value,
+                })
+              }
+              step="0.01"
+              type="number"
+              value={epochConfig.baseline_start_seconds}
+            />
+          </label>
+          <label>
+            <span>Baseline End</span>
+            <input
+              disabled={disabled || !epochConfig.baseline_enabled}
+              onChange={(event) =>
+                onEpochConfigChange({
+                  ...epochConfig,
+                  baseline_end_seconds: event.target.value,
+                })
+              }
+              step="0.01"
+              type="number"
+              value={epochConfig.baseline_end_seconds}
+            />
+          </label>
+          <label>
+            <span>Reject EEG uV</span>
+            <input
+              data-testid="epoch-reject-input"
+              disabled={disabled}
+              min="0.1"
+              onChange={(event) =>
+                onEpochConfigChange({
+                  ...epochConfig,
+                  reject_eeg_uv: event.target.value,
+                })
+              }
+              placeholder="Optional"
+              step="0.1"
+              type="number"
+              value={epochConfig.reject_eeg_uv}
+            />
+          </label>
+          <label className="checkbox-field">
+            <input
+              checked={epochConfig.baseline_enabled}
+              disabled={disabled}
+              onChange={(event) =>
+                onEpochConfigChange({
+                  ...epochConfig,
+                  baseline_enabled: event.target.checked,
+                })
+              }
+              type="checkbox"
+            />
+            <span>Baseline</span>
+          </label>
+        </div>
+        <button
+          className="primary-button"
+          data-testid="start-epoch-button"
+          disabled={disabled || Boolean(configError) || busyAction === "epoch"}
+          onClick={onStartEpochRun}
+          type="button"
+        >
+          Start Epoching
+        </button>
+      </section>
+      <EpochRunList runs={epochRuns} />
+    </div>
+  );
+}
+
+function EpochRunList({ runs }: { runs: LoadState<EpochRun[]> }) {
+  if (runs.status === "loading" || runs.status === "idle") {
+    return <p className="muted">Loading epoch runs...</p>;
+  }
+
+  if (runs.status === "error") {
+    return <p className="error-text">{runs.error}</p>;
+  }
+
+  const runData = runs.data ?? [];
+  if (runData.length === 0) {
+    return <p className="muted">No epoch runs yet.</p>;
+  }
+
+  return (
+    <div className="run-list" data-testid="epoch-runs">
+      {runData.map((run) => (
+        <div className="run-row" key={run.run_id}>
+          <div>
+            <strong>{run.run_id}</strong>
+            <small>{run.output_path ?? "No output file"}</small>
+          </div>
+          <div className="run-meta">
+            <span>{run.status}</span>
+            <span>{formatEpochMetadata(run.output_metadata)}</span>
+            <span>{run.config.condition_field}</span>
+          </div>
+          <ConditionCountSummary metadata={run.output_metadata} />
+          {run.warnings.length > 0 ? (
+            <p className="muted">{run.warnings.join(" ")}</p>
+          ) : null}
+          {run.errors.length > 0 ? (
+            <p className="error-text">{run.errors.join(" ")}</p>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ConditionCountSummary({
+  metadata,
+}: {
+  metadata: Record<string, MetadataValue>;
+}) {
+  const conditionCount = metadata.condition_count;
+  const epochCount = metadata.epoch_count;
+  const droppedCount = metadata.dropped_epoch_count;
+  const usedEventCount = metadata.event_count_used;
+
+  if (
+    typeof conditionCount !== "number" &&
+    typeof epochCount !== "number" &&
+    typeof droppedCount !== "number" &&
+    typeof usedEventCount !== "number"
+  ) {
+    return null;
+  }
+
+  return (
+    <dl className="run-summary-grid">
+      <div>
+        <dt>Conditions</dt>
+        <dd>{typeof conditionCount === "number" ? conditionCount : "-"}</dd>
+      </div>
+      <div>
+        <dt>Used Events</dt>
+        <dd>{typeof usedEventCount === "number" ? usedEventCount : "-"}</dd>
+      </div>
+      <div>
+        <dt>Epochs</dt>
+        <dd>{typeof epochCount === "number" ? epochCount : "-"}</dd>
+      </div>
+      <div>
+        <dt>Dropped</dt>
+        <dd>{typeof droppedCount === "number" ? droppedCount : "-"}</dd>
+      </div>
+    </dl>
+  );
+}
+
+function ErpSection({
+  activeDataset,
+  busyAction,
+  comparisonConfig,
+  completedEpochRuns,
+  completedErpRuns,
+  erpConfig,
+  erpRuns,
+  onComparisonConfigChange,
+  onErpConfigChange,
+  onStartComparisonSummary,
+  onStartErpRun,
+}: {
+  activeDataset: Dataset | null;
+  busyAction: string | null;
+  comparisonConfig: typeof DEFAULT_COMPARISON_CONFIG;
+  completedEpochRuns: EpochRun[];
+  completedErpRuns: ErpRun[];
+  erpConfig: typeof DEFAULT_ERP_CONFIG;
+  erpRuns: LoadState<ErpRun[]>;
+  onComparisonConfigChange: (config: typeof DEFAULT_COMPARISON_CONFIG) => void;
+  onErpConfigChange: (config: typeof DEFAULT_ERP_CONFIG) => void;
+  onStartComparisonSummary: () => void;
+  onStartErpRun: () => void;
+}) {
+  const disabled = !activeDataset || completedEpochRuns.length === 0;
+  const configError = getErpConfigError(erpConfig);
+
+  return (
+    <div className="intake-stack">
+      <section className="tool-section" aria-labelledby="erp-config-title">
+        <div className="tool-section-header">
+          <span>06</span>
+          <h3 id="erp-config-title">ERP Run</h3>
+          <small>{disabled ? "blocked" : "ready"}</small>
+        </div>
+        {completedEpochRuns.length === 0 ? (
+          <p className="muted">No completed epoch runs yet.</p>
+        ) : null}
+        {configError ? <p className="error-text">{configError}</p> : null}
+        <div className="epoch-grid">
+          <label className="wide-field">
+            <span>Epoch Run</span>
+            <select
+              data-testid="erp-epoch-run-select"
+              disabled={disabled}
+              onChange={(event) =>
+                onErpConfigChange({
+                  ...erpConfig,
+                  epoch_run_id: event.target.value,
+                })
+              }
+              value={erpConfig.epoch_run_id}
+            >
+              <option value="">Select completed run</option>
+              {completedEpochRuns.map((run) => (
+                <option key={run.run_id} value={run.run_id}>
+                  {run.run_id}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Conditions</span>
+            <input
+              data-testid="erp-conditions-input"
+              disabled={disabled}
+              onChange={(event) =>
+                onErpConfigChange({
+                  ...erpConfig,
+                  conditions: event.target.value,
+                })
+              }
+              placeholder="All"
+              type="text"
+              value={erpConfig.conditions}
+            />
+          </label>
+          <label>
+            <span>Picks</span>
+            <input
+              disabled={disabled}
+              onChange={(event) =>
+                onErpConfigChange({
+                  ...erpConfig,
+                  picks: event.target.value,
+                })
+              }
+              placeholder="All channels"
+              type="text"
+              value={erpConfig.picks}
+            />
+          </label>
+          <label>
+            <span>Plot Mode</span>
+            <select
+              data-testid="erp-plot-mode-select"
+              disabled={disabled}
+              onChange={(event) =>
+                onErpConfigChange({
+                  ...erpConfig,
+                  plot_mode: event.target.value,
+                })
+              }
+              value={erpConfig.plot_mode}
+            >
+              <option value="gfp">GFP</option>
+              <option value="channel">Channel</option>
+            </select>
+          </label>
+          <label>
+            <span>Plot Channel</span>
+            <input
+              data-testid="erp-plot-channel-input"
+              disabled={disabled || erpConfig.plot_mode !== "channel"}
+              onChange={(event) =>
+                onErpConfigChange({
+                  ...erpConfig,
+                  plot_channel: event.target.value,
+                })
+              }
+              placeholder="Fp1"
+              type="text"
+              value={erpConfig.plot_channel}
+            />
+          </label>
+        </div>
+        <button
+          className="primary-button"
+          data-testid="start-erp-button"
+          disabled={disabled || Boolean(configError) || busyAction === "erp"}
+          onClick={onStartErpRun}
+          type="button"
+        >
+          Generate ERP
+        </button>
+      </section>
+      <ErpRunList runs={erpRuns} />
+      <ComparisonSection
+        busyAction={busyAction}
+        comparisonConfig={comparisonConfig}
+        completedErpRuns={completedErpRuns}
+        onComparisonConfigChange={onComparisonConfigChange}
+        onStartComparisonSummary={onStartComparisonSummary}
+      />
+    </div>
+  );
+}
+
+function ErpRunList({ runs }: { runs: LoadState<ErpRun[]> }) {
+  if (runs.status === "loading" || runs.status === "idle") {
+    return <p className="muted">Loading ERP runs...</p>;
+  }
+
+  if (runs.status === "error") {
+    return <p className="error-text">{runs.error}</p>;
+  }
+
+  const runData = runs.data ?? [];
+  if (runData.length === 0) {
+    return <p className="muted">No ERP runs yet.</p>;
+  }
+
+  return (
+    <div className="run-list" data-testid="erp-runs">
+      {runData.map((run) => (
+        <div className="run-row" key={run.run_id}>
+          <div>
+            <strong>{run.run_id}</strong>
+            <small>{run.output_path ?? "No output file"}</small>
+          </div>
+          <div className="run-meta">
+            <span>{run.status}</span>
+            <span>{formatErpMetadata(run.output_metadata)}</span>
+            <span>{run.config.plot_mode}</span>
+          </div>
+          <ErpPreview run={run} />
+          {run.warnings.length > 0 ? (
+            <p className="muted">{run.warnings.join(" ")}</p>
+          ) : null}
+          {run.errors.length > 0 ? (
+            <p className="error-text">{run.errors.join(" ")}</p>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ErpPreview({ run }: { run: ErpRun }) {
+  const filename = run.output_metadata.preview_plot_filename;
+  const condition = run.output_metadata.preview_plot_condition;
+  const plotStatus = run.output_metadata.plot_status;
+
+  if (typeof filename !== "string" || !filename) {
+    if (run.status === "completed" && plotStatus !== "completed") {
+      return <p className="muted">Plot preview unavailable: {String(plotStatus)}</p>;
+    }
+    return null;
+  }
+
+  return (
+    <figure className="erp-preview" data-testid="erp-preview">
+      <img
+        alt={`ERP plot ${typeof condition === "string" ? condition : run.run_id}`}
+        src={artifactUrl(run.run_id, filename)}
+      />
+      <figcaption>
+        {typeof condition === "string" ? condition : "ERP"} /{" "}
+        {String(run.output_metadata.preview_plot_mode ?? "plot")}
+      </figcaption>
+    </figure>
+  );
+}
+
+function ComparisonSection({
+  busyAction,
+  comparisonConfig,
+  completedErpRuns,
+  onComparisonConfigChange,
+  onStartComparisonSummary,
+}: {
+  busyAction: string | null;
+  comparisonConfig: typeof DEFAULT_COMPARISON_CONFIG;
+  completedErpRuns: ErpRun[];
+  onComparisonConfigChange: (config: typeof DEFAULT_COMPARISON_CONFIG) => void;
+  onStartComparisonSummary: () => void;
+}) {
+  const selectedRun =
+    completedErpRuns.find((run) => run.run_id === comparisonConfig.erp_run_id) ??
+    null;
+  const conditionLabels = selectedRun ? getErpConditionLabels(selectedRun) : [];
+  const disabled = !selectedRun || conditionLabels.length < 2;
+  const configError = getComparisonConfigError(comparisonConfig);
+
+  return (
+    <section className="tool-section" aria-labelledby="comparison-config-title">
+      <div className="tool-section-header">
+        <span>07</span>
+        <h3 id="comparison-config-title">Comparison Prep</h3>
+        <small>{disabled ? "blocked" : "ready"}</small>
+      </div>
+      {completedErpRuns.length === 0 ? (
+        <p className="muted">No completed ERP runs with two conditions yet.</p>
+      ) : null}
+      {configError ? <p className="error-text">{configError}</p> : null}
+      <div className="epoch-grid">
+        <label className="wide-field">
+          <span>ERP Run</span>
+          <select
+            data-testid="comparison-erp-run-select"
+            disabled={completedErpRuns.length === 0}
+            onChange={(event) => {
+              const nextRun = completedErpRuns.find(
+                (run) => run.run_id === event.target.value,
+              );
+              const labels = nextRun ? getErpConditionLabels(nextRun) : [];
+              onComparisonConfigChange({
+                ...comparisonConfig,
+                erp_run_id: event.target.value,
+                condition_a: labels[0] ?? "",
+                condition_b: labels[1] ?? "",
+              });
+            }}
+            value={comparisonConfig.erp_run_id}
+          >
+            <option value="">Select completed ERP run</option>
+            {completedErpRuns.map((run) => (
+              <option key={run.run_id} value={run.run_id}>
+                {run.run_id}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Condition A</span>
+          <select
+            data-testid="comparison-condition-a-select"
+            disabled={disabled}
+            onChange={(event) =>
+              onComparisonConfigChange({
+                ...comparisonConfig,
+                condition_a: event.target.value,
+              })
+            }
+            value={comparisonConfig.condition_a}
+          >
+            <option value="">Select</option>
+            {conditionLabels.map((label) => (
+              <option key={label} value={label}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Condition B</span>
+          <select
+            data-testid="comparison-condition-b-select"
+            disabled={disabled}
+            onChange={(event) =>
+              onComparisonConfigChange({
+                ...comparisonConfig,
+                condition_b: event.target.value,
+              })
+            }
+            value={comparisonConfig.condition_b}
+          >
+            <option value="">Select</option>
+            {conditionLabels.map((label) => (
+              <option key={label} value={label}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Window Start</span>
+          <input
+            data-testid="comparison-window-start-input"
+            disabled={disabled}
+            onChange={(event) =>
+              onComparisonConfigChange({
+                ...comparisonConfig,
+                window_start_seconds: event.target.value,
+              })
+            }
+            step="0.01"
+            type="number"
+            value={comparisonConfig.window_start_seconds}
+          />
+        </label>
+        <label>
+          <span>Window End</span>
+          <input
+            data-testid="comparison-window-end-input"
+            disabled={disabled}
+            onChange={(event) =>
+              onComparisonConfigChange({
+                ...comparisonConfig,
+                window_end_seconds: event.target.value,
+              })
+            }
+            step="0.01"
+            type="number"
+            value={comparisonConfig.window_end_seconds}
+          />
+        </label>
+        <label className="checkbox-field">
+          <input
+            checked={comparisonConfig.use_gfp}
+            disabled={disabled}
+            onChange={(event) =>
+              onComparisonConfigChange({
+                ...comparisonConfig,
+                use_gfp: event.target.checked,
+                channel: event.target.checked ? "" : comparisonConfig.channel,
+              })
+            }
+            type="checkbox"
+          />
+          <span>GFP</span>
+        </label>
+        <label>
+          <span>Channel</span>
+          <input
+            data-testid="comparison-channel-input"
+            disabled={disabled || comparisonConfig.use_gfp}
+            onChange={(event) =>
+              onComparisonConfigChange({
+                ...comparisonConfig,
+                channel: event.target.value,
+              })
+            }
+            placeholder="Fp1"
+            type="text"
+            value={comparisonConfig.channel}
+          />
+        </label>
+      </div>
+      <button
+        className="primary-button"
+        data-testid="start-comparison-button"
+        disabled={disabled || Boolean(configError) || busyAction === "comparison"}
+        onClick={onStartComparisonSummary}
+        type="button"
+      >
+        Generate Summary
+      </button>
+      {selectedRun ? <ComparisonSummary run={selectedRun} /> : null}
+    </section>
+  );
+}
+
+function ComparisonSummary({ run }: { run: ErpRun }) {
+  const metadata = run.output_metadata;
+  if (metadata.comparison_available !== true) {
+    return null;
+  }
+
+  return (
+    <dl className="run-summary-grid" data-testid="comparison-summary">
+      <div>
+        <dt>Condition A</dt>
+        <dd>{String(metadata.comparison_condition_a ?? "-")}</dd>
+      </div>
+      <div>
+        <dt>Condition B</dt>
+        <dd>{String(metadata.comparison_condition_b ?? "-")}</dd>
+      </div>
+      <div>
+        <dt>Mean A</dt>
+        <dd>{formatUv(metadata.comparison_mean_a_uv)}</dd>
+      </div>
+      <div>
+        <dt>Mean B</dt>
+        <dd>{formatUv(metadata.comparison_mean_b_uv)}</dd>
+      </div>
+      <div>
+        <dt>Difference</dt>
+        <dd>{formatUv(metadata.comparison_difference_uv)}</dd>
+      </div>
+      <div>
+        <dt>Target</dt>
+        <dd>{String(metadata.comparison_target_type ?? "-")}</dd>
+      </div>
+      <div>
+        <dt>Window</dt>
+        <dd>
+          {String(metadata.comparison_window_start_seconds ?? "-")} to{" "}
+          {String(metadata.comparison_window_end_seconds ?? "-")}
+        </dd>
+      </div>
+      <div>
+        <dt>Statistics</dt>
+        <dd>deferred</dd>
+      </div>
+    </dl>
   );
 }
 
@@ -1825,6 +3138,51 @@ function normalizePreprocessingConfig(
   };
 }
 
+function normalizeEpochConfig(config: typeof DEFAULT_EPOCH_CONFIG): EpochConfig {
+  return {
+    preprocessing_run_id: config.preprocessing_run_id,
+    condition_field: config.condition_field,
+    tmin_seconds: Number(config.tmin_seconds),
+    tmax_seconds: Number(config.tmax_seconds),
+    baseline_start_seconds: config.baseline_enabled
+      ? parseOptionalNumber(config.baseline_start_seconds)
+      : null,
+    baseline_end_seconds: config.baseline_enabled
+      ? parseOptionalNumber(config.baseline_end_seconds)
+      : null,
+    reject_eeg_uv: parseOptionalNumber(config.reject_eeg_uv),
+  };
+}
+
+function normalizeErpConfig(config: typeof DEFAULT_ERP_CONFIG): ErpConfig {
+  return {
+    epoch_run_id: config.epoch_run_id,
+    conditions: parseOptionalCsv(config.conditions),
+    picks: parseOptionalCsv(config.picks),
+    method: config.method,
+    plot_mode: config.plot_mode,
+    plot_channel:
+      config.plot_mode === "channel" && config.plot_channel.trim()
+        ? config.plot_channel.trim()
+        : null,
+  };
+}
+
+function normalizeComparisonConfig(
+  config: typeof DEFAULT_COMPARISON_CONFIG,
+): ComparisonConfig {
+  return {
+    condition_a: config.condition_a,
+    condition_b: config.condition_b,
+    channel:
+      !config.use_gfp && config.channel.trim() ? config.channel.trim() : null,
+    use_gfp: config.use_gfp,
+    window_start_seconds: Number(config.window_start_seconds),
+    window_end_seconds: Number(config.window_end_seconds),
+    metric: config.metric,
+  };
+}
+
 function getPreprocessingConfigError(
   config: typeof DEFAULT_PREPROCESSING_CONFIG,
 ): string | null {
@@ -1863,11 +3221,135 @@ function getPreprocessingConfigError(
   return null;
 }
 
+function getEpochConfigError(config: typeof DEFAULT_EPOCH_CONFIG): string | null {
+  if (!config.preprocessing_run_id) {
+    return "Select a completed preprocessing run.";
+  }
+  if (
+    !CONDITION_FIELDS.includes(
+      config.condition_field as (typeof CONDITION_FIELDS)[number],
+    )
+  ) {
+    return "Select a supported condition field.";
+  }
+
+  const tmin = parseOptionalNumber(config.tmin_seconds);
+  const tmax = parseOptionalNumber(config.tmax_seconds);
+  const baselineStart = config.baseline_enabled
+    ? parseOptionalNumber(config.baseline_start_seconds)
+    : null;
+  const baselineEnd = config.baseline_enabled
+    ? parseOptionalNumber(config.baseline_end_seconds)
+    : null;
+  const reject = parseOptionalNumber(config.reject_eeg_uv);
+
+  if (tmin === null || !Number.isFinite(tmin)) {
+    return "tmin must be a number.";
+  }
+  if (tmax === null || !Number.isFinite(tmax)) {
+    return "tmax must be a number.";
+  }
+  if (tmin >= tmax) {
+    return "tmin must be lower than tmax.";
+  }
+  if (tmax <= 0) {
+    return "tmax must be greater than 0.";
+  }
+
+  if (config.baseline_enabled) {
+    if (baselineStart === null || baselineEnd === null) {
+      return "Baseline start and end are required when baseline is enabled.";
+    }
+    if (!Number.isFinite(baselineStart) || !Number.isFinite(baselineEnd)) {
+      return "Baseline values must be numbers.";
+    }
+    if (baselineStart > baselineEnd) {
+      return "Baseline start must be lower than or equal to baseline end.";
+    }
+    if (baselineStart < tmin || baselineEnd > tmax) {
+      return "Baseline must be inside the epoch window.";
+    }
+  }
+
+  if (reject !== null && (!Number.isFinite(reject) || reject <= 0)) {
+    return "Reject EEG must be greater than 0 uV.";
+  }
+
+  return null;
+}
+
+function getErpConfigError(config: typeof DEFAULT_ERP_CONFIG): string | null {
+  if (!config.epoch_run_id) {
+    return "Select a completed epoch run.";
+  }
+  if (config.method !== "mean") {
+    return "ERP method must be mean.";
+  }
+  if (!["gfp", "channel"].includes(config.plot_mode)) {
+    return "Select GFP or channel plot mode.";
+  }
+  if (config.plot_mode === "channel" && !config.plot_channel.trim()) {
+    return "Enter a channel for channel plot mode.";
+  }
+  if (parseOptionalCsv(config.conditions)?.length === 0) {
+    return "Conditions must not be empty.";
+  }
+  if (parseOptionalCsv(config.picks)?.length === 0) {
+    return "Picks must not be empty.";
+  }
+  return null;
+}
+
+function getComparisonConfigError(
+  config: typeof DEFAULT_COMPARISON_CONFIG,
+): string | null {
+  if (!config.erp_run_id) {
+    return "Select a completed ERP run.";
+  }
+  if (!config.condition_a || !config.condition_b) {
+    return "Select two conditions.";
+  }
+  if (config.condition_a === config.condition_b) {
+    return "Comparison conditions must be different.";
+  }
+  if (config.metric !== "mean_amplitude_uv") {
+    return "Comparison metric must be mean amplitude.";
+  }
+  const windowStart = parseOptionalNumber(config.window_start_seconds);
+  const windowEnd = parseOptionalNumber(config.window_end_seconds);
+  if (windowStart === null || windowEnd === null) {
+    return "Comparison window values are required.";
+  }
+  if (!Number.isFinite(windowStart) || !Number.isFinite(windowEnd)) {
+    return "Comparison window values must be numbers.";
+  }
+  if (windowStart >= windowEnd) {
+    return "Window start must be lower than window end.";
+  }
+  if (config.use_gfp && config.channel.trim()) {
+    return "Use either GFP or a channel.";
+  }
+  if (!config.use_gfp && !config.channel.trim()) {
+    return "Enter a channel or enable GFP.";
+  }
+  return null;
+}
+
 function parseOptionalNumber(value: string): number | null {
   if (!value.trim()) {
     return null;
   }
   return Number(value);
+}
+
+function parseOptionalCsv(value: string): string[] | null {
+  if (!value.trim()) {
+    return null;
+  }
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function formatRunMetadata(metadata: Record<string, MetadataValue>): string {
@@ -1883,6 +3365,56 @@ function formatRunMetadata(metadata: Record<string, MetadataValue>): string {
     typeof duration === "number" ? `${duration.toFixed(1)} s` : null,
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(" / ") : "Metadata pending";
+}
+
+function formatEpochMetadata(metadata: Record<string, MetadataValue>): string {
+  const conditionCount = metadata.condition_count;
+  const epochCount = metadata.epoch_count;
+  const droppedCount = metadata.dropped_epoch_count;
+  const parts = [
+    typeof conditionCount === "number" ? `${conditionCount} cond` : null,
+    typeof epochCount === "number" ? `${epochCount} epochs` : null,
+    typeof droppedCount === "number" ? `${droppedCount} dropped` : null,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" / ") : "Metadata pending";
+}
+
+function formatErpMetadata(metadata: Record<string, MetadataValue>): string {
+  const conditionCount = metadata.condition_count;
+  const evokedCount = metadata.evoked_count;
+  const plotCount = metadata.plot_count;
+  const plotStatus = metadata.plot_status;
+  const parts = [
+    typeof conditionCount === "number" ? `${conditionCount} cond` : null,
+    typeof evokedCount === "number" ? `${evokedCount} evoked` : null,
+    typeof plotCount === "number" ? `${plotCount} plots` : null,
+    typeof plotStatus === "string" ? plotStatus : null,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" / ") : "Metadata pending";
+}
+
+function getErpConditionLabels(run: ErpRun): string[] {
+  const labels = run.output_metadata.condition_labels;
+  if (typeof labels !== "string") {
+    return [];
+  }
+  return labels
+    .split(",")
+    .map((label) => label.trim())
+    .filter(Boolean);
+}
+
+function formatUv(value: MetadataValue): string {
+  if (typeof value !== "number") {
+    return "-";
+  }
+  return `${value.toFixed(3)} uV`;
+}
+
+function artifactUrl(runId: string, filename: string): string {
+  return `${API_BASE_URL}/artifacts/${encodeURIComponent(runId)}/${encodeURIComponent(
+    filename,
+  )}`;
 }
 
 function getErrorMessage(error: unknown): string {
@@ -1911,6 +3443,17 @@ function getProjectCountLabel(projects: LoadState<Project[]>): string {
   }
 
   return "Loading";
+}
+
+function getInitialTheme(): ThemeMode {
+  const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+  if (storedTheme === "dark" || storedTheme === "light") {
+    return storedTheme;
+  }
+
+  return window.matchMedia("(prefers-color-scheme: light)").matches
+    ? "light"
+    : "dark";
 }
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

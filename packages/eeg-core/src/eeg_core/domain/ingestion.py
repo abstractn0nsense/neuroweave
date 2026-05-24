@@ -28,7 +28,31 @@ class ValidationSeverity(StrEnum):
     WARNING = "warning"
 
 
+class RunKind(StrEnum):
+    PREPROCESSING = "preprocessing"
+    EPOCH = "epoch"
+    ERP = "erp"
+
+
 class PreprocessingRunStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    CANCELLING = "cancelling"
+    CANCELLED = "cancelled"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class EpochRunStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    CANCELLING = "cancelling"
+    CANCELLED = "cancelled"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class ErpRunStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
     CANCELLING = "cancelling"
@@ -188,11 +212,80 @@ class PreprocessingConfig:
 
 
 @dataclass(frozen=True)
+class EpochConfig:
+    preprocessing_run_id: str
+    condition_field: str
+    tmin_seconds: float
+    tmax_seconds: float
+    baseline_start_seconds: float | None = None
+    baseline_end_seconds: float | None = None
+    reject_eeg_uv: float | None = None
+
+
+@dataclass(frozen=True)
+class ErpConfig:
+    epoch_run_id: str
+    conditions: list[str] | None = None
+    picks: list[str] | None = None
+    method: str = "mean"
+    plot_mode: str = "gfp"
+    plot_channel: str | None = None
+
+
+@dataclass(frozen=True)
+class ComparisonConfig:
+    erp_run_id: str
+    condition_a: str
+    condition_b: str
+    channel: str | None
+    use_gfp: bool
+    window_start_seconds: float
+    window_end_seconds: float
+    metric: str = "mean_amplitude_uv"
+
+
+@dataclass(frozen=True)
 class PreprocessingRun:
     run_id: str
     dataset_id: str
     config: PreprocessingConfig
+    run_kind: RunKind = RunKind.PREPROCESSING
+    schema_version: int = 1
     status: PreprocessingRunStatus = PreprocessingRunStatus.PENDING
+    started_at_utc: str | None = None
+    finished_at_utc: str | None = None
+    cancel_requested_at_utc: str | None = None
+    output_path: str | None = None
+    output_metadata: Metadata = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class EpochRun:
+    run_id: str
+    dataset_id: str
+    config: EpochConfig
+    run_kind: RunKind = RunKind.EPOCH
+    schema_version: int = 1
+    status: EpochRunStatus = EpochRunStatus.PENDING
+    started_at_utc: str | None = None
+    finished_at_utc: str | None = None
+    cancel_requested_at_utc: str | None = None
+    output_path: str | None = None
+    output_metadata: Metadata = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ErpRun:
+    run_id: str
+    dataset_id: str
+    config: ErpConfig
+    run_kind: RunKind = RunKind.ERP
+    schema_version: int = 1
+    status: ErpRunStatus = ErpRunStatus.PENDING
     started_at_utc: str | None = None
     finished_at_utc: str | None = None
     cancel_requested_at_utc: str | None = None

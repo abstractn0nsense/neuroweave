@@ -13,6 +13,7 @@ import sys
 from uuid import uuid4
 
 from fastapi import FastAPI, File, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -26,8 +27,15 @@ for package_src in (
     sys.path.insert(0, str(REPO_ROOT / package_src))
 
 from eeg_core.domain import (  # noqa: E402
+    ComparisonConfig,
     Dataset as IngestionDataset,
     DatasetStatus,
+    EpochConfig,
+    EpochRun,
+    EpochRunStatus,
+    ErpConfig,
+    ErpRun,
+    ErpRunStatus,
     EventColumnMapping,
     EventLog,
     Experiment,
@@ -37,6 +45,7 @@ from eeg_core.domain import (  # noqa: E402
     PreprocessingRunStatus,
     Project,
     Recording,
+    RunKind,
     UploadedFile as IngestionUploadedFile,
     UploadedFileKind,
     ValidationIssue,
@@ -44,7 +53,17 @@ from eeg_core.domain import (  # noqa: E402
     ValidationSeverity,
     validate_ingestion_dataset,
 )
-from eeg_processing import PreprocessingError, run_preprocessing_job  # noqa: E402
+from eeg_processing import (  # noqa: E402
+    ComparisonError,
+    EpochingError,
+    ErpError,
+    PreprocessingError,
+    generate_comparison_summary,
+    run_epoching_job,
+    run_erp_job,
+    run_preprocessing_job,
+)
+from eeg_processing.epoching import SUPPORTED_CONDITION_FIELDS  # noqa: E402
 from eeg_io.datasets import find_eeg_file_by_id, list_eeg_files  # noqa: E402
 from eeg_io.event_logs import (  # noqa: E402
     EventLogNormalizationError,
@@ -56,11 +75,37 @@ from eeg_io.registry import JsonRegistryRepository, JsonRunRepository  # noqa: E
 from eeg_io.readers import EegMetadataReadError, read_eeg_metadata  # noqa: E402
 
 
+RAW_PREPROCESSED_FILENAME = "raw_preprocessed_raw.fif"
+LEGACY_RAW_PREPROCESSED_FILENAME = "raw_preprocessed.fif"
+EPOCHS_FILENAME = "epochs-epo.fif"
+LEGACY_EPOCHS_FILENAME = "epochs.fif"
+
+
 def _path_from_env(name: str, default: Path) -> Path:
     value = os.environ.get(name)
     if not value:
         return default
     return Path(value).expanduser().resolve()
+
+
+def _preprocessing_output_path(dataset_id: str, run_id: str) -> Path:
+    return PROCESSED_DIR / dataset_id / run_id / RAW_PREPROCESSED_FILENAME
+
+
+def _epoch_output_directory(dataset_id: str, run_id: str) -> Path:
+    return EPOCHS_DIR / dataset_id / run_id
+
+
+def _epoch_output_path(dataset_id: str, run_id: str) -> Path:
+    return _epoch_output_directory(dataset_id, run_id) / EPOCHS_FILENAME
+
+
+def _erp_output_directory(dataset_id: str, run_id: str) -> Path:
+    return ERP_DIR / dataset_id / run_id
+
+
+def _erp_metadata_path(dataset_id: str, run_id: str) -> Path:
+    return _erp_output_directory(dataset_id, run_id) / "erp_metadata.json"
 
 
 SAMPLE_DATASET_DIR = _path_from_env(
@@ -76,6 +121,8 @@ PROCESSED_DIR = _path_from_env(
     "NEUROWEAVE_PROCESSED_DIR",
     REPO_ROOT / "data" / "processed",
 )
+EPOCHS_DIR = _path_from_env("NEUROWEAVE_EPOCHS_DIR", REPO_ROOT / "data" / "epochs")
+ERP_DIR = _path_from_env("NEUROWEAVE_ERP_DIR", REPO_ROOT / "data" / "erp")
 registry_repository = JsonRegistryRepository(UPLOADS_DIR)
 run_repository = JsonRunRepository(RUNS_DIR)
 
@@ -126,6 +173,102 @@ class LocalPreprocessingWorker:
 
 
 preprocessing_worker = LocalPreprocessingWorker()
+
+
+class LocalEpochWorker:
+    def __init__(self) -> None:
+        self._queue: Queue[str] = Queue()
+        self._queued_run_ids: set[str] = set()
+        self._lock = Lock()
+        self._thread: Thread | None = None
+
+    def start(self) -> None:
+        with self._lock:
+            if self._thread and self._thread.is_alive():
+                return
+            self._thread = Thread(
+                target=self._run_loop,
+                name="neuroweave-epoch-worker",
+                daemon=True,
+            )
+            self._thread.start()
+
+    def enqueue(self, run_id: str) -> None:
+        self.start()
+        with self._lock:
+            if run_id in self._queued_run_ids:
+                return
+            self._queued_run_ids.add(run_id)
+            self._queue.put(run_id)
+
+    def recover(self) -> None:
+        for run in run_repository.list_epoch_runs():
+            if run.status in {
+                EpochRunStatus.PENDING,
+                EpochRunStatus.RUNNING,
+            }:
+                self.enqueue(run.run_id)
+
+    def _run_loop(self) -> None:
+        while True:
+            run_id = self._queue.get()
+            try:
+                _execute_epoch_run(run_id)
+            finally:
+                with self._lock:
+                    self._queued_run_ids.discard(run_id)
+                self._queue.task_done()
+
+
+epoch_worker = LocalEpochWorker()
+
+
+class LocalErpWorker:
+    def __init__(self) -> None:
+        self._queue: Queue[str] = Queue()
+        self._queued_run_ids: set[str] = set()
+        self._lock = Lock()
+        self._thread: Thread | None = None
+
+    def start(self) -> None:
+        with self._lock:
+            if self._thread and self._thread.is_alive():
+                return
+            self._thread = Thread(
+                target=self._run_loop,
+                name="neuroweave-erp-worker",
+                daemon=True,
+            )
+            self._thread.start()
+
+    def enqueue(self, run_id: str) -> None:
+        self.start()
+        with self._lock:
+            if run_id in self._queued_run_ids:
+                return
+            self._queued_run_ids.add(run_id)
+            self._queue.put(run_id)
+
+    def recover(self) -> None:
+        for run in run_repository.list_erp_runs():
+            if run.status in {
+                ErpRunStatus.PENDING,
+                ErpRunStatus.RUNNING,
+            }:
+                self.enqueue(run.run_id)
+
+    def _run_loop(self) -> None:
+        while True:
+            run_id = self._queue.get()
+            try:
+                _execute_erp_run(run_id)
+            finally:
+                with self._lock:
+                    self._queued_run_ids.discard(run_id)
+                self._queue.task_done()
+
+
+erp_worker = LocalErpWorker()
 
 
 class HealthResponse(BaseModel):
@@ -278,6 +421,8 @@ class PreprocessingConfigPayload(BaseModel):
 class PreprocessingRunResponse(BaseModel):
     run_id: str
     dataset_id: str
+    run_kind: str
+    schema_version: int
     config: PreprocessingConfigPayload
     status: str
     started_at_utc: str | None
@@ -291,6 +436,80 @@ class PreprocessingRunResponse(BaseModel):
 
 class PreprocessingRunsResponse(BaseModel):
     runs: list[PreprocessingRunResponse]
+
+
+class EpochConfigPayload(BaseModel):
+    preprocessing_run_id: str
+    condition_field: str
+    tmin_seconds: float
+    tmax_seconds: float
+    baseline_start_seconds: float | None = None
+    baseline_end_seconds: float | None = None
+    reject_eeg_uv: float | None = None
+
+
+class EpochRunResponse(BaseModel):
+    run_id: str
+    dataset_id: str
+    run_kind: str
+    schema_version: int
+    config: EpochConfigPayload
+    status: str
+    started_at_utc: str | None
+    finished_at_utc: str | None
+    cancel_requested_at_utc: str | None
+    output_path: str | None
+    output_metadata: dict[str, str | int | float | bool | None]
+    warnings: list[str]
+    errors: list[str]
+
+
+class EpochRunsResponse(BaseModel):
+    runs: list[EpochRunResponse]
+
+
+class ErpConfigPayload(BaseModel):
+    epoch_run_id: str
+    conditions: list[str] | None = None
+    picks: list[str] | None = None
+    method: str = "mean"
+    plot_mode: str = "gfp"
+    plot_channel: str | None = None
+
+
+class ErpRunResponse(BaseModel):
+    run_id: str
+    dataset_id: str
+    run_kind: str
+    schema_version: int
+    config: ErpConfigPayload
+    status: str
+    started_at_utc: str | None
+    finished_at_utc: str | None
+    cancel_requested_at_utc: str | None
+    output_path: str | None
+    output_metadata: dict[str, str | int | float | bool | None]
+    warnings: list[str]
+    errors: list[str]
+
+
+class ErpRunsResponse(BaseModel):
+    runs: list[ErpRunResponse]
+
+
+class ComparisonConfigPayload(BaseModel):
+    condition_a: str
+    condition_b: str
+    channel: str | None = None
+    use_gfp: bool = True
+    window_start_seconds: float
+    window_end_seconds: float
+    metric: str = "mean_amplitude_uv"
+
+
+class ComparisonSummaryResponse(BaseModel):
+    summary: dict
+    erp_run: ErpRunResponse
 
 
 class CreateProjectRequest(BaseModel):
@@ -337,7 +556,11 @@ class ExperimentsResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     preprocessing_worker.start()
+    epoch_worker.start()
+    erp_worker.start()
     preprocessing_worker.recover()
+    epoch_worker.recover()
+    erp_worker.recover()
     yield
 
 
@@ -720,7 +943,7 @@ def create_preprocessing_run(
         raise HTTPException(status_code=422, detail=config_errors)
 
     run_id = _new_id("preprocess")
-    output_path = PROCESSED_DIR / dataset_id / run_id / "raw_preprocessed.fif"
+    output_path = _preprocessing_output_path(dataset_id, run_id)
 
     run = PreprocessingRun(
         run_id=run_id,
@@ -801,6 +1024,235 @@ def list_dataset_preprocessing_runs(dataset_id: str) -> PreprocessingRunsRespons
             for run in run_repository.list_preprocessing_runs(dataset_id=dataset_id)
         ]
     )
+
+
+@app.post(
+    "/datasets/{dataset_id}/epoch-runs",
+    response_model=EpochRunResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_epoch_run(
+    dataset_id: str,
+    config_payload: EpochConfigPayload,
+) -> EpochRunResponse:
+    dataset = registry_repository.get_dataset(dataset_id)
+    if dataset is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    preprocessing_run = run_repository.get_preprocessing_run(
+        config_payload.preprocessing_run_id
+    )
+    if preprocessing_run is None:
+        raise HTTPException(status_code=404, detail="Preprocessing run not found")
+
+    event_log = registry_repository.get_event_log(dataset_id)
+    recording = registry_repository.get_recording(dataset_id)
+    config = EpochConfig(**config_payload.model_dump())
+    config_errors, config_warnings = _validate_epoch_config(
+        config=config,
+        dataset=dataset,
+        preprocessing_run=preprocessing_run,
+        event_log=event_log,
+        recording=recording,
+    )
+    if config_errors:
+        raise HTTPException(status_code=422, detail=config_errors)
+
+    run_id = _new_id("epoch")
+    output_path = _epoch_output_path(dataset_id, run_id)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    run = EpochRun(
+        run_id=run_id,
+        dataset_id=dataset_id,
+        config=config,
+        status=EpochRunStatus.PENDING,
+        output_path=str(output_path),
+        output_metadata=_epoch_input_provenance(
+            preprocessing_run=preprocessing_run,
+            event_log=event_log,
+            recording=recording,
+        ),
+        warnings=config_warnings,
+    )
+    run_repository.save_epoch_run(run)
+    epoch_worker.enqueue(run_id)
+    return _epoch_run_response(run)
+
+
+@app.get(
+    "/epoch-runs/{run_id}",
+    response_model=EpochRunResponse,
+)
+def get_epoch_run(run_id: str) -> EpochRunResponse:
+    run = run_repository.get_epoch_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Epoch run not found")
+
+    return _epoch_run_response(run)
+
+
+@app.get(
+    "/datasets/{dataset_id}/epoch-runs",
+    response_model=EpochRunsResponse,
+)
+def list_dataset_epoch_runs(dataset_id: str) -> EpochRunsResponse:
+    if registry_repository.get_dataset(dataset_id) is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    return EpochRunsResponse(
+        runs=[
+            _epoch_run_response(run)
+            for run in run_repository.list_epoch_runs(dataset_id=dataset_id)
+        ]
+    )
+
+
+@app.post(
+    "/datasets/{dataset_id}/erp-runs",
+    response_model=ErpRunResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_erp_run(
+    dataset_id: str,
+    config_payload: ErpConfigPayload,
+) -> ErpRunResponse:
+    if registry_repository.get_dataset(dataset_id) is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    epoch_run = run_repository.get_epoch_run(config_payload.epoch_run_id)
+    if epoch_run is None:
+        raise HTTPException(status_code=404, detail="Epoch run not found")
+
+    config = ErpConfig(**config_payload.model_dump())
+    config_errors, config_warnings = _validate_erp_config(
+        config=config,
+        dataset_id=dataset_id,
+        epoch_run=epoch_run,
+    )
+    if config_errors:
+        raise HTTPException(status_code=422, detail=config_errors)
+
+    run_id = _new_id("erp")
+    output_path = _erp_metadata_path(dataset_id, run_id)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    run = ErpRun(
+        run_id=run_id,
+        dataset_id=dataset_id,
+        config=config,
+        status=ErpRunStatus.PENDING,
+        output_path=str(output_path),
+        output_metadata=_erp_input_provenance(epoch_run),
+        warnings=config_warnings,
+    )
+    run_repository.save_erp_run(run)
+    erp_worker.enqueue(run_id)
+    return _erp_run_response(run)
+
+
+@app.get(
+    "/erp-runs/{run_id}",
+    response_model=ErpRunResponse,
+)
+def get_erp_run(run_id: str) -> ErpRunResponse:
+    run = run_repository.get_erp_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="ERP run not found")
+
+    return _erp_run_response(run)
+
+
+@app.get(
+    "/datasets/{dataset_id}/erp-runs",
+    response_model=ErpRunsResponse,
+)
+def list_dataset_erp_runs(dataset_id: str) -> ErpRunsResponse:
+    if registry_repository.get_dataset(dataset_id) is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    return ErpRunsResponse(
+        runs=[
+            _erp_run_response(run)
+            for run in run_repository.list_erp_runs(dataset_id=dataset_id)
+        ]
+    )
+
+
+@app.post(
+    "/erp-runs/{run_id}/comparison-summary",
+    response_model=ComparisonSummaryResponse,
+)
+def create_comparison_summary(
+    run_id: str,
+    config_payload: ComparisonConfigPayload,
+) -> ComparisonSummaryResponse:
+    run = run_repository.get_erp_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="ERP run not found")
+    errors = _validate_comparison_config(config_payload=config_payload, run=run)
+    if errors:
+        raise HTTPException(status_code=422, detail=errors)
+
+    assert run.output_path is not None
+    output_path = Path(run.output_path).parent / "comparison_summary.json"
+    config = ComparisonConfig(
+        erp_run_id=run.run_id,
+        condition_a=config_payload.condition_a,
+        condition_b=config_payload.condition_b,
+        channel=config_payload.channel,
+        use_gfp=config_payload.use_gfp,
+        window_start_seconds=config_payload.window_start_seconds,
+        window_end_seconds=config_payload.window_end_seconds,
+        metric=config_payload.metric,
+    )
+
+    try:
+        summary = generate_comparison_summary(
+            erp_metadata_path=Path(run.output_path),
+            output_path=output_path,
+            config=config,
+        )
+    except ComparisonError as exc:
+        raise HTTPException(status_code=422, detail=[str(exc)]) from exc
+
+    completed_run = replace(
+        run,
+        output_metadata=_comparison_completed_metadata(
+            run=run,
+            summary_path=output_path,
+            summary=summary,
+        ),
+    )
+    run_repository.save_erp_run(completed_run)
+    return ComparisonSummaryResponse(
+        summary=summary,
+        erp_run=_erp_run_response(completed_run),
+    )
+
+
+@app.get("/artifacts/{run_id}/{filename}")
+def get_run_artifact(run_id: str, filename: str) -> FileResponse:
+    artifact_root = _artifact_root_for_run(run_id)
+    if artifact_root is None:
+        raise HTTPException(status_code=404, detail="Run artifact root not found")
+    if "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid artifact filename")
+
+    artifact_path = artifact_root / filename
+    try:
+        resolved_artifact_path = artifact_path.resolve()
+        resolved_artifact_root = artifact_root.resolve()
+    except OSError as exc:
+        raise HTTPException(status_code=404, detail="Artifact not found") from exc
+
+    if (
+        not resolved_artifact_path.is_relative_to(resolved_artifact_root)
+        or not resolved_artifact_path.is_file()
+    ):
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
+    return FileResponse(resolved_artifact_path)
 
 
 @app.get("/datasets/{dataset_id}", response_model=DatasetResponse)
@@ -924,6 +1376,8 @@ def _preprocessing_run_response(run: PreprocessingRun) -> PreprocessingRunRespon
     return PreprocessingRunResponse(
         run_id=run.run_id,
         dataset_id=run.dataset_id,
+        run_kind=run.run_kind.value,
+        schema_version=run.schema_version,
         config=PreprocessingConfigPayload(**run.config.__dict__),
         status=run.status.value,
         started_at_utc=run.started_at_utc,
@@ -934,6 +1388,391 @@ def _preprocessing_run_response(run: PreprocessingRun) -> PreprocessingRunRespon
         warnings=run.warnings,
         errors=run.errors,
     )
+
+
+def _epoch_run_response(run: EpochRun) -> EpochRunResponse:
+    return EpochRunResponse(
+        run_id=run.run_id,
+        dataset_id=run.dataset_id,
+        run_kind=run.run_kind.value,
+        schema_version=run.schema_version,
+        config=EpochConfigPayload(**run.config.__dict__),
+        status=run.status.value,
+        started_at_utc=run.started_at_utc,
+        finished_at_utc=run.finished_at_utc,
+        cancel_requested_at_utc=run.cancel_requested_at_utc,
+        output_path=run.output_path,
+        output_metadata=run.output_metadata,
+        warnings=run.warnings,
+        errors=run.errors,
+    )
+
+
+def _erp_run_response(run: ErpRun) -> ErpRunResponse:
+    return ErpRunResponse(
+        run_id=run.run_id,
+        dataset_id=run.dataset_id,
+        run_kind=run.run_kind.value,
+        schema_version=run.schema_version,
+        config=ErpConfigPayload(**run.config.__dict__),
+        status=run.status.value,
+        started_at_utc=run.started_at_utc,
+        finished_at_utc=run.finished_at_utc,
+        cancel_requested_at_utc=run.cancel_requested_at_utc,
+        output_path=run.output_path,
+        output_metadata=run.output_metadata,
+        warnings=run.warnings,
+        errors=run.errors,
+    )
+
+
+def _epoch_input_provenance(
+    preprocessing_run: PreprocessingRun,
+    event_log: EventLog | None,
+    recording: Recording | None,
+) -> dict[str, str | int | float | bool | None]:
+    input_path = _resolve_preprocessing_output_path(preprocessing_run)
+    return {
+        "input_preprocessing_run_id": preprocessing_run.run_id,
+        "input_preprocessed_path": str(input_path)
+        if input_path is not None
+        else preprocessing_run.output_path,
+        "input_sampling_rate_hz": _epoch_output_sampling_rate_hz(
+            preprocessing_run=preprocessing_run,
+            recording=recording,
+        ),
+        "input_duration_seconds": _epoch_output_duration_seconds(
+            preprocessing_run=preprocessing_run,
+            recording=recording,
+        ),
+        "event_log_id": event_log.event_log_id if event_log is not None else None,
+        "event_count": len(event_log.events) if event_log is not None else 0,
+        "recording_id": recording.recording_id if recording is not None else None,
+        "input_channel_count": recording.metadata.channel_count
+        if recording is not None
+        else None,
+    }
+
+
+def _erp_input_provenance(
+    epoch_run: EpochRun,
+) -> dict[str, str | int | float | bool | None]:
+    input_path = _resolve_epoch_output_path(epoch_run)
+    return {
+        "input_epoch_run_id": epoch_run.run_id,
+        "input_epochs_path": str(input_path)
+        if input_path is not None
+        else epoch_run.output_path,
+        "input_preprocessing_run_id": epoch_run.output_metadata.get(
+            "input_preprocessing_run_id"
+        ),
+        "input_condition_count": epoch_run.output_metadata.get("condition_count"),
+        "input_epoch_count": epoch_run.output_metadata.get("epoch_count"),
+        "input_sampling_rate_hz": epoch_run.output_metadata.get(
+            "output_sampling_rate_hz"
+        ),
+        "input_channel_count": epoch_run.output_metadata.get("output_channel_count"),
+    }
+
+
+def _epoch_completed_provenance(
+    run: EpochRun,
+    output_path: Path,
+    processing_metadata: dict,
+) -> dict[str, str | int | float | bool | None]:
+    diagnostics_metadata = _write_epoch_diagnostics(
+        output_directory=output_path.parent,
+        processing_metadata=processing_metadata,
+        run=run,
+    )
+    manifest_metadata = _write_artifact_manifest(
+        output_directory=output_path.parent,
+        artifacts=[
+            _artifact_manifest_entry(
+                logical_name="epochs",
+                path=output_path,
+                artifact_type="primary_fif",
+                output_directory=output_path.parent,
+            ),
+            *[
+                _artifact_manifest_entry(
+                    logical_name=logical_name,
+                    path=Path(str(path_value)),
+                    artifact_type="diagnostic_json",
+                    output_directory=output_path.parent,
+                )
+                for logical_name, path_value in (
+                    ("epoch_summary", diagnostics_metadata.get("epoch_summary_path")),
+                    (
+                        "condition_counts",
+                        diagnostics_metadata.get("condition_counts_path"),
+                    ),
+                    ("drop_log", diagnostics_metadata.get("drop_log_path")),
+                )
+                if isinstance(path_value, str) and Path(path_value).is_file()
+            ],
+        ],
+    )
+    output_size_bytes = output_path.stat().st_size
+    output_checksum_sha256 = _sha256_file(output_path)
+    return {
+        **run.output_metadata,
+        "artifact_root": str(output_path.parent),
+        "primary_artifact_path": str(output_path),
+        "primary_artifact_size_bytes": output_size_bytes,
+        "primary_artifact_checksum_sha256": output_checksum_sha256,
+        "artifact_count": manifest_metadata["artifact_count"],
+        "artifact_manifest_path": manifest_metadata["artifact_manifest_path"],
+        "output_path": str(output_path),
+        "output_size_bytes": output_size_bytes,
+        "output_checksum_sha256": output_checksum_sha256,
+        "output_file_format": processing_metadata["file_format"],
+        "output_channel_count": processing_metadata["channel_count"],
+        "output_sampling_rate_hz": processing_metadata["sampling_rate_hz"],
+        "output_duration_seconds": processing_metadata["duration_seconds"],
+        "mne_version": processing_metadata["mne_version"],
+        "input_preprocessing_run_id": processing_metadata[
+            "input_preprocessing_run_id"
+        ],
+        "condition_count": processing_metadata["condition_count"],
+        "event_count_total": processing_metadata["event_count_total"],
+        "event_count_used": processing_metadata["event_count_used"],
+        "event_count_skipped": processing_metadata["event_count_skipped"],
+        "epoch_count": processing_metadata["epoch_count"],
+        "dropped_epoch_count": processing_metadata["dropped_epoch_count"],
+        **diagnostics_metadata,
+    }
+
+
+def _erp_completed_provenance(
+    run: ErpRun,
+    output_path: Path,
+    processing_metadata: dict,
+) -> dict[str, str | int | float | bool | None]:
+    metadata_path = _write_erp_metadata(
+        output_path=output_path,
+        processing_metadata=processing_metadata,
+        run=run,
+    )
+    condition_artifacts = [
+        _artifact_manifest_entry(
+            logical_name=f"evoked_{item['safe_condition']}",
+            path=Path(str(item["evoked_path"])),
+            artifact_type="evoked_fif",
+            output_directory=output_path.parent,
+        )
+        for item in processing_metadata.get("conditions", [])
+        if isinstance(item, dict)
+        and isinstance(item.get("safe_condition"), str)
+        and isinstance(item.get("evoked_path"), str)
+    ]
+    plot_artifacts = [
+        _artifact_manifest_entry(
+            logical_name=f"{plot_kind}_{item['safe_condition']}",
+            path=Path(str(path_value)),
+            artifact_type=f"{plot_kind}_plot",
+            output_directory=output_path.parent,
+        )
+        for item in processing_metadata.get("conditions", [])
+        if isinstance(item, dict) and isinstance(item.get("safe_condition"), str)
+        for plot_kind, path_value in (
+            ("png", item.get("plot_png_path")),
+            ("svg", item.get("plot_svg_path")),
+        )
+        if isinstance(path_value, str) and Path(path_value).is_file()
+    ]
+    manifest_metadata = _write_artifact_manifest(
+        output_directory=output_path.parent,
+        artifacts=[
+            *condition_artifacts,
+            *plot_artifacts,
+            _artifact_manifest_entry(
+                logical_name="erp_metadata",
+                path=metadata_path,
+                artifact_type="metadata_json",
+                output_directory=output_path.parent,
+            ),
+        ],
+    )
+    return {
+        **run.output_metadata,
+        "artifact_root": str(output_path.parent),
+        "primary_artifact_path": str(output_path),
+        "artifact_count": manifest_metadata["artifact_count"],
+        "artifact_manifest_path": manifest_metadata["artifact_manifest_path"],
+        "output_path": str(output_path),
+        "output_file_format": processing_metadata["file_format"],
+        "mne_version": processing_metadata["mne_version"],
+        "input_epoch_run_id": processing_metadata["input_epoch_run_id"],
+        "input_epochs_path": processing_metadata["input_epochs_path"],
+        "condition_count": processing_metadata["condition_count"],
+        "evoked_count": processing_metadata["evoked_count"],
+        "plot_count": processing_metadata.get("plot_count", 0),
+        "plot_status": processing_metadata.get("plot_status", "unknown"),
+        **_erp_preview_plot_metadata(run.run_id, processing_metadata),
+        "erp_metadata_path": str(metadata_path),
+        "erp_metadata_available": True,
+    }
+
+
+def _write_erp_metadata(
+    output_path: Path,
+    processing_metadata: dict,
+    run: ErpRun,
+) -> Path:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path = output_path
+    payload = processing_metadata.get("metadata")
+    if not isinstance(payload, dict):
+        payload = {
+            "schema_version": 1,
+            "conditions": processing_metadata.get("conditions", []),
+            "warnings": processing_metadata.get("warnings", []),
+        }
+    payload = {
+        "run_id": run.run_id,
+        "dataset_id": run.dataset_id,
+        **payload,
+    }
+    _write_json_file(metadata_path, payload)
+    return metadata_path
+
+
+def _erp_preview_plot_metadata(
+    run_id: str,
+    processing_metadata: dict,
+) -> dict[str, str | int | float | bool | None]:
+    conditions = processing_metadata.get("conditions")
+    if not isinstance(conditions, list):
+        return {
+            "preview_plot_path": None,
+            "preview_plot_filename": None,
+            "preview_plot_url": None,
+            "preview_plot_condition": None,
+            "preview_plot_mode": None,
+            "preview_plot_channel": None,
+        }
+
+    labels: list[str] = []
+    for item in conditions:
+        if isinstance(item, dict) and isinstance(item.get("condition"), str):
+            labels.append(str(item["condition"]))
+    for item in conditions:
+        if not isinstance(item, dict):
+            continue
+        plot_path = item.get("plot_png_path")
+        if not isinstance(plot_path, str) or not Path(plot_path).is_file():
+            continue
+        filename = Path(plot_path).name
+        return {
+            "condition_labels": ",".join(labels),
+            "preview_plot_path": plot_path,
+            "preview_plot_filename": filename,
+            "preview_plot_url": f"/artifacts/{run_id}/{filename}",
+            "preview_plot_condition": item.get("condition"),
+            "preview_plot_mode": item.get("plot_mode"),
+            "preview_plot_channel": item.get("plot_channel"),
+        }
+
+    return {
+        "condition_labels": ",".join(labels),
+        "preview_plot_path": None,
+        "preview_plot_filename": None,
+        "preview_plot_url": None,
+        "preview_plot_condition": None,
+        "preview_plot_mode": None,
+        "preview_plot_channel": None,
+    }
+
+
+def _comparison_completed_metadata(
+    run: ErpRun,
+    summary_path: Path,
+    summary: dict,
+) -> dict[str, str | int | float | bool | None]:
+    manifest_metadata = _append_artifact_manifest_entry(
+        output_directory=summary_path.parent,
+        entry=_artifact_manifest_entry(
+            logical_name="comparison_summary",
+            path=summary_path,
+            artifact_type="comparison_json",
+            output_directory=summary_path.parent,
+        ),
+    )
+    condition_a = summary.get("conditions", {}).get("a", {})
+    condition_b = summary.get("conditions", {}).get("b", {})
+    difference = summary.get("difference", {})
+    target = summary.get("target", {})
+    window = summary.get("window", {})
+    return {
+        **run.output_metadata,
+        "artifact_count": manifest_metadata["artifact_count"],
+        "artifact_manifest_path": manifest_metadata["artifact_manifest_path"],
+        "comparison_available": True,
+        "comparison_summary_path": str(summary_path),
+        "comparison_summary_url": f"/artifacts/{run.run_id}/{summary_path.name}",
+        "comparison_metric": summary.get("metric"),
+        "comparison_condition_a": condition_a.get("label"),
+        "comparison_condition_b": condition_b.get("label"),
+        "comparison_target_type": target.get("type"),
+        "comparison_target_channel": target.get("channel"),
+        "comparison_window_start_seconds": window.get("start_seconds"),
+        "comparison_window_end_seconds": window.get("end_seconds"),
+        "comparison_mean_a_uv": condition_a.get("mean_amplitude_uv"),
+        "comparison_mean_b_uv": condition_b.get("mean_amplitude_uv"),
+        "comparison_difference_uv": difference.get("mean_amplitude_uv"),
+        "comparison_statistics_implemented": False,
+    }
+
+
+def _write_epoch_diagnostics(
+    output_directory: Path,
+    processing_metadata: dict,
+    run: EpochRun,
+) -> dict[str, str | int | float | bool | None]:
+    diagnostics = processing_metadata.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return {
+            "diagnostics_available": False,
+            "diagnostics_file_count": 0,
+        }
+
+    output_directory.mkdir(parents=True, exist_ok=True)
+    files = {
+        "epoch_summary": output_directory / "epoch_summary.json",
+        "condition_counts": output_directory / "condition_counts.json",
+        "drop_log": output_directory / "drop_log.json",
+    }
+    written_paths: dict[str, Path] = {}
+    for key, path in files.items():
+        payload = diagnostics.get(key)
+        if isinstance(payload, (dict, list)):
+            if key == "epoch_summary" and isinstance(payload, dict):
+                payload = {
+                    "run_id": run.run_id,
+                    "dataset_id": run.dataset_id,
+                    **payload,
+                }
+            serializable_payload = (
+                {"entries": payload} if isinstance(payload, list) else payload
+            )
+            _write_json_file(path, serializable_payload)
+            written_paths[key] = path
+
+    return {
+        "diagnostics_available": bool(written_paths),
+        "diagnostics_file_count": len(written_paths),
+        "diagnostics_directory": str(output_directory),
+        "epoch_summary_path": str(written_paths.get("epoch_summary"))
+        if "epoch_summary" in written_paths
+        else None,
+        "condition_counts_path": str(written_paths.get("condition_counts"))
+        if "condition_counts" in written_paths
+        else None,
+        "drop_log_path": str(written_paths.get("drop_log"))
+        if "drop_log" in written_paths
+        else None,
+    }
 
 
 def _preprocessing_input_provenance(
@@ -963,11 +1802,50 @@ def _preprocessing_completed_provenance(
         output_directory=output_path.parent,
         processing_metadata=processing_metadata,
     )
+    manifest_metadata = _write_artifact_manifest(
+        output_directory=output_path.parent,
+        artifacts=[
+            _artifact_manifest_entry(
+                logical_name="raw_preprocessed",
+                path=output_path,
+                artifact_type="primary_fif",
+                output_directory=output_path.parent,
+            ),
+            *[
+                _artifact_manifest_entry(
+                    logical_name=logical_name,
+                    path=Path(str(path_value)),
+                    artifact_type="diagnostic_json",
+                    output_directory=output_path.parent,
+                )
+                for logical_name, path_value in (
+                    (
+                        "preprocessing_summary",
+                        diagnostics_metadata.get("preprocessing_summary_path"),
+                    ),
+                    ("filter_report", diagnostics_metadata.get("filter_report_path")),
+                    (
+                        "artifact_summary",
+                        diagnostics_metadata.get("artifact_summary_path"),
+                    ),
+                )
+                if isinstance(path_value, str) and Path(path_value).is_file()
+            ],
+        ],
+    )
+    output_size_bytes = output_path.stat().st_size
+    output_checksum_sha256 = _sha256_file(output_path)
     return {
         **run.output_metadata,
+        "artifact_root": str(output_path.parent),
+        "primary_artifact_path": str(output_path),
+        "primary_artifact_size_bytes": output_size_bytes,
+        "primary_artifact_checksum_sha256": output_checksum_sha256,
+        "artifact_count": manifest_metadata["artifact_count"],
+        "artifact_manifest_path": manifest_metadata["artifact_manifest_path"],
         "output_path": str(output_path),
-        "output_size_bytes": output_path.stat().st_size,
-        "output_checksum_sha256": _sha256_file(output_path),
+        "output_size_bytes": output_size_bytes,
+        "output_checksum_sha256": output_checksum_sha256,
         "output_file_format": processing_metadata["file_format"],
         "output_channel_count": processing_metadata["channel_count"],
         "output_sampling_rate_hz": processing_metadata["sampling_rate_hz"],
@@ -1026,6 +1904,137 @@ def _write_preprocessing_diagnostics(
         "artifact_annotation_count": output_artifacts.get("annotation_count")
         if isinstance(output_artifacts, dict)
         else None,
+    }
+
+
+def _write_artifact_manifest(
+    output_directory: Path,
+    artifacts: list[dict[str, str | int]],
+) -> dict[str, str | int]:
+    output_directory.mkdir(parents=True, exist_ok=True)
+    manifest_path = output_directory / "artifact_manifest.json"
+    manifest = {
+        "schema_version": 1,
+        "artifact_root": str(output_directory),
+        "artifact_count": len(artifacts),
+        "artifacts": artifacts,
+    }
+    _write_json_file(manifest_path, manifest)
+    return {
+        "artifact_count": len(artifacts),
+        "artifact_manifest_path": str(manifest_path),
+    }
+
+
+def _append_artifact_manifest_entry(
+    output_directory: Path,
+    entry: dict[str, str | int],
+) -> dict[str, str | int]:
+    output_directory.mkdir(parents=True, exist_ok=True)
+    manifest_path = output_directory / "artifact_manifest.json"
+    if manifest_path.is_file():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        artifacts = [
+            artifact
+            for artifact in manifest.get("artifacts", [])
+            if artifact.get("logical_name") != entry["logical_name"]
+        ]
+    else:
+        manifest = {
+            "schema_version": 1,
+            "artifact_root": str(output_directory),
+        }
+        artifacts = []
+
+    artifacts.append(entry)
+    manifest = {
+        **manifest,
+        "schema_version": 1,
+        "artifact_root": str(output_directory),
+        "artifact_count": len(artifacts),
+        "artifacts": artifacts,
+    }
+    _write_json_file(manifest_path, manifest)
+    return {
+        "artifact_count": len(artifacts),
+        "artifact_manifest_path": str(manifest_path),
+    }
+
+
+def _artifact_root_for_run(run_id: str) -> Path | None:
+    for run in (
+        run_repository.get_preprocessing_run(run_id),
+        run_repository.get_epoch_run(run_id),
+        run_repository.get_erp_run(run_id),
+    ):
+        if run is None:
+            continue
+        artifact_root = run.output_metadata.get("artifact_root")
+        if isinstance(artifact_root, str):
+            return Path(artifact_root)
+        if run.output_path:
+            return Path(run.output_path).parent
+    return None
+
+
+def _resolve_preprocessing_output_path(run: PreprocessingRun) -> Path | None:
+    if not run.output_path:
+        return None
+    path = Path(run.output_path)
+    return _first_existing_path(
+        [
+            path,
+            path.with_name(RAW_PREPROCESSED_FILENAME),
+            path.with_name(LEGACY_RAW_PREPROCESSED_FILENAME),
+        ]
+    )
+
+
+def _resolve_epoch_output_path(run: EpochRun) -> Path | None:
+    if not run.output_path:
+        return None
+    path = Path(run.output_path)
+    return _first_existing_path(
+        [
+            path,
+            path.with_name(EPOCHS_FILENAME),
+            path.with_name(LEGACY_EPOCHS_FILENAME),
+        ]
+    )
+
+
+def _first_existing_path(paths: list[Path]) -> Path | None:
+    seen: set[Path] = set()
+    for path in paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        if path.is_file():
+            return path
+    return None
+
+
+def _artifact_manifest_entry(
+    logical_name: str,
+    path: Path,
+    artifact_type: str,
+    output_directory: Path,
+) -> dict[str, str | int]:
+    if not path.is_file():
+        raise ValueError(f"Artifact does not exist: {path}")
+
+    resolved_path = path.resolve()
+    output_root = output_directory.resolve()
+    if not resolved_path.is_relative_to(output_root):
+        raise ValueError(f"Artifact path escapes its output directory: {path}")
+
+    return {
+        "logical_name": logical_name,
+        "artifact_type": artifact_type,
+        "path": str(path),
+        "size_bytes": path.stat().st_size,
+        "checksum_sha256": _sha256_file(path),
+        "created_at_utc": _utc_now_iso(),
     }
 
 
@@ -1207,11 +2216,354 @@ def _run_preprocessing_subprocess(
     )
 
 
+def _execute_epoch_run(run_id: str) -> None:
+    run = run_repository.get_epoch_run(run_id)
+    if run is None:
+        return
+    if run.status == EpochRunStatus.CANCELLED:
+        return
+    if run.status in {
+        EpochRunStatus.COMPLETED,
+        EpochRunStatus.FAILED,
+    }:
+        return
+    if run.status == EpochRunStatus.CANCELLING:
+        cancelled_run = replace(
+            run,
+            status=EpochRunStatus.CANCELLED,
+            finished_at_utc=_utc_now_iso(),
+            cancel_requested_at_utc=run.cancel_requested_at_utc,
+        )
+        run_repository.save_epoch_run(cancelled_run)
+        return
+
+    preprocessing_run = run_repository.get_preprocessing_run(
+        run.config.preprocessing_run_id
+    )
+    event_log = registry_repository.get_event_log(run.dataset_id)
+    if (
+        preprocessing_run is None
+        or event_log is None
+        or not preprocessing_run.output_path
+        or not run.output_path
+    ):
+        failed_run = replace(
+            run,
+            status=EpochRunStatus.FAILED,
+            finished_at_utc=_utc_now_iso(),
+            errors=["Epoch run is missing preprocessing output or event data."],
+        )
+        run_repository.save_epoch_run(failed_run)
+        return
+
+    running_run = replace(
+        run,
+        status=EpochRunStatus.RUNNING,
+        started_at_utc=_utc_now_iso(),
+    )
+    run_repository.save_epoch_run(running_run)
+
+    try:
+        input_path = _resolve_preprocessing_output_path(preprocessing_run)
+        if input_path is None:
+            raise EpochingError("Preprocessing output file was not found.")
+        metadata = _run_epoching_subprocess(
+            run_id=run_id,
+            input_path=str(input_path),
+            output_path=run.output_path,
+            event_log=event_log,
+            config=run.config,
+            preprocessing_run_id=preprocessing_run.run_id,
+        )
+        output_file_path = Path(run.output_path)
+        completed_run = replace(
+            running_run,
+            status=EpochRunStatus.COMPLETED,
+            finished_at_utc=_utc_now_iso(),
+            output_metadata=_epoch_completed_provenance(
+                run=running_run,
+                output_path=output_file_path,
+                processing_metadata=metadata,
+            ),
+            warnings=_dedupe_strings(
+                [
+                    *running_run.warnings,
+                    *[str(warning) for warning in metadata.get("warnings", [])],
+                ]
+            ),
+        )
+        current_run = run_repository.get_epoch_run(run_id)
+        if current_run and current_run.status == EpochRunStatus.CANCELLING:
+            cancelled_run = replace(
+                completed_run,
+                status=EpochRunStatus.CANCELLED,
+                finished_at_utc=_utc_now_iso(),
+                cancel_requested_at_utc=current_run.cancel_requested_at_utc,
+                warnings=_dedupe_strings(
+                    [
+                        *current_run.warnings,
+                        *completed_run.warnings,
+                        "Run cancelled after epoching completed; output was retained.",
+                    ]
+                ),
+            )
+            run_repository.save_epoch_run(cancelled_run)
+        else:
+            run_repository.save_epoch_run(completed_run)
+    except EpochingError as exc:
+        current_run = run_repository.get_epoch_run(run_id)
+        current_warnings = current_run.warnings if current_run else []
+        next_status = (
+            EpochRunStatus.CANCELLED
+            if current_run and current_run.status == EpochRunStatus.CANCELLING
+            else EpochRunStatus.FAILED
+        )
+        failed_run = replace(
+            running_run,
+            status=next_status,
+            finished_at_utc=_utc_now_iso(),
+            cancel_requested_at_utc=(
+                current_run.cancel_requested_at_utc if current_run else None
+            ),
+            warnings=_dedupe_strings([*current_warnings, *exc.processing_warnings]),
+            errors=[str(exc)],
+        )
+        run_repository.save_epoch_run(failed_run)
+
+
+def _run_epoching_subprocess(
+    run_id: str,
+    input_path: str,
+    output_path: str,
+    event_log: EventLog,
+    config: EpochConfig,
+    preprocessing_run_id: str,
+) -> dict:
+    context = get_context("spawn")
+    result_queue = context.Queue()
+    process = context.Process(
+        target=run_epoching_job,
+        args=(
+            input_path,
+            output_path,
+            event_log,
+            config,
+            preprocessing_run_id,
+            result_queue,
+        ),
+    )
+    process.start()
+
+    while process.is_alive():
+        process.join(timeout=0.1)
+        if _is_epoch_cancellation_requested(run_id):
+            process.terminate()
+            process.join(timeout=5)
+            if process.is_alive():
+                process.kill()
+                process.join()
+            raise EpochingError(
+                "Epoching cancelled.",
+                processing_warnings=["Cancellation terminated epoching subprocess."],
+            )
+
+    try:
+        result = result_queue.get_nowait()
+    except Empty as exc:
+        if process.exitcode == 0:
+            raise EpochingError("Epoching subprocess exited without a result.") from exc
+        raise EpochingError(
+            f"Epoching subprocess exited with code {process.exitcode}."
+        ) from exc
+
+    if result.get("status") == "completed":
+        metadata = result.get("metadata")
+        if isinstance(metadata, dict):
+            return metadata
+        raise EpochingError("Epoching subprocess returned invalid metadata.")
+
+    raise EpochingError(
+        str(result.get("error") or "Epoching subprocess failed."),
+        processing_warnings=[str(warning) for warning in result.get("warnings", [])],
+    )
+
+
+def _execute_erp_run(run_id: str) -> None:
+    run = run_repository.get_erp_run(run_id)
+    if run is None:
+        return
+    if run.status == ErpRunStatus.CANCELLED:
+        return
+    if run.status in {
+        ErpRunStatus.COMPLETED,
+        ErpRunStatus.FAILED,
+    }:
+        return
+    if run.status == ErpRunStatus.CANCELLING:
+        cancelled_run = replace(
+            run,
+            status=ErpRunStatus.CANCELLED,
+            finished_at_utc=_utc_now_iso(),
+            cancel_requested_at_utc=run.cancel_requested_at_utc,
+        )
+        run_repository.save_erp_run(cancelled_run)
+        return
+
+    epoch_run = run_repository.get_epoch_run(run.config.epoch_run_id)
+    if epoch_run is None or not epoch_run.output_path or not run.output_path:
+        failed_run = replace(
+            run,
+            status=ErpRunStatus.FAILED,
+            finished_at_utc=_utc_now_iso(),
+            errors=["ERP run is missing epoch output data."],
+        )
+        run_repository.save_erp_run(failed_run)
+        return
+
+    running_run = replace(
+        run,
+        status=ErpRunStatus.RUNNING,
+        started_at_utc=_utc_now_iso(),
+    )
+    run_repository.save_erp_run(running_run)
+
+    try:
+        output_path = Path(run.output_path)
+        epochs_path = _resolve_epoch_output_path(epoch_run)
+        if epochs_path is None:
+            raise ErpError("Epoch output file was not found.")
+        metadata = _run_erp_subprocess(
+            run_id=run_id,
+            epochs_path=str(epochs_path),
+            output_directory=str(output_path.parent),
+            config=run.config,
+        )
+        completed_run = replace(
+            running_run,
+            status=ErpRunStatus.COMPLETED,
+            finished_at_utc=_utc_now_iso(),
+            output_metadata=_erp_completed_provenance(
+                run=running_run,
+                output_path=output_path,
+                processing_metadata=metadata,
+            ),
+            warnings=_dedupe_strings(
+                [
+                    *running_run.warnings,
+                    *[str(warning) for warning in metadata.get("warnings", [])],
+                ]
+            ),
+        )
+        current_run = run_repository.get_erp_run(run_id)
+        if current_run and current_run.status == ErpRunStatus.CANCELLING:
+            cancelled_run = replace(
+                completed_run,
+                status=ErpRunStatus.CANCELLED,
+                finished_at_utc=_utc_now_iso(),
+                cancel_requested_at_utc=current_run.cancel_requested_at_utc,
+                warnings=_dedupe_strings(
+                    [
+                        *current_run.warnings,
+                        *completed_run.warnings,
+                        "Run cancelled after ERP generation completed; output was retained.",
+                    ]
+                ),
+            )
+            run_repository.save_erp_run(cancelled_run)
+        else:
+            run_repository.save_erp_run(completed_run)
+    except ErpError as exc:
+        current_run = run_repository.get_erp_run(run_id)
+        current_warnings = current_run.warnings if current_run else []
+        next_status = (
+            ErpRunStatus.CANCELLED
+            if current_run and current_run.status == ErpRunStatus.CANCELLING
+            else ErpRunStatus.FAILED
+        )
+        failed_run = replace(
+            running_run,
+            status=next_status,
+            finished_at_utc=_utc_now_iso(),
+            cancel_requested_at_utc=(
+                current_run.cancel_requested_at_utc if current_run else None
+            ),
+            warnings=_dedupe_strings([*current_warnings, *exc.processing_warnings]),
+            errors=[str(exc)],
+        )
+        run_repository.save_erp_run(failed_run)
+
+
+def _run_erp_subprocess(
+    run_id: str,
+    epochs_path: str,
+    output_directory: str,
+    config: ErpConfig,
+) -> dict:
+    context = get_context("spawn")
+    result_queue = context.Queue()
+    process = context.Process(
+        target=run_erp_job,
+        args=(epochs_path, output_directory, config, result_queue),
+    )
+    process.start()
+
+    while process.is_alive():
+        process.join(timeout=0.1)
+        if _is_erp_cancellation_requested(run_id):
+            process.terminate()
+            process.join(timeout=5)
+            if process.is_alive():
+                process.kill()
+                process.join()
+            raise ErpError(
+                "ERP generation cancelled.",
+                processing_warnings=[
+                    "Cancellation terminated ERP generation subprocess."
+                ],
+            )
+
+    try:
+        result = result_queue.get_nowait()
+    except Empty as exc:
+        if process.exitcode == 0:
+            raise ErpError("ERP subprocess exited without a result.") from exc
+        raise ErpError(
+            f"ERP subprocess exited with code {process.exitcode}."
+        ) from exc
+
+    if result.get("status") == "completed":
+        metadata = result.get("metadata")
+        if isinstance(metadata, dict):
+            return metadata
+        raise ErpError("ERP subprocess returned invalid metadata.")
+
+    raise ErpError(
+        str(result.get("error") or "ERP subprocess failed."),
+        processing_warnings=[str(warning) for warning in result.get("warnings", [])],
+    )
+
+
 def _is_cancellation_requested(run_id: str) -> bool:
     run = run_repository.get_preprocessing_run(run_id)
     return run is not None and run.status in {
         PreprocessingRunStatus.CANCELLING,
         PreprocessingRunStatus.CANCELLED,
+    }
+
+
+def _is_epoch_cancellation_requested(run_id: str) -> bool:
+    run = run_repository.get_epoch_run(run_id)
+    return run is not None and run.status in {
+        EpochRunStatus.CANCELLING,
+        EpochRunStatus.CANCELLED,
+    }
+
+
+def _is_erp_cancellation_requested(run_id: str) -> bool:
+    run = run_repository.get_erp_run(run_id)
+    return run is not None and run.status in {
+        ErpRunStatus.CANCELLING,
+        ErpRunStatus.CANCELLED,
     }
 
 
@@ -1269,6 +2621,226 @@ def _validate_preprocessing_config(
                     )
 
     return errors
+
+
+def _validate_epoch_config(
+    config: EpochConfig,
+    dataset: IngestionDataset,
+    preprocessing_run: PreprocessingRun | None,
+    event_log: EventLog | None,
+    recording: Recording | None,
+) -> tuple[list[str], list[str]]:
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    if dataset.status != DatasetStatus.VALID:
+        errors.append("Dataset must be valid before epoching.")
+
+    if preprocessing_run is None:
+        errors.append("Preprocessing run not found.")
+    else:
+        if preprocessing_run.dataset_id != dataset.dataset_id:
+            errors.append("Preprocessing run must belong to the selected dataset.")
+        if preprocessing_run.status != PreprocessingRunStatus.COMPLETED:
+            errors.append("Preprocessing run must be completed before epoching.")
+        if not preprocessing_run.output_path:
+            errors.append("Preprocessing run is missing an output path.")
+        elif _resolve_preprocessing_output_path(preprocessing_run) is None:
+            errors.append("Preprocessing output file was not found.")
+
+    if event_log is None or not event_log.events:
+        errors.append("Dataset must have mapped events before epoching.")
+
+    if recording is None:
+        errors.append("Recording metadata is required before epoching.")
+
+    if config.tmin_seconds >= config.tmax_seconds:
+        errors.append("tmin_seconds must be lower than tmax_seconds.")
+    if config.tmax_seconds <= 0:
+        errors.append("tmax_seconds must be greater than 0.")
+
+    baseline_errors = _validate_epoch_baseline(config)
+    errors.extend(baseline_errors)
+
+    if config.condition_field not in SUPPORTED_CONDITION_FIELDS:
+        errors.append(f"Unsupported condition field: {config.condition_field}.")
+
+    if config.reject_eeg_uv is not None and config.reject_eeg_uv <= 0:
+        errors.append("reject_eeg_uv must be greater than 0.")
+
+    if errors:
+        return errors, warnings
+
+    assert event_log is not None
+    candidate_events = [
+        event
+        for event in event_log.events
+        if _epoch_condition_label(getattr(event, config.condition_field)) is not None
+    ]
+    if not candidate_events:
+        return [
+            f"No usable events found for condition field: {config.condition_field}."
+        ], warnings
+
+    output_duration = _epoch_output_duration_seconds(
+        preprocessing_run=preprocessing_run,
+        recording=recording,
+    )
+    output_sampling_rate = _epoch_output_sampling_rate_hz(
+        preprocessing_run=preprocessing_run,
+        recording=recording,
+    )
+    if output_sampling_rate is None or output_sampling_rate <= 0:
+        return ["Epoch validation requires a positive output sampling rate."], warnings
+    if output_duration is None or output_duration <= 0:
+        return ["Epoch validation requires a positive output duration."], warnings
+
+    out_of_bounds_count = 0
+    for event in candidate_events:
+        start_seconds = event.onset_seconds + config.tmin_seconds
+        end_seconds = event.onset_seconds + config.tmax_seconds
+        if start_seconds < 0 or end_seconds > output_duration:
+            out_of_bounds_count += 1
+
+    if out_of_bounds_count == len(candidate_events):
+        return ["All candidate epoch windows are outside the recording bounds."], warnings
+
+    if out_of_bounds_count:
+        warnings.append(
+            f"{out_of_bounds_count} candidate events fall outside the epoch window bounds and will be skipped."
+        )
+
+    return errors, warnings
+
+
+def _validate_erp_config(
+    config: ErpConfig,
+    dataset_id: str,
+    epoch_run: EpochRun | None,
+) -> tuple[list[str], list[str]]:
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    if epoch_run is None:
+        errors.append("Epoch run not found.")
+    else:
+        if epoch_run.dataset_id != dataset_id:
+            errors.append("Epoch run must belong to the selected dataset.")
+        if epoch_run.status != EpochRunStatus.COMPLETED:
+            errors.append("Epoch run must be completed before ERP generation.")
+        if not epoch_run.output_path:
+            errors.append("Epoch run is missing an output path.")
+        elif _resolve_epoch_output_path(epoch_run) is None:
+            errors.append("Epoch output file was not found.")
+
+    if config.method != "mean":
+        errors.append("ERP method must be 'mean'.")
+
+    if config.plot_mode not in {"gfp", "channel"}:
+        errors.append("ERP plot_mode must be 'gfp' or 'channel'.")
+    if config.plot_mode == "channel" and not config.plot_channel:
+        errors.append("ERP plot_channel is required when plot_mode is 'channel'.")
+
+    if config.conditions is not None:
+        conditions = [condition.strip() for condition in config.conditions]
+        if not all(conditions):
+            errors.append("ERP condition labels must not be empty.")
+        if len(set(conditions)) != len(conditions):
+            errors.append("ERP condition labels must be unique.")
+
+    if config.picks is not None:
+        picks = [pick.strip() for pick in config.picks]
+        if not all(picks):
+            errors.append("ERP picks must not be empty.")
+        if len(set(picks)) != len(picks):
+            errors.append("ERP picks must be unique.")
+
+    return errors, warnings
+
+
+def _validate_comparison_config(
+    config_payload: ComparisonConfigPayload,
+    run: ErpRun,
+) -> list[str]:
+    errors: list[str] = []
+    if run.status != ErpRunStatus.COMPLETED:
+        errors.append("ERP run must be completed before comparison summary.")
+    if not run.output_path:
+        errors.append("ERP run is missing metadata output path.")
+    elif not Path(run.output_path).is_file():
+        errors.append("ERP metadata file was not found.")
+    if config_payload.metric != "mean_amplitude_uv":
+        errors.append("Comparison metric must be 'mean_amplitude_uv'.")
+    if config_payload.window_start_seconds >= config_payload.window_end_seconds:
+        errors.append("window_start_seconds must be lower than window_end_seconds.")
+    if config_payload.condition_a == config_payload.condition_b:
+        errors.append("Comparison conditions must be different.")
+    if config_payload.use_gfp and config_payload.channel:
+        errors.append("Use either GFP or a channel, not both.")
+    if not config_payload.use_gfp and not config_payload.channel:
+        errors.append("A channel is required when use_gfp is false.")
+    return errors
+
+
+def _validate_epoch_baseline(config: EpochConfig) -> list[str]:
+    errors: list[str] = []
+    baseline_start = config.baseline_start_seconds
+    baseline_end = config.baseline_end_seconds
+
+    if baseline_start is None and baseline_end is None:
+        return errors
+    if baseline_start is None or baseline_end is None:
+        return [
+            "baseline_start_seconds and baseline_end_seconds must both be set or both be null."
+        ]
+    if baseline_start > baseline_end:
+        errors.append(
+            "baseline_start_seconds must be lower than or equal to baseline_end_seconds."
+        )
+    if baseline_start < config.tmin_seconds or baseline_end > config.tmax_seconds:
+        errors.append("Baseline range must be inside the epoch time window.")
+    return errors
+
+
+def _epoch_output_duration_seconds(
+    preprocessing_run: PreprocessingRun | None,
+    recording: Recording | None,
+) -> float | None:
+    if preprocessing_run is not None:
+        duration = preprocessing_run.output_metadata.get("output_duration_seconds")
+        if isinstance(duration, (int, float)) and not isinstance(duration, bool):
+            return float(duration)
+    if recording is not None:
+        return recording.metadata.duration_seconds
+    return None
+
+
+def _epoch_output_sampling_rate_hz(
+    preprocessing_run: PreprocessingRun | None,
+    recording: Recording | None,
+) -> float | None:
+    if preprocessing_run is not None:
+        sampling_rate = preprocessing_run.output_metadata.get("output_sampling_rate_hz")
+        if isinstance(sampling_rate, (int, float)) and not isinstance(
+            sampling_rate,
+            bool,
+        ):
+            return float(sampling_rate)
+    if recording is not None:
+        return recording.metadata.sampling_rate_hz
+    return None
+
+
+def _epoch_condition_label(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return str(value).lower()
+
+    label = str(value).strip()
+    if not label:
+        return None
+    return label
 
 
 def _find_uploaded_file(
@@ -1329,14 +2901,38 @@ def _available_upload_path(path: Path) -> Path:
     if not path.exists():
         return path
 
-    stem = path.stem
-    suffix = path.suffix
     parent = path.parent
     for index in range(1, 10_000):
-        candidate = parent / f"{stem}-{index}{suffix}"
+        candidate = parent / _indexed_upload_filename(path.name, index)
         if not candidate.exists():
             return candidate
     raise HTTPException(status_code=409, detail="Could not allocate upload filename")
+
+
+def _indexed_upload_filename(filename: str, index: int) -> str:
+    lower_name = filename.lower()
+    for suffix in (
+        "_raw.fif.gz",
+        "raw.fif.gz",
+        "_sss.fif.gz",
+        "_tsss.fif.gz",
+        "_meg.fif.gz",
+        "_eeg.fif.gz",
+        "_ieeg.fif.gz",
+        "_raw.fif",
+        "raw.fif",
+        "_sss.fif",
+        "_tsss.fif",
+        "_meg.fif",
+        "_eeg.fif",
+        "_ieeg.fif",
+    ):
+        if lower_name.endswith(suffix):
+            prefix = filename[: -len(suffix)]
+            return f"{prefix}-{index}{filename[-len(suffix):]}"
+
+    path = Path(filename)
+    return f"{path.stem}-{index}{path.suffix}"
 
 
 def _sha256_file(path: Path) -> str:

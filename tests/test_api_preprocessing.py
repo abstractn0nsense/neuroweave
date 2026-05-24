@@ -10,6 +10,7 @@ from eeg_core.domain import (
     PreprocessingConfig,
     PreprocessingRun,
     PreprocessingRunStatus,
+    RunKind,
 )
 from eeg_io.registry import JsonRegistryRepository, JsonRunRepository
 
@@ -20,6 +21,8 @@ def _client_with_dataset(tmp_path, monkeypatch) -> TestClient:
     monkeypatch.setattr(api_main, "registry_repository", repository)
     monkeypatch.setattr(api_main, "run_repository", run_repository)
     monkeypatch.setattr(api_main, "PROCESSED_DIR", tmp_path / "processed")
+    monkeypatch.setattr(api_main, "EPOCHS_DIR", tmp_path / "epochs")
+    monkeypatch.setattr(api_main, "ERP_DIR", tmp_path / "erp")
 
     client = TestClient(api_main.app)
     client.post("/projects", json={"project_id": "project-001", "name": "Memory EEG"})
@@ -90,7 +93,7 @@ def _save_preprocessing_run(
         dataset_id=dataset_id,
         config=PreprocessingConfig(reference="average"),
         status=status,
-        output_path=f"data/processed/{dataset_id}/{run_id}/raw_preprocessed.fif",
+        output_path=f"data/processed/{dataset_id}/{run_id}/raw_preprocessed_raw.fif",
     )
     api_main.run_repository.save_preprocessing_run(run)
     return run
@@ -136,6 +139,8 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert response.status_code == 201
     queued_payload = response.json()
     assert queued_payload["dataset_id"] == "dataset-001"
+    assert queued_payload["run_kind"] == RunKind.PREPROCESSING
+    assert queued_payload["schema_version"] == 1
     assert queued_payload["status"] == "pending"
     assert queued_payload["started_at_utc"] is None
     assert queued_payload["finished_at_utc"] is None
@@ -152,11 +157,9 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert payload["started_at_utc"] is not None
     assert payload["finished_at_utc"] is not None
     assert payload["errors"] == []
-    assert any(
-        "does not conform to MNE naming conventions" in warning
-        for warning in payload["warnings"]
-    )
+    assert payload["warnings"] == []
     assert Path(payload["output_path"]).is_file()
+    assert Path(payload["output_path"]).name == "raw_preprocessed_raw.fif"
     metadata = payload["output_metadata"]
     assert metadata["input_file_id"]
     assert metadata["input_original_filename"] == "sample_resting_raw.fif"
@@ -165,6 +168,11 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert metadata["input_checksum_sha256"]
     assert metadata["input_sampling_rate_hz"] > 0
     assert metadata["input_duration_seconds"] > 0
+    assert metadata["artifact_root"] == str(Path(payload["output_path"]).parent)
+    assert metadata["primary_artifact_path"] == payload["output_path"]
+    assert metadata["primary_artifact_size_bytes"] > 0
+    assert metadata["primary_artifact_checksum_sha256"]
+    assert metadata["artifact_count"] == 4
     assert metadata["output_path"] == payload["output_path"]
     assert metadata["output_size_bytes"] > 0
     assert metadata["output_checksum_sha256"]
@@ -179,18 +187,35 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     summary_path = Path(str(metadata["preprocessing_summary_path"]))
     filter_report_path = Path(str(metadata["filter_report_path"]))
     artifact_summary_path = Path(str(metadata["artifact_summary_path"]))
+    artifact_manifest_path = Path(str(metadata["artifact_manifest_path"]))
     assert summary_path.is_file()
     assert filter_report_path.is_file()
     assert artifact_summary_path.is_file()
+    assert artifact_manifest_path.is_file()
 
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     filter_report = json.loads(filter_report_path.read_text(encoding="utf-8"))
     artifact_summary = json.loads(artifact_summary_path.read_text(encoding="utf-8"))
+    artifact_manifest = json.loads(artifact_manifest_path.read_text(encoding="utf-8"))
     assert summary["config"]["resample_hz"] == 50.0
     assert summary["output"]["sampling_rate_hz"] == 50.0
     assert filter_report["resample"]["status"] == "applied"
     assert filter_report["reference"]["status"] == "applied"
     assert artifact_summary["artifact_rejection"]["enabled"] is False
+    assert artifact_manifest["schema_version"] == 1
+    assert artifact_manifest["artifact_root"] == str(Path(payload["output_path"]).parent)
+    assert artifact_manifest["artifact_count"] == 4
+    assert {
+        artifact["logical_name"] for artifact in artifact_manifest["artifacts"]
+    } == {
+        "raw_preprocessed",
+        "preprocessing_summary",
+        "filter_report",
+        "artifact_summary",
+    }
+    for artifact in artifact_manifest["artifacts"]:
+        artifact_path = Path(str(artifact["path"])).resolve()
+        assert artifact_path.is_relative_to(Path(str(metadata["artifact_root"])).resolve())
 
     list_response = client.get("/datasets/dataset-001/preprocessing-runs")
 
@@ -333,7 +358,9 @@ def test_preprocessing_worker_recovers_pending_runs(tmp_path, monkeypatch):
         if uploaded_file.file_id == recording.file_id
     )
     run_id = "preprocess-recovered"
-    output_path = tmp_path / "processed" / "dataset-001" / run_id / "raw_preprocessed.fif"
+    output_path = (
+        tmp_path / "processed" / "dataset-001" / run_id / "raw_preprocessed_raw.fif"
+    )
     run = PreprocessingRun(
         run_id=run_id,
         dataset_id="dataset-001",
@@ -405,3 +432,26 @@ def test_create_preprocessing_run_rejects_upsampling_and_unknown_reference(
     detail = response.json()["detail"]
     assert any("input sampling rate" in error for error in detail)
     assert "reference contains unknown channels: MissingChannel" in detail
+
+
+def test_analysis_output_path_helpers_use_configured_roots(tmp_path, monkeypatch):
+    monkeypatch.setattr(api_main, "PROCESSED_DIR", tmp_path / "processed-root")
+    monkeypatch.setattr(api_main, "EPOCHS_DIR", tmp_path / "epochs-root")
+    monkeypatch.setattr(api_main, "ERP_DIR", tmp_path / "erp-root")
+
+    assert api_main._preprocessing_output_path(
+        "dataset-001",
+        "preprocess-001",
+    ) == (
+        tmp_path
+        / "processed-root"
+        / "dataset-001"
+        / "preprocess-001"
+        / "raw_preprocessed_raw.fif"
+    )
+    assert api_main._epoch_output_path("dataset-001", "epoch-001") == (
+        tmp_path / "epochs-root" / "dataset-001" / "epoch-001" / "epochs-epo.fif"
+    )
+    assert api_main._erp_output_directory("dataset-001", "erp-001") == (
+        tmp_path / "erp-root" / "dataset-001" / "erp-001"
+    )
