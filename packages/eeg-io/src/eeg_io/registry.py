@@ -7,7 +7,9 @@ from eeg_core.domain import (
     Dataset,
     DatasetStatus,
     EventColumnMapping,
+    EventLog,
     Experiment,
+    NormalizedEvent,
     Participant,
     Project,
     Recording,
@@ -217,6 +219,17 @@ class JsonRegistryRepository:
             return None
         return _read_json_object(path)
 
+    def save_event_log(self, event_log: EventLog) -> EventLog:
+        self.save_dataset_files_directory(event_log.dataset_id)
+        _write_json(self.event_log_path(event_log.dataset_id), asdict(event_log))
+        return event_log
+
+    def get_event_log(self, dataset_id: str) -> EventLog | None:
+        path = self.event_log_path(dataset_id)
+        if not path.exists():
+            return None
+        return _event_log_from_json(_read_json_object(path))
+
     def save_dataset_files_directory(self, dataset_id: str) -> None:
         self.dataset_directory(dataset_id).mkdir(parents=True, exist_ok=True)
         self.eeg_directory(dataset_id).mkdir(parents=True, exist_ok=True)
@@ -230,6 +243,9 @@ class JsonRegistryRepository:
 
     def events_preview_path(self, dataset_id: str) -> Path:
         return self.dataset_directory(dataset_id) / "events_preview.json"
+
+    def event_log_path(self, dataset_id: str) -> Path:
+        return self.dataset_directory(dataset_id) / "event_log.json"
 
 
 def _project_from_json(data: JsonObject) -> Project:
@@ -298,6 +314,39 @@ def _recording_from_json(data: JsonObject) -> Recording:
         file_id=str(data["file_id"]),
         metadata=recording_metadata_from_dict(data["metadata"]),
     )
+
+
+def _event_log_from_json(data: JsonObject) -> EventLog:
+    return EventLog(
+        event_log_id=str(data["event_log_id"]),
+        dataset_id=str(data["dataset_id"]),
+        file_id=str(data["file_id"]),
+        mapping=EventColumnMapping(**data.get("mapping", {})),
+        row_count=int(data["row_count"]),
+        events=[
+            _normalized_event_from_json(event)
+            for event in data.get("events", [])
+        ],
+    )
+
+
+def _normalized_event_from_json(data: JsonObject) -> NormalizedEvent:
+    return NormalizedEvent(
+        onset_seconds=float(data["onset_seconds"]),
+        source_row=int(data["source_row"]),
+        duration_seconds=_optional_float(data.get("duration_seconds")),
+        trial_type=data.get("trial_type"),
+        stimulus=data.get("stimulus"),
+        response=data.get("response"),
+        correct=data.get("correct"),
+        reaction_time_seconds=_optional_float(data.get("reaction_time_seconds")),
+    )
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    return float(value)
 
 
 def _find_by_id(items: list[Any], field_name: str, expected_id: str) -> Any | None:

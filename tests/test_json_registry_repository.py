@@ -4,7 +4,9 @@ from eeg_core.domain import (
     Dataset,
     DatasetStatus,
     EventColumnMapping,
+    EventLog,
     Experiment,
+    NormalizedEvent,
     Participant,
     Project,
     Recording,
@@ -152,3 +154,29 @@ def test_registry_persists_event_preview(tmp_path):
 
     assert repository.get_events_preview(dataset_id) == preview
     assert repository.events_preview_path(dataset_id).is_file()
+
+
+def test_registry_persists_normalized_event_log(tmp_path):
+    repository = JsonRegistryRepository(tmp_path / "uploads")
+    event_log = EventLog(
+        event_log_id="event-log-001",
+        dataset_id="dataset-001",
+        file_id="file-001",
+        mapping=EventColumnMapping(
+            onset_seconds="stim_onset",
+            trial_type="condition",
+        ),
+        row_count=1,
+        events=[
+            NormalizedEvent(
+                onset_seconds=1.0,
+                source_row=1,
+                trial_type="target",
+            )
+        ],
+    )
+
+    repository.save_event_log(event_log)
+
+    assert repository.get_event_log("dataset-001") == event_log
+    assert repository.event_log_path("dataset-001").is_file()

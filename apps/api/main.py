@@ -18,6 +18,7 @@ from eeg_core.domain import (  # noqa: E402
     Dataset as IngestionDataset,
     DatasetStatus,
     EventColumnMapping,
+    EventLog,
     Experiment,
     Participant,
     Project,
@@ -26,7 +27,12 @@ from eeg_core.domain import (  # noqa: E402
     UploadedFileKind,
 )
 from eeg_io.datasets import find_eeg_file_by_id, list_eeg_files  # noqa: E402
-from eeg_io.event_logs import EventLogPreviewError, preview_event_log  # noqa: E402
+from eeg_io.event_logs import (  # noqa: E402
+    EventLogNormalizationError,
+    EventLogPreviewError,
+    normalize_event_log,
+    preview_event_log,
+)
 from eeg_io.registry import JsonRegistryRepository  # noqa: E402
 from eeg_io.readers import EegMetadataReadError, read_eeg_metadata  # noqa: E402
 
@@ -133,6 +139,30 @@ class EventColumnMappingPayload(BaseModel):
     response: str | None = None
     correct: str | None = None
     reaction_time_seconds: str | None = None
+
+
+class NormalizedEventResponse(BaseModel):
+    onset_seconds: float
+    source_row: int
+    duration_seconds: float | None
+    trial_type: str | None
+    stimulus: str | None
+    response: str | None
+    correct: bool | None
+    reaction_time_seconds: float | None
+
+
+class EventLogResponse(BaseModel):
+    event_log_id: str
+    dataset_id: str
+    file_id: str
+    mapping: EventColumnMappingPayload
+    row_count: int
+    events: list[NormalizedEventResponse]
+
+
+class EventMappingRequest(BaseModel):
+    mapping: EventColumnMappingPayload | None = None
 
 
 class CreateProjectRequest(BaseModel):
@@ -453,6 +483,52 @@ def upload_dataset_events_file(
     )
 
 
+@app.post(
+    "/datasets/{dataset_id}/events/mapping",
+    response_model=EventLogResponse,
+)
+def map_dataset_events(
+    dataset_id: str,
+    request: EventMappingRequest,
+) -> EventLogResponse:
+    dataset = registry_repository.get_dataset(dataset_id)
+    if dataset is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    if not dataset.event_log_id:
+        raise HTTPException(status_code=404, detail="Event file not found")
+
+    uploaded_file = _find_uploaded_file(dataset_id, dataset.event_log_id)
+    if uploaded_file is None or uploaded_file.kind != UploadedFileKind.EVENTS:
+        raise HTTPException(status_code=404, detail="Event file not found")
+
+    mapping = _resolve_event_mapping(dataset, request.mapping)
+    try:
+        event_log = normalize_event_log(
+            dataset_id=dataset_id,
+            event_log_id=dataset.event_log_id,
+            file_id=uploaded_file.file_id,
+            path=Path(uploaded_file.stored_path),
+            mapping=mapping,
+        )
+    except (EventLogPreviewError, EventLogNormalizationError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    registry_repository.save_event_log(event_log)
+    return _event_log_response(event_log)
+
+
+@app.get("/datasets/{dataset_id}/events", response_model=EventLogResponse)
+def get_dataset_events(dataset_id: str) -> EventLogResponse:
+    if registry_repository.get_dataset(dataset_id) is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    event_log = registry_repository.get_event_log(dataset_id)
+    if event_log is None:
+        raise HTTPException(status_code=404, detail="Event log not found")
+
+    return _event_log_response(event_log)
+
+
 @app.get("/datasets/{dataset_id}", response_model=DatasetResponse)
 def get_dataset(dataset_id: str) -> DatasetResponse:
     dataset = registry_repository.get_dataset(dataset_id)
@@ -525,6 +601,52 @@ def _recording_response(recording: Recording) -> RecordingResponse:
             channel_names=recording.metadata.channel_names,
         ),
     )
+
+
+def _event_log_response(event_log: EventLog) -> EventLogResponse:
+    return EventLogResponse(
+        event_log_id=event_log.event_log_id,
+        dataset_id=event_log.dataset_id,
+        file_id=event_log.file_id,
+        mapping=EventColumnMappingPayload(**event_log.mapping.__dict__),
+        row_count=event_log.row_count,
+        events=[
+            NormalizedEventResponse(
+                onset_seconds=event.onset_seconds,
+                source_row=event.source_row,
+                duration_seconds=event.duration_seconds,
+                trial_type=event.trial_type,
+                stimulus=event.stimulus,
+                response=event.response,
+                correct=event.correct,
+                reaction_time_seconds=event.reaction_time_seconds,
+            )
+            for event in event_log.events
+        ],
+    )
+
+
+def _find_uploaded_file(
+    dataset_id: str,
+    file_id: str,
+) -> IngestionUploadedFile | None:
+    for uploaded_file in registry_repository.list_uploaded_files(dataset_id):
+        if uploaded_file.file_id == file_id:
+            return uploaded_file
+    return None
+
+
+def _resolve_event_mapping(
+    dataset: IngestionDataset,
+    request_mapping: EventColumnMappingPayload | None,
+) -> EventColumnMapping:
+    if request_mapping is not None:
+        return EventColumnMapping(**request_mapping.model_dump())
+
+    experiment = registry_repository.get_experiment(dataset.experiment_id)
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+    return experiment.default_event_mapping
 
 
 def _new_id(prefix: str) -> str:

@@ -37,6 +37,7 @@ GET /datasets
 GET /datasets/{dataset_id}
 POST /datasets/{dataset_id}/files/eeg
 POST /datasets/{dataset_id}/files/events
+POST /datasets/{dataset_id}/events/mapping
 GET /datasets/{dataset_id}/validation
 GET /datasets/{dataset_id}/events
 GET /datasets/{dataset_id}/metadata
@@ -53,10 +54,10 @@ Completed:
 3. Project and experiment API endpoints.
 4. Dataset creation and lookup API endpoints.
 5. EEG upload endpoint with metadata extraction.
+6. Event or behavior log upload with CSV/TSV storage and preview.
 
 Next:
 
-6. Event or behavior log upload with CSV/TSV storage and preview.
 7. Event column mapping and normalized event generation.
 8. Dataset validation API for EEG duration, event timing, missing fields, and readiness state.
 9. UI ingest flow after the API can complete `EEG + event log + validation`.
@@ -167,6 +168,17 @@ data/
           events_preview.json
           events/
             {original_filename}
+```
+
+Event mapping additionally creates:
+
+```text
+data/
+  raw/
+    uploads/
+      datasets/
+        {dataset_id}/
+          event_log.json
 ```
 
 ## Completion Criteria
