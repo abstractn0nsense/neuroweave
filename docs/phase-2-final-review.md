@@ -63,19 +63,24 @@ Recommended next hardening path:
    - API startup recovers `pending` and stale `running` runs from JSON run metadata.
 
 2. Phase 2.0.2: Improve cancellation.
-   - Add explicit processing checkpoints around read, filter, notch, reference, resample, and save steps.
-   - Store `cancel_requested_at_utc`.
-   - For long-term use, run jobs in cancellable worker subprocesses.
+   - Status: implemented for cooperative checkpoints.
+   - Explicit checkpoints now run around read, filter, notch, reference, resample, and save steps.
+   - `cancel_requested_at_utc` is persisted with run metadata.
+   - For hard mid-MNE interruption, run jobs in cancellable worker subprocesses in a later hardening step.
 
-3. Phase 2.0.3: Strengthen persistence.
+3. Phase 2.0.3: Add cancellable subprocess execution.
+   - Execute each preprocessing run in a child process.
+   - Terminate the child process on cancellation when a long MNE call does not reach checkpoints quickly enough.
+
+4. Phase 2.0.4: Strengthen persistence.
    - Add file locking for JSON writes as a short-term fix.
    - Move run/dataset registries to SQLite when multi-run concurrency becomes common.
 
-4. Phase 2.0.4: Add diagnostic outputs.
+5. Phase 2.0.5: Add diagnostic outputs.
    - Store preprocessing summaries alongside `raw_preprocessed.fif`.
    - Add filter settings, before/after sampling metadata, warning summaries, and optional HTML diagnostics.
 
-5. Phase 2.0.5: Add browser E2E smoke coverage.
+6. Phase 2.0.6: Add browser E2E smoke coverage.
    - Use a small fixture flow: create project, create experiment, create dataset, upload EEG/events, validate, start preprocessing, observe completed run.
    - Run it locally before release and later in CI if runtime cost is acceptable.
 

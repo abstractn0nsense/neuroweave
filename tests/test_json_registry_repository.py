@@ -200,6 +200,7 @@ def test_run_repository_persists_preprocessing_runs(tmp_path):
         status=PreprocessingRunStatus.COMPLETED,
         started_at_utc="2026-05-24T00:00:00+00:00",
         finished_at_utc="2026-05-24T00:01:00+00:00",
+        cancel_requested_at_utc="2026-05-24T00:00:30+00:00",
         output_path="data/processed/dataset-001/preprocess-001/raw_preprocessed.fif",
         output_metadata={"sampling_rate_hz": 128.0},
         warnings=["reference unchanged"],

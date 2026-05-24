@@ -1,5 +1,6 @@
 from pathlib import Path
 from time import sleep
+from dataclasses import replace
 
 from fastapi.testclient import TestClient
 
@@ -226,6 +227,7 @@ def test_cancel_pending_preprocessing_run_marks_cancelled(tmp_path, monkeypatch)
     payload = cancel_response.json()
     assert payload["status"] == "cancelled"
     assert payload["finished_at_utc"] is not None
+    assert payload["cancel_requested_at_utc"] is not None
     assert payload["warnings"] == ["Run cancelled before preprocessing started."]
     assert get_response.json() == payload
 
@@ -243,9 +245,48 @@ def test_cancel_running_preprocessing_run_requests_cancellation(
     payload = response.json()
     assert payload["status"] == "cancelling"
     assert payload["finished_at_utc"] is None
+    assert payload["cancel_requested_at_utc"] is not None
     assert payload["warnings"] == [
         "Cancellation requested; preprocessing will stop at the next checkpoint."
     ]
+
+
+def test_preprocessing_run_cancel_checkpoint_marks_cancelled(
+    tmp_path,
+    monkeypatch,
+):
+    client = _client_with_dataset(tmp_path, monkeypatch)
+    _upload_eeg(client)
+    _upload_and_map_events(client)
+
+    def cancel_during_preprocessing(*, should_cancel, **kwargs):
+        run = api_main.run_repository.list_preprocessing_runs()[0]
+        api_main.run_repository.save_preprocessing_run(
+            replace(
+                run,
+                status=PreprocessingRunStatus.CANCELLING,
+                cancel_requested_at_utc="2026-05-24T00:00:00+00:00",
+                warnings=["Cancellation requested; preprocessing will stop at the next checkpoint."],
+            )
+        )
+        assert should_cancel()
+        raise api_main.PreprocessingError(
+            "Preprocessing cancelled.",
+            processing_warnings=["Cancellation observed at preprocessing checkpoint."],
+        )
+
+    monkeypatch.setattr(api_main, "preprocess_raw_eeg", cancel_during_preprocessing)
+
+    response = client.post(
+        "/datasets/dataset-001/preprocessing-runs",
+        json={"reference": "average"},
+    )
+    payload = _wait_for_run_status(client, response.json()["run_id"], "cancelled")
+
+    assert payload["status"] == "cancelled"
+    assert payload["cancel_requested_at_utc"] == "2026-05-24T00:00:00+00:00"
+    assert payload["errors"] == ["Preprocessing cancelled."]
+    assert "Cancellation observed at preprocessing checkpoint." in payload["warnings"]
 
 
 def test_preprocessing_worker_recovers_pending_runs(tmp_path, monkeypatch):

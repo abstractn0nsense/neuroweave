@@ -391,6 +391,7 @@ def _preprocessing_run_from_json(data: JsonObject) -> PreprocessingRun:
         ),
         started_at_utc=data.get("started_at_utc"),
         finished_at_utc=data.get("finished_at_utc"),
+        cancel_requested_at_utc=data.get("cancel_requested_at_utc"),
         output_path=data.get("output_path"),
         output_metadata=dict(data.get("output_metadata", {})),
         warnings=[str(warning) for warning in data.get("warnings", [])],

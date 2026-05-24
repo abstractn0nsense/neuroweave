@@ -144,6 +144,7 @@ type PreprocessingRun = {
   status: string;
   started_at_utc: string | null;
   finished_at_utc: string | null;
+  cancel_requested_at_utc: string | null;
   output_path: string | null;
   output_metadata: Record<string, MetadataValue>;
   warnings: string[];

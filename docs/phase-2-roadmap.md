@@ -181,9 +181,19 @@ Implemented worker queue:
 - API startup starts the worker and recovers `pending` or stale `running` runs from `data/runs`
 - recovered runs keep the same run ID, config snapshot, provenance, and output path
 
+### Phase 2.0.2: Cancellation Checkpoints
+
+Implemented cancellation hardening:
+
+- `PreprocessingRun.cancel_requested_at_utc` records when cancellation was requested
+- cancellation timestamps persist through JSON run storage and API responses
+- preprocessing checks for cancellation before and after read, filter, notch, reference, resample, and save stages
+- cancellation observed at a checkpoint persists a warning on the run
+- running runs that observe cancellation finish as `cancelled` instead of `failed`
+
 Remaining `Phase 2.0.n` items:
 
-- `Phase 2.0.2`: stronger cancellation checkpoints and cancellable subprocess execution
-- `Phase 2.0.3`: JSON file locking, then SQLite-backed registries
-- `Phase 2.0.4`: preprocessing summaries, filter reports, artifact summaries, and optional HTML diagnostics
-- `Phase 2.0.5`: browser E2E smoke test for upload, validation, preprocessing, and completed-run display
+- `Phase 2.0.3`: cancellable subprocess execution for hard mid-MNE interruption
+- `Phase 2.0.4`: JSON file locking, then SQLite-backed registries
+- `Phase 2.0.5`: preprocessing summaries, filter reports, artifact summaries, and optional HTML diagnostics
+- `Phase 2.0.6`: browser E2E smoke test for upload, validation, preprocessing, and completed-run display

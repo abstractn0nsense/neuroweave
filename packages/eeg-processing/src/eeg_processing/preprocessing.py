@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 import warnings as python_warnings
 
 from eeg_core.domain import PreprocessingConfig
@@ -11,10 +11,14 @@ class PreprocessingError(Exception):
         self.processing_warnings = processing_warnings or []
 
 
+CancelCheck = Callable[[], bool]
+
+
 def preprocess_raw_eeg(
     input_path: Path,
     output_path: Path,
     config: PreprocessingConfig,
+    should_cancel: CancelCheck | None = None,
 ) -> dict[str, Any]:
     manual_warnings: list[str] = []
     warning_records: list[python_warnings.WarningMessage] = []
@@ -22,18 +26,22 @@ def preprocess_raw_eeg(
         with python_warnings.catch_warnings(record=True) as warning_records:
             python_warnings.simplefilter("always")
 
+            _check_cancelled(should_cancel, manual_warnings)
             raw = _read_raw(input_path)
+            _check_cancelled(should_cancel, manual_warnings)
             input_sampling_rate = float(raw.info["sfreq"])
             input_duration = (
                 raw.n_times / input_sampling_rate if input_sampling_rate else 0
             )
 
             if config.high_pass_hz is not None or config.low_pass_hz is not None:
+                _check_cancelled(should_cancel, manual_warnings)
                 raw.filter(
                     l_freq=config.high_pass_hz or None,
                     h_freq=config.low_pass_hz,
                     verbose=False,
                 )
+                _check_cancelled(should_cancel, manual_warnings)
 
             if config.notch_hz is not None:
                 nyquist = float(raw.info["sfreq"]) / 2
@@ -42,12 +50,16 @@ def preprocess_raw_eeg(
                         f"Skipped notch filter at {config.notch_hz:g} Hz because Nyquist is {nyquist:g} Hz."
                     )
                 else:
+                    _check_cancelled(should_cancel, manual_warnings)
                     raw.notch_filter(freqs=[config.notch_hz], verbose=False)
+                    _check_cancelled(should_cancel, manual_warnings)
 
             if config.reference:
                 reference = config.reference.strip().lower()
                 if reference in {"average", "avg"}:
+                    _check_cancelled(should_cancel, manual_warnings)
                     raw.set_eeg_reference("average", verbose=False)
+                    _check_cancelled(should_cancel, manual_warnings)
                 elif reference in {"none", "original"}:
                     manual_warnings.append("Reference unchanged.")
                 else:
@@ -57,13 +69,19 @@ def preprocess_raw_eeg(
                         if channel.strip()
                     ]
                     if channels:
+                        _check_cancelled(should_cancel, manual_warnings)
                         raw.set_eeg_reference(channels, verbose=False)
+                        _check_cancelled(should_cancel, manual_warnings)
 
             if config.resample_hz is not None:
+                _check_cancelled(should_cancel, manual_warnings)
                 raw.resample(config.resample_hz, verbose=False)
+                _check_cancelled(should_cancel, manual_warnings)
 
             output_path.parent.mkdir(parents=True, exist_ok=True)
+            _check_cancelled(should_cancel, manual_warnings)
             raw.save(output_path, overwrite=True, verbose=False)
+            _check_cancelled(should_cancel, manual_warnings)
     except PreprocessingError as exc:
         raise PreprocessingError(
             str(exc),
@@ -120,6 +138,15 @@ def _mne_version() -> str:
     import mne
 
     return str(mne.__version__)
+
+
+def _check_cancelled(
+    should_cancel: CancelCheck | None,
+    manual_warnings: list[str],
+) -> None:
+    if should_cancel and should_cancel():
+        manual_warnings.append("Cancellation observed at preprocessing checkpoint.")
+        raise PreprocessingError("Preprocessing cancelled.")
 
 
 def _format_warning_records(

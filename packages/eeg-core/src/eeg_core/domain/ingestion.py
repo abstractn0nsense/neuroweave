@@ -195,6 +195,7 @@ class PreprocessingRun:
     status: PreprocessingRunStatus = PreprocessingRunStatus.PENDING
     started_at_utc: str | None = None
     finished_at_utc: str | None = None
+    cancel_requested_at_utc: str | None = None
     output_path: str | None = None
     output_metadata: Metadata = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)

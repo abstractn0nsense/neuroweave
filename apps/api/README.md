@@ -64,6 +64,8 @@ Preprocessing runs also persist captured MNE/Python warnings in `warnings`. Fail
 
 `POST /preprocessing-runs/{run_id}/cancel` cancels pending runs immediately. Running runs are marked `cancelling` and become `cancelled` at the next background checkpoint.
 
+Cancellation requests persist `cancel_requested_at_utc`. The preprocessing worker checks cancellation before and after read, filter, notch, reference, resample, and save stages.
+
 Expected responsibilities:
 
 - expose dataset, workflow, job, and result endpoints

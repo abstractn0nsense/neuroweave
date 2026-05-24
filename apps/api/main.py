@@ -263,6 +263,7 @@ class PreprocessingRunResponse(BaseModel):
     status: str
     started_at_utc: str | None
     finished_at_utc: str | None
+    cancel_requested_at_utc: str | None
     output_path: str | None
     output_metadata: dict[str, str | int | float | bool | None]
     warnings: list[str]
@@ -735,10 +736,12 @@ def cancel_preprocessing_run(run_id: str) -> PreprocessingRunResponse:
         raise HTTPException(status_code=404, detail="Preprocessing run not found")
 
     if run.status == PreprocessingRunStatus.PENDING:
+        cancelled_at = _utc_now_iso()
         cancelled_run = replace(
             run,
             status=PreprocessingRunStatus.CANCELLED,
-            finished_at_utc=_utc_now_iso(),
+            finished_at_utc=cancelled_at,
+            cancel_requested_at_utc=run.cancel_requested_at_utc or cancelled_at,
             warnings=[*run.warnings, "Run cancelled before preprocessing started."],
         )
         run_repository.save_preprocessing_run(cancelled_run)
@@ -748,6 +751,7 @@ def cancel_preprocessing_run(run_id: str) -> PreprocessingRunResponse:
         cancelling_run = replace(
             run,
             status=PreprocessingRunStatus.CANCELLING,
+            cancel_requested_at_utc=run.cancel_requested_at_utc or _utc_now_iso(),
             warnings=[
                 *run.warnings,
                 "Cancellation requested; preprocessing will stop at the next checkpoint.",
@@ -900,6 +904,7 @@ def _preprocessing_run_response(run: PreprocessingRun) -> PreprocessingRunRespon
         status=run.status.value,
         started_at_utc=run.started_at_utc,
         finished_at_utc=run.finished_at_utc,
+        cancel_requested_at_utc=run.cancel_requested_at_utc,
         output_path=run.output_path,
         output_metadata=run.output_metadata,
         warnings=run.warnings,
@@ -978,6 +983,7 @@ def _execute_preprocessing_run(run_id: str) -> None:
             run,
             status=PreprocessingRunStatus.CANCELLED,
             finished_at_utc=_utc_now_iso(),
+            cancel_requested_at_utc=run.cancel_requested_at_utc,
         )
         run_repository.save_preprocessing_run(cancelled_run)
         return
@@ -1007,6 +1013,7 @@ def _execute_preprocessing_run(run_id: str) -> None:
             input_path=Path(input_path),
             output_path=output_file_path,
             config=run.config,
+            should_cancel=lambda: _is_cancellation_requested(run_id),
         )
         completed_run = replace(
             running_run,
@@ -1025,6 +1032,7 @@ def _execute_preprocessing_run(run_id: str) -> None:
                 completed_run,
                 status=PreprocessingRunStatus.CANCELLED,
                 finished_at_utc=_utc_now_iso(),
+                cancel_requested_at_utc=current_run.cancel_requested_at_utc,
                 warnings=_dedupe_strings(
                     [
                         *current_run.warnings,
@@ -1048,10 +1056,21 @@ def _execute_preprocessing_run(run_id: str) -> None:
             running_run,
             status=next_status,
             finished_at_utc=_utc_now_iso(),
+            cancel_requested_at_utc=(
+                current_run.cancel_requested_at_utc if current_run else None
+            ),
             warnings=_dedupe_strings([*current_warnings, *exc.processing_warnings]),
             errors=[str(exc)],
         )
         run_repository.save_preprocessing_run(failed_run)
+
+
+def _is_cancellation_requested(run_id: str) -> bool:
+    run = run_repository.get_preprocessing_run(run_id)
+    return run is not None and run.status in {
+        PreprocessingRunStatus.CANCELLING,
+        PreprocessingRunStatus.CANCELLED,
+    }
 
 
 def _validate_preprocessing_config(
