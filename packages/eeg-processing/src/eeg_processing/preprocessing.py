@@ -22,6 +22,28 @@ def preprocess_raw_eeg(
 ) -> dict[str, Any]:
     manual_warnings: list[str] = []
     warning_records: list[python_warnings.WarningMessage] = []
+    filter_report: dict[str, Any] = {
+        "high_pass": _operation_report(
+            enabled=config.high_pass_hz is not None,
+            parameters={"cutoff_hz": config.high_pass_hz},
+        ),
+        "low_pass": _operation_report(
+            enabled=config.low_pass_hz is not None,
+            parameters={"cutoff_hz": config.low_pass_hz},
+        ),
+        "notch": _operation_report(
+            enabled=config.notch_hz is not None,
+            parameters={"frequency_hz": config.notch_hz},
+        ),
+        "reference": _operation_report(
+            enabled=bool(config.reference),
+            parameters={"reference": config.reference},
+        ),
+        "resample": _operation_report(
+            enabled=config.resample_hz is not None,
+            parameters={"target_sampling_rate_hz": config.resample_hz},
+        ),
+    }
     try:
         with python_warnings.catch_warnings(record=True) as warning_records:
             python_warnings.simplefilter("always")
@@ -30,9 +52,11 @@ def preprocess_raw_eeg(
             raw = _read_raw(input_path)
             _check_cancelled(should_cancel, manual_warnings)
             input_sampling_rate = float(raw.info["sfreq"])
+            input_channel_count = len(raw.ch_names)
             input_duration = (
                 raw.n_times / input_sampling_rate if input_sampling_rate else 0
             )
+            input_artifact_summary = _artifact_summary(raw)
 
             if config.high_pass_hz is not None or config.low_pass_hz is not None:
                 _check_cancelled(should_cancel, manual_warnings)
@@ -41,17 +65,25 @@ def preprocess_raw_eeg(
                     h_freq=config.low_pass_hz,
                     verbose=False,
                 )
+                if config.high_pass_hz is not None:
+                    filter_report["high_pass"]["status"] = "applied"
+                if config.low_pass_hz is not None:
+                    filter_report["low_pass"]["status"] = "applied"
                 _check_cancelled(should_cancel, manual_warnings)
 
             if config.notch_hz is not None:
                 nyquist = float(raw.info["sfreq"]) / 2
                 if config.notch_hz >= nyquist:
-                    manual_warnings.append(
+                    reason = (
                         f"Skipped notch filter at {config.notch_hz:g} Hz because Nyquist is {nyquist:g} Hz."
                     )
+                    manual_warnings.append(reason)
+                    filter_report["notch"]["status"] = "skipped"
+                    filter_report["notch"]["reason"] = reason
                 else:
                     _check_cancelled(should_cancel, manual_warnings)
                     raw.notch_filter(freqs=[config.notch_hz], verbose=False)
+                    filter_report["notch"]["status"] = "applied"
                     _check_cancelled(should_cancel, manual_warnings)
 
             if config.reference:
@@ -59,9 +91,15 @@ def preprocess_raw_eeg(
                 if reference in {"average", "avg"}:
                     _check_cancelled(should_cancel, manual_warnings)
                     raw.set_eeg_reference("average", verbose=False)
+                    filter_report["reference"]["status"] = "applied"
+                    filter_report["reference"]["parameters"] = {
+                        "reference": "average",
+                    }
                     _check_cancelled(should_cancel, manual_warnings)
                 elif reference in {"none", "original"}:
                     manual_warnings.append("Reference unchanged.")
+                    filter_report["reference"]["status"] = "skipped"
+                    filter_report["reference"]["reason"] = "Reference unchanged."
                 else:
                     channels = [
                         channel.strip()
@@ -71,11 +109,19 @@ def preprocess_raw_eeg(
                     if channels:
                         _check_cancelled(should_cancel, manual_warnings)
                         raw.set_eeg_reference(channels, verbose=False)
+                        filter_report["reference"]["status"] = "applied"
+                        filter_report["reference"]["parameters"] = {
+                            "reference": channels,
+                        }
                         _check_cancelled(should_cancel, manual_warnings)
+                    else:
+                        filter_report["reference"]["status"] = "skipped"
+                        filter_report["reference"]["reason"] = "No reference channels provided."
 
             if config.resample_hz is not None:
                 _check_cancelled(should_cancel, manual_warnings)
                 raw.resample(config.resample_hz, verbose=False)
+                filter_report["resample"]["status"] = "applied"
                 _check_cancelled(should_cancel, manual_warnings)
 
             output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -100,17 +146,49 @@ def preprocess_raw_eeg(
         ) from exc
 
     sampling_rate = float(raw.info["sfreq"])
+    output_duration = raw.n_times / sampling_rate if sampling_rate else 0
+    output_artifact_summary = _artifact_summary(raw)
+    warnings = _dedupe(
+        manual_warnings + _format_warning_records(warning_records)
+    )
+    preprocessing_summary = {
+        "input": {
+            "path": str(input_path),
+            "channel_count": input_channel_count,
+            "sampling_rate_hz": input_sampling_rate,
+            "duration_seconds": input_duration,
+        },
+        "output": {
+            "path": str(output_path),
+            "channel_count": len(raw.ch_names),
+            "sampling_rate_hz": sampling_rate,
+            "duration_seconds": output_duration,
+            "file_format": "fif",
+        },
+        "config": _config_summary(config),
+        "warnings": warnings,
+    }
     return {
         "channel_count": len(raw.ch_names),
         "sampling_rate_hz": sampling_rate,
-        "duration_seconds": raw.n_times / sampling_rate if sampling_rate else 0,
+        "duration_seconds": output_duration,
         "file_format": "fif",
         "input_sampling_rate_hz": input_sampling_rate,
         "input_duration_seconds": input_duration,
         "mne_version": _mne_version(),
-        "warnings": _dedupe(
-            manual_warnings + _format_warning_records(warning_records)
-        ),
+        "warnings": warnings,
+        "diagnostics": {
+            "preprocessing_summary": preprocessing_summary,
+            "filter_report": filter_report,
+            "artifact_summary": {
+                "input": input_artifact_summary,
+                "output": output_artifact_summary,
+                "artifact_rejection": {
+                    "enabled": False,
+                    "reason": "Artifact detection and rejection are not implemented in Phase 2.0.5.",
+                },
+            },
+        },
     }
 
 
@@ -138,6 +216,41 @@ def _mne_version() -> str:
     import mne
 
     return str(mne.__version__)
+
+
+def _operation_report(
+    enabled: bool,
+    parameters: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "enabled": enabled,
+        "status": "pending" if enabled else "not_requested",
+        "parameters": parameters,
+    }
+
+
+def _config_summary(config: PreprocessingConfig) -> dict[str, Any]:
+    return {
+        "high_pass_hz": config.high_pass_hz,
+        "low_pass_hz": config.low_pass_hz,
+        "notch_hz": config.notch_hz,
+        "resample_hz": config.resample_hz,
+        "reference": config.reference,
+    }
+
+
+def _artifact_summary(raw: Any) -> dict[str, Any]:
+    annotations = getattr(raw, "annotations", [])
+    descriptions = [
+        str(description)
+        for description in getattr(annotations, "description", [])
+    ]
+    return {
+        "bad_channels": [str(channel) for channel in raw.info.get("bads", [])],
+        "bad_channel_count": len(raw.info.get("bads", [])),
+        "annotation_count": len(annotations),
+        "annotation_descriptions": sorted(set(descriptions)),
+    }
 
 
 def _check_cancelled(

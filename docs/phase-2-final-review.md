@@ -49,8 +49,9 @@ Phase 2 is suitable to merge as an MVP, but these limitations should be handled 
    - Writes use atomic temp-file replacement, and registry reads/writes now use per-file OS locks.
    - Large run histories will eventually need a stronger persistence layer.
 
-4. Output artifacts are limited to preprocessed FIF.
-   - There are no diagnostic plots, filter reports, or artifact summaries yet.
+4. Output diagnostics are JSON-only.
+   - Completed runs now write preprocessing summaries, filter reports, and artifact summaries.
+   - Diagnostic plots and richer artifact detection remain future analysis work.
 
 5. UI coverage is build-level only.
    - TypeScript build catches regressions, but there is no browser E2E test for the full upload-to-preprocessing workflow.
@@ -82,8 +83,10 @@ Recommended next hardening path:
    - Move run/dataset registries to SQLite later if multi-run concurrency becomes common.
 
 5. Phase 2.0.5: Add diagnostic outputs.
+   - Status: implemented for JSON diagnostics.
    - Store preprocessing summaries alongside `raw_preprocessed.fif`.
-   - Add filter settings, before/after sampling metadata, warning summaries, and optional HTML diagnostics.
+   - Add filter settings, before/after sampling metadata, warning summaries, and artifact summaries.
+   - Optional HTML diagnostics remain future polish.
 
 6. Phase 2.0.6: Add browser E2E smoke coverage.
    - Use a small fixture flow: create project, create experiment, create dataset, upload EEG/events, validate, start preprocessing, observe completed run.

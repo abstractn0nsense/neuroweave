@@ -214,7 +214,17 @@ Implemented JSON persistence hardening:
 - concurrent project registry writes are covered by regression tests
 - the existing repository boundary remains the migration point for a future SQLite backend
 
+### Phase 2.0.5: Preprocessing Diagnostics
+
+Implemented diagnostic outputs:
+
+- completed runs write `preprocessing_summary.json` beside `raw_preprocessed.fif`
+- completed runs write `filter_report.json` with applied, skipped, and not-requested operation statuses
+- completed runs write `artifact_summary.json` with bad-channel and annotation counts
+- `output_metadata` records diagnostic file paths and key artifact counts
+- diagnostic JSON includes before/after sampling metadata, config snapshots, and captured warnings
+- artifact rejection is explicitly reported as disabled until a later analysis phase implements it
+
 Remaining `Phase 2.0.n` items:
 
-- `Phase 2.0.5`: preprocessing summaries, filter reports, artifact summaries, and optional HTML diagnostics
 - `Phase 2.0.6`: browser E2E smoke test for upload, validation, preprocessing, and completed-run display

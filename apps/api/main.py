@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from contextlib import asynccontextmanager
 import hashlib
+import json
 import shutil
 import sys
 from uuid import uuid4
@@ -936,6 +937,10 @@ def _preprocessing_completed_provenance(
     output_path: Path,
     processing_metadata: dict,
 ) -> dict[str, str | int | float | bool | None]:
+    diagnostics_metadata = _write_preprocessing_diagnostics(
+        output_directory=output_path.parent,
+        processing_metadata=processing_metadata,
+    )
     return {
         **run.output_metadata,
         "output_path": str(output_path),
@@ -946,7 +951,67 @@ def _preprocessing_completed_provenance(
         "output_sampling_rate_hz": processing_metadata["sampling_rate_hz"],
         "output_duration_seconds": processing_metadata["duration_seconds"],
         "mne_version": processing_metadata["mne_version"],
+        **diagnostics_metadata,
     }
+
+
+def _write_preprocessing_diagnostics(
+    output_directory: Path,
+    processing_metadata: dict,
+) -> dict[str, str | int | float | bool | None]:
+    diagnostics = processing_metadata.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return {
+            "diagnostics_available": False,
+            "diagnostics_file_count": 0,
+        }
+
+    output_directory.mkdir(parents=True, exist_ok=True)
+    files = {
+        "preprocessing_summary": output_directory / "preprocessing_summary.json",
+        "filter_report": output_directory / "filter_report.json",
+        "artifact_summary": output_directory / "artifact_summary.json",
+    }
+    written_paths: dict[str, Path] = {}
+    for key, path in files.items():
+        payload = diagnostics.get(key)
+        if isinstance(payload, dict):
+            _write_json_file(path, payload)
+            written_paths[key] = path
+
+    artifact_summary = diagnostics.get("artifact_summary")
+    output_artifacts = (
+        artifact_summary.get("output", {})
+        if isinstance(artifact_summary, dict)
+        else {}
+    )
+    return {
+        "diagnostics_available": bool(written_paths),
+        "diagnostics_file_count": len(written_paths),
+        "diagnostics_directory": str(output_directory),
+        "preprocessing_summary_path": str(written_paths.get("preprocessing_summary"))
+        if "preprocessing_summary" in written_paths
+        else None,
+        "filter_report_path": str(written_paths.get("filter_report"))
+        if "filter_report" in written_paths
+        else None,
+        "artifact_summary_path": str(written_paths.get("artifact_summary"))
+        if "artifact_summary" in written_paths
+        else None,
+        "artifact_bad_channel_count": output_artifacts.get("bad_channel_count")
+        if isinstance(output_artifacts, dict)
+        else None,
+        "artifact_annotation_count": output_artifacts.get("annotation_count")
+        if isinstance(output_artifacts, dict)
+        else None,
+    }
+
+
+def _write_json_file(path: Path, payload: dict) -> None:
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _validation_issue_response(issue: ValidationIssue) -> ValidationIssueResponse:

@@ -58,6 +58,8 @@ Preprocessing config validation rejects invalid filter ordering, cutoff frequenc
 
 Completed preprocessing runs store provenance in `output_metadata`, including input file identity, paths, checksums, size, input/output signal metadata, output checksum, and MNE version. The run `config` field is the persisted preprocessing configuration snapshot.
 
+Completed preprocessing runs also write diagnostics beside `raw_preprocessed.fif`: `preprocessing_summary.json`, `filter_report.json`, and `artifact_summary.json`. Their paths and key artifact counts are recorded in `output_metadata`.
+
 Preprocessing runs also persist captured MNE/Python warnings in `warnings`. Failed runs persist `errors`, retain input provenance, and remain available through the run lookup endpoints.
 
 `POST /datasets/{dataset_id}/preprocessing-runs` creates a `pending` run and returns immediately after enqueueing it in the local preprocessing worker. Use `GET /preprocessing-runs/{run_id}` or `GET /datasets/{dataset_id}/preprocessing-runs` to poll for `running`, `completed`, or `failed` status. On API startup, the worker recovers `pending` and stale `running` runs from `data/runs`.

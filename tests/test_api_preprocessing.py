@@ -1,6 +1,7 @@
 from pathlib import Path
 from time import sleep
 from dataclasses import replace
+import json
 
 from fastapi.testclient import TestClient
 
@@ -170,6 +171,26 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert metadata["output_sampling_rate_hz"] == 50.0
     assert metadata["output_duration_seconds"] > 0
     assert metadata["mne_version"]
+    assert metadata["diagnostics_available"] is True
+    assert metadata["diagnostics_file_count"] == 3
+    assert metadata["artifact_bad_channel_count"] == 0
+    assert metadata["artifact_annotation_count"] == 0
+
+    summary_path = Path(str(metadata["preprocessing_summary_path"]))
+    filter_report_path = Path(str(metadata["filter_report_path"]))
+    artifact_summary_path = Path(str(metadata["artifact_summary_path"]))
+    assert summary_path.is_file()
+    assert filter_report_path.is_file()
+    assert artifact_summary_path.is_file()
+
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    filter_report = json.loads(filter_report_path.read_text(encoding="utf-8"))
+    artifact_summary = json.loads(artifact_summary_path.read_text(encoding="utf-8"))
+    assert summary["config"]["resample_hz"] == 50.0
+    assert summary["output"]["sampling_rate_hz"] == 50.0
+    assert filter_report["resample"]["status"] == "applied"
+    assert filter_report["reference"]["status"] == "applied"
+    assert artifact_summary["artifact_rejection"]["enabled"] is False
 
     list_response = client.get("/datasets/dataset-001/preprocessing-runs")
 
