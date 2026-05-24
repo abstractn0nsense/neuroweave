@@ -2,6 +2,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 import json
+import os
+import tempfile
 
 from eeg_core.domain import (
     Dataset,
@@ -462,7 +464,22 @@ def _read_json(path: Path) -> Any:
 
 def _write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(data, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    content = json.dumps(data, indent=2, sort_keys=True) + "\n"
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            delete=False,
+            dir=path.parent,
+            encoding="utf-8",
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+        ) as tmp_file:
+            tmp_file.write(content)
+            tmp_file.flush()
+            os.fsync(tmp_file.fileno())
+            tmp_path = Path(tmp_file.name)
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path is not None and tmp_path.exists():
+            tmp_path.unlink()

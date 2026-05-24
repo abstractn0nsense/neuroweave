@@ -203,9 +203,10 @@ Implemented subprocess execution:
 - if the child process does not exit promptly, it is killed
 - subprocess results are returned through a process queue and persisted by the API worker
 - failed subprocesses persist warnings and errors on the run
+- JSON writes use atomic temp-file replacement so status polling cannot read a partially written run file
 
 Remaining `Phase 2.0.n` items:
 
-- `Phase 2.0.4`: JSON file locking, then SQLite-backed registries
+- `Phase 2.0.4`: JSON read/write file locking, then SQLite-backed registries
 - `Phase 2.0.5`: preprocessing summaries, filter reports, artifact summaries, and optional HTML diagnostics
 - `Phase 2.0.6`: browser E2E smoke test for upload, validation, preprocessing, and completed-run display
