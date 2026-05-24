@@ -314,6 +314,8 @@ Contract notes:
 Purpose: convert normalized event logs into deterministic MNE inputs independent of
 the API layer.
 
+Status: implemented as pure event conversion helpers in `eeg_processing.epoching`.
+
 Implementation steps:
 
 1. Add an epoching module in `packages/eeg-processing/src/eeg_processing/epoching.py`.
