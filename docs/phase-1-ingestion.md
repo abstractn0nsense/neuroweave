@@ -126,6 +126,7 @@ Phase 1 can use JSON metadata files before introducing a database. The API shoul
 ## Completion Criteria
 
 - A dataset can be created through the API.
+- Dataset creation verifies the selected project and experiment before storing participant/session metadata.
 - EEG file upload stores the original file and extracts metadata.
 - Event log upload stores the original file and returns a normalized event preview.
 - Validation reports `valid`, `warnings`, and `errors`.

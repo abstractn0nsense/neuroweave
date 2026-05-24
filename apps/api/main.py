@@ -11,7 +11,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 for package_src in ("packages/eeg-core/src", "packages/eeg-io/src"):
     sys.path.insert(0, str(REPO_ROOT / package_src))
 
-from eeg_core.domain import EventColumnMapping, Experiment, Project  # noqa: E402
+from eeg_core.domain import (  # noqa: E402
+    Dataset as IngestionDataset,
+    DatasetStatus,
+    EventColumnMapping,
+    Experiment,
+    Participant,
+    Project,
+)
 from eeg_io.datasets import find_eeg_file_by_id, list_eeg_files  # noqa: E402
 from eeg_io.registry import JsonRegistryRepository  # noqa: E402
 from eeg_io.readers import EegMetadataReadError, read_eeg_metadata  # noqa: E402
@@ -44,6 +51,34 @@ class DatasetMetadata(BaseModel):
     sampling_rate: float
     duration_seconds: float
     channel_names: list[str]
+
+
+class CreateDatasetRequest(BaseModel):
+    dataset_id: str | None = None
+    project_id: str
+    experiment_id: str
+    participant_id: str | None = None
+    participant_label: str
+    participant_group: str | None = None
+    session_id: str | None = None
+    session_label: str
+    metadata: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+
+
+class DatasetResponse(BaseModel):
+    dataset_id: str
+    project_id: str
+    experiment_id: str
+    participant_id: str
+    session_id: str
+    status: str
+    recording_id: str | None
+    event_log_id: str | None
+    metadata: dict[str, str | int | float | bool | None]
+
+
+class DatasetsResponse(BaseModel):
+    datasets: list[DatasetResponse]
 
 
 class EventColumnMappingPayload(BaseModel):
@@ -183,6 +218,56 @@ def list_experiments(project_id: str) -> ExperimentsResponse:
     )
 
 
+@app.post(
+    "/datasets",
+    response_model=DatasetResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_dataset(request: CreateDatasetRequest) -> DatasetResponse:
+    project = registry_repository.get_project(request.project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    experiment = registry_repository.get_experiment(request.experiment_id)
+    if experiment is None or experiment.project_id != request.project_id:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    participant_id = request.participant_id or _new_id("participant")
+    participant = Participant(
+        participant_id=participant_id,
+        project_id=request.project_id,
+        label=request.participant_label,
+        group=request.participant_group,
+    )
+    registry_repository.save_participant(participant)
+
+    dataset = IngestionDataset(
+        dataset_id=request.dataset_id or _new_id("dataset"),
+        project_id=request.project_id,
+        experiment_id=request.experiment_id,
+        participant_id=participant_id,
+        session_id=request.session_id or _new_id("session"),
+        status=DatasetStatus.NEEDS_FILES,
+        metadata={
+            **request.metadata,
+            "participant_label": request.participant_label,
+            "session_label": request.session_label,
+        },
+    )
+    registry_repository.save_dataset(dataset)
+    return _dataset_response(dataset)
+
+
+@app.get("/datasets", response_model=DatasetsResponse)
+def list_datasets(project_id: str | None = None) -> DatasetsResponse:
+    return DatasetsResponse(
+        datasets=[
+            _dataset_response(dataset)
+            for dataset in registry_repository.list_datasets(project_id=project_id)
+        ]
+    )
+
+
 @app.get("/datasets/samples", response_model=SampleDatasetsResponse)
 def list_sample_datasets() -> SampleDatasetsResponse:
     samples = [
@@ -217,6 +302,15 @@ def get_sample_dataset_metadata(dataset_id: str) -> DatasetMetadata:
     )
 
 
+@app.get("/datasets/{dataset_id}", response_model=DatasetResponse)
+def get_dataset(dataset_id: str) -> DatasetResponse:
+    dataset = registry_repository.get_dataset(dataset_id)
+    if dataset is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    return _dataset_response(dataset)
+
+
 def _project_response(project: Project) -> ProjectResponse:
     return ProjectResponse(
         project_id=project.project_id,
@@ -236,6 +330,20 @@ def _experiment_response(experiment: Experiment) -> ExperimentResponse:
             **experiment.default_event_mapping.__dict__
         ),
         metadata=experiment.metadata,
+    )
+
+
+def _dataset_response(dataset: IngestionDataset) -> DatasetResponse:
+    return DatasetResponse(
+        dataset_id=dataset.dataset_id,
+        project_id=dataset.project_id,
+        experiment_id=dataset.experiment_id,
+        participant_id=dataset.participant_id,
+        session_id=dataset.session_id,
+        status=dataset.status.value,
+        recording_id=dataset.recording_id,
+        event_log_id=dataset.event_log_id,
+        metadata=dataset.metadata,
     )
 
 
