@@ -1,8 +1,11 @@
 from pathlib import Path
+from dataclasses import replace
+import hashlib
+import shutil
 import sys
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, File, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -18,6 +21,9 @@ from eeg_core.domain import (  # noqa: E402
     Experiment,
     Participant,
     Project,
+    Recording,
+    UploadedFile as IngestionUploadedFile,
+    UploadedFileKind,
 )
 from eeg_io.datasets import find_eeg_file_by_id, list_eeg_files  # noqa: E402
 from eeg_io.registry import JsonRegistryRepository  # noqa: E402
@@ -79,6 +85,30 @@ class DatasetResponse(BaseModel):
 
 class DatasetsResponse(BaseModel):
     datasets: list[DatasetResponse]
+
+
+class UploadedFileResponse(BaseModel):
+    file_id: str
+    dataset_id: str
+    kind: str
+    original_filename: str
+    stored_path: str
+    content_type: str | None
+    size_bytes: int | None
+    checksum_sha256: str | None
+
+
+class RecordingResponse(BaseModel):
+    recording_id: str
+    dataset_id: str
+    file_id: str
+    metadata: DatasetMetadata
+
+
+class EegUploadResponse(BaseModel):
+    dataset: DatasetResponse
+    uploaded_file: UploadedFileResponse
+    recording: RecordingResponse
 
 
 class EventColumnMappingPayload(BaseModel):
@@ -302,6 +332,63 @@ def get_sample_dataset_metadata(dataset_id: str) -> DatasetMetadata:
     )
 
 
+@app.post(
+    "/datasets/{dataset_id}/files/eeg",
+    response_model=EegUploadResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def upload_dataset_eeg_file(
+    dataset_id: str,
+    file: UploadFile = File(...),
+) -> EegUploadResponse:
+    dataset = registry_repository.get_dataset(dataset_id)
+    if dataset is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    stored_path = _store_upload_file(
+        file=file,
+        destination_directory=registry_repository.eeg_directory(dataset_id),
+    )
+
+    try:
+        metadata = read_eeg_metadata(stored_path, dataset_id=dataset_id)
+    except EegMetadataReadError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    uploaded_file = IngestionUploadedFile(
+        file_id=_new_id("file"),
+        dataset_id=dataset_id,
+        kind=UploadedFileKind.EEG,
+        original_filename=file.filename or stored_path.name,
+        stored_path=str(stored_path),
+        content_type=file.content_type,
+        size_bytes=stored_path.stat().st_size,
+        checksum_sha256=_sha256_file(stored_path),
+    )
+    registry_repository.save_uploaded_file(uploaded_file)
+
+    recording = Recording(
+        recording_id=_new_id("recording"),
+        dataset_id=dataset_id,
+        file_id=uploaded_file.file_id,
+        metadata=metadata,
+    )
+    registry_repository.save_recording(recording)
+
+    updated_dataset = replace(
+        dataset,
+        status=DatasetStatus.NEEDS_MAPPING,
+        recording_id=recording.recording_id,
+    )
+    registry_repository.update_dataset(updated_dataset)
+
+    return EegUploadResponse(
+        dataset=_dataset_response(updated_dataset),
+        uploaded_file=_uploaded_file_response(uploaded_file),
+        recording=_recording_response(recording),
+    )
+
+
 @app.get("/datasets/{dataset_id}", response_model=DatasetResponse)
 def get_dataset(dataset_id: str) -> DatasetResponse:
     dataset = registry_repository.get_dataset(dataset_id)
@@ -347,5 +434,69 @@ def _dataset_response(dataset: IngestionDataset) -> DatasetResponse:
     )
 
 
+def _uploaded_file_response(uploaded_file: IngestionUploadedFile) -> UploadedFileResponse:
+    return UploadedFileResponse(
+        file_id=uploaded_file.file_id,
+        dataset_id=uploaded_file.dataset_id,
+        kind=uploaded_file.kind.value,
+        original_filename=uploaded_file.original_filename,
+        stored_path=uploaded_file.stored_path,
+        content_type=uploaded_file.content_type,
+        size_bytes=uploaded_file.size_bytes,
+        checksum_sha256=uploaded_file.checksum_sha256,
+    )
+
+
+def _recording_response(recording: Recording) -> RecordingResponse:
+    return RecordingResponse(
+        recording_id=recording.recording_id,
+        dataset_id=recording.dataset_id,
+        file_id=recording.file_id,
+        metadata=DatasetMetadata(
+            id=recording.metadata.dataset_id,
+            format=recording.metadata.file_format,
+            channels=recording.metadata.channel_count,
+            sampling_rate=recording.metadata.sampling_rate_hz,
+            duration_seconds=recording.metadata.duration_seconds,
+            channel_names=recording.metadata.channel_names,
+        ),
+    )
+
+
 def _new_id(prefix: str) -> str:
     return f"{prefix}-{uuid4().hex[:12]}"
+
+
+def _store_upload_file(file: UploadFile, destination_directory: Path) -> Path:
+    destination_directory.mkdir(parents=True, exist_ok=True)
+    filename = _safe_filename(file.filename or "uploaded_eeg")
+    destination = _available_upload_path(destination_directory / filename)
+    with destination.open("wb") as destination_file:
+        shutil.copyfileobj(file.file, destination_file)
+    return destination
+
+
+def _safe_filename(filename: str) -> str:
+    return Path(filename).name.replace("\x00", "") or "uploaded_eeg"
+
+
+def _available_upload_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+
+    stem = path.stem
+    suffix = path.suffix
+    parent = path.parent
+    for index in range(1, 10_000):
+        candidate = parent / f"{stem}-{index}{suffix}"
+        if not candidate.exists():
+            return candidate
+    raise HTTPException(status_code=409, detail="Could not allocate upload filename")
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()

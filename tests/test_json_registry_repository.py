@@ -7,6 +7,10 @@ from eeg_core.domain import (
     Experiment,
     Participant,
     Project,
+    Recording,
+    RecordingMetadata,
+    UploadedFile,
+    UploadedFileKind,
 )
 from eeg_io.registry import JsonRegistryRepository
 
@@ -89,3 +93,46 @@ def test_registry_save_updates_existing_records(tmp_path):
         name="Updated",
     )
     assert len(repository.list_projects()) == 1
+
+
+def test_registry_persists_uploaded_files_and_recording(tmp_path):
+    repository = JsonRegistryRepository(tmp_path / "uploads")
+    dataset = Dataset(
+        dataset_id="dataset-001",
+        project_id="project-001",
+        experiment_id="experiment-001",
+        participant_id="participant-001",
+        session_id="session-001",
+    )
+    uploaded_file = UploadedFile(
+        file_id="file-001",
+        dataset_id=dataset.dataset_id,
+        kind=UploadedFileKind.EEG,
+        original_filename="sample_raw.fif",
+        stored_path=str(repository.eeg_directory(dataset.dataset_id) / "sample_raw.fif"),
+        content_type="application/octet-stream",
+        size_bytes=123,
+        checksum_sha256="abc123",
+    )
+    recording = Recording(
+        recording_id="recording-001",
+        dataset_id=dataset.dataset_id,
+        file_id=uploaded_file.file_id,
+        metadata=RecordingMetadata(
+            dataset_id=dataset.dataset_id,
+            file_format="fif",
+            channel_count=8,
+            sampling_rate_hz=256,
+            duration_seconds=4,
+            channel_names=["Fp1", "Fp2"],
+        ),
+    )
+
+    repository.save_dataset(dataset)
+    repository.save_uploaded_file(uploaded_file)
+    repository.save_recording(recording)
+
+    assert repository.list_uploaded_files(dataset.dataset_id) == [uploaded_file]
+    assert repository.get_recording(dataset.dataset_id) == recording
+    assert repository.uploaded_files_path(dataset.dataset_id).is_file()
+    assert repository.recording_path(dataset.dataset_id).is_file()

@@ -123,6 +123,20 @@ The API should use repository functions rather than reading or writing these fil
 
 Phase 1 can use JSON metadata files before introducing a database. The API should hide this detail behind repository/storage functions so a later database migration does not change route behavior.
 
+EEG uploads additionally create:
+
+```text
+data/
+  raw/
+    uploads/
+      datasets/
+        {dataset_id}/
+          uploaded_files.json
+          recording.json
+          eeg/
+            {original_filename}
+```
+
 ## Completion Criteria
 
 - A dataset can be created through the API.

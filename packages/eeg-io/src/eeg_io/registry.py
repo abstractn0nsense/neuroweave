@@ -10,6 +10,10 @@ from eeg_core.domain import (
     Experiment,
     Participant,
     Project,
+    Recording,
+    UploadedFile,
+    UploadedFileKind,
+    recording_metadata_from_dict,
 )
 
 
@@ -131,6 +135,11 @@ class JsonRegistryRepository:
         _write_json(self.dataset_metadata_path(dataset.dataset_id), asdict(dataset))
         return dataset
 
+    def update_dataset(self, dataset: Dataset) -> Dataset:
+        if not self.dataset_metadata_path(dataset.dataset_id).exists():
+            raise JsonRegistryError(f"Dataset not found: {dataset.dataset_id}")
+        return self.save_dataset(dataset)
+
     def list_datasets(self, project_id: str | None = None) -> list[Dataset]:
         self.initialize()
         datasets = [
@@ -158,6 +167,55 @@ class JsonRegistryRepository:
 
     def dataset_metadata_path(self, dataset_id: str) -> Path:
         return self.dataset_directory(dataset_id) / "metadata.json"
+
+    def save_uploaded_file(self, uploaded_file: UploadedFile) -> UploadedFile:
+        self.save_dataset_files_directory(uploaded_file.dataset_id)
+        files = _upsert_by_id(
+            self.list_uploaded_files(uploaded_file.dataset_id, initialize=False),
+            asdict(uploaded_file),
+            "file_id",
+        )
+        _write_json(self.uploaded_files_path(uploaded_file.dataset_id), files)
+        return uploaded_file
+
+    def list_uploaded_files(
+        self,
+        dataset_id: str,
+        initialize: bool = True,
+    ) -> list[UploadedFile] | list[JsonObject]:
+        path = self.uploaded_files_path(dataset_id)
+        if not path.exists():
+            if initialize:
+                self.save_dataset_files_directory(dataset_id)
+                _write_json(path, [])
+            return []
+
+        files = _read_json_list(path)
+        if not initialize:
+            return files
+        return [_uploaded_file_from_json(item) for item in files]
+
+    def save_recording(self, recording: Recording) -> Recording:
+        self.save_dataset_files_directory(recording.dataset_id)
+        _write_json(self.recording_path(recording.dataset_id), asdict(recording))
+        return recording
+
+    def get_recording(self, dataset_id: str) -> Recording | None:
+        path = self.recording_path(dataset_id)
+        if not path.exists():
+            return None
+        return _recording_from_json(_read_json_object(path))
+
+    def save_dataset_files_directory(self, dataset_id: str) -> None:
+        self.dataset_directory(dataset_id).mkdir(parents=True, exist_ok=True)
+        self.eeg_directory(dataset_id).mkdir(parents=True, exist_ok=True)
+        self.events_directory(dataset_id).mkdir(parents=True, exist_ok=True)
+
+    def uploaded_files_path(self, dataset_id: str) -> Path:
+        return self.dataset_directory(dataset_id) / "uploaded_files.json"
+
+    def recording_path(self, dataset_id: str) -> Path:
+        return self.dataset_directory(dataset_id) / "recording.json"
 
 
 def _project_from_json(data: JsonObject) -> Project:
@@ -203,6 +261,28 @@ def _dataset_from_json(data: JsonObject) -> Dataset:
         recording_id=data.get("recording_id"),
         event_log_id=data.get("event_log_id"),
         metadata=dict(data.get("metadata", {})),
+    )
+
+
+def _uploaded_file_from_json(data: JsonObject) -> UploadedFile:
+    return UploadedFile(
+        file_id=str(data["file_id"]),
+        dataset_id=str(data["dataset_id"]),
+        kind=UploadedFileKind(data["kind"]),
+        original_filename=str(data["original_filename"]),
+        stored_path=str(data["stored_path"]),
+        content_type=data.get("content_type"),
+        size_bytes=data.get("size_bytes"),
+        checksum_sha256=data.get("checksum_sha256"),
+    )
+
+
+def _recording_from_json(data: JsonObject) -> Recording:
+    return Recording(
+        recording_id=str(data["recording_id"]),
+        dataset_id=str(data["dataset_id"]),
+        file_id=str(data["file_id"]),
+        metadata=recording_metadata_from_dict(data["metadata"]),
     )
 
 

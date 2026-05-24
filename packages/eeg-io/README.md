@@ -26,3 +26,4 @@ Phase 1 registry contract:
 - `save_project`, `save_experiment`, `save_participant`, `save_dataset`: upsert domain records.
 - `list_*` and `get_*`: read records without exposing the on-disk JSON layout to API routes.
 - `eeg_directory(dataset_id)` and `events_directory(dataset_id)`: resolve upload targets under a dataset folder.
+- `save_uploaded_file` and `save_recording`: persist uploaded file metadata and extracted EEG recording metadata for a dataset.
