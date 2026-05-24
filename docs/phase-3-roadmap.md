@@ -505,6 +505,10 @@ before closing the early phase.
 Purpose: turn a validated epoch run into an actual `epochs.fif` artifact while
 preserving the same durable worker behavior as preprocessing.
 
+Status: implemented with a local epoch worker, spawned MNE execution, completed
+run provenance, `epochs.fif`, `epoch_summary.json`, `condition_counts.json`,
+`drop_log.json`, and `artifact_manifest.json`.
+
 Implementation steps:
 
 1. Add epoch execution code to `packages/eeg-processing/src/eeg_processing/epoching.py`.

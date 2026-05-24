@@ -48,7 +48,12 @@ from eeg_core.domain import (  # noqa: E402
     ValidationSeverity,
     validate_ingestion_dataset,
 )
-from eeg_processing import PreprocessingError, run_preprocessing_job  # noqa: E402
+from eeg_processing import (  # noqa: E402
+    EpochingError,
+    PreprocessingError,
+    run_epoching_job,
+    run_preprocessing_job,
+)
 from eeg_processing.epoching import SUPPORTED_CONDITION_FIELDS  # noqa: E402
 from eeg_io.datasets import find_eeg_file_by_id, list_eeg_files  # noqa: E402
 from eeg_io.event_logs import (  # noqa: E402
@@ -149,6 +154,54 @@ class LocalPreprocessingWorker:
 
 
 preprocessing_worker = LocalPreprocessingWorker()
+
+
+class LocalEpochWorker:
+    def __init__(self) -> None:
+        self._queue: Queue[str] = Queue()
+        self._queued_run_ids: set[str] = set()
+        self._lock = Lock()
+        self._thread: Thread | None = None
+
+    def start(self) -> None:
+        with self._lock:
+            if self._thread and self._thread.is_alive():
+                return
+            self._thread = Thread(
+                target=self._run_loop,
+                name="neuroweave-epoch-worker",
+                daemon=True,
+            )
+            self._thread.start()
+
+    def enqueue(self, run_id: str) -> None:
+        self.start()
+        with self._lock:
+            if run_id in self._queued_run_ids:
+                return
+            self._queued_run_ids.add(run_id)
+            self._queue.put(run_id)
+
+    def recover(self) -> None:
+        for run in run_repository.list_epoch_runs():
+            if run.status in {
+                EpochRunStatus.PENDING,
+                EpochRunStatus.RUNNING,
+            }:
+                self.enqueue(run.run_id)
+
+    def _run_loop(self) -> None:
+        while True:
+            run_id = self._queue.get()
+            try:
+                _execute_epoch_run(run_id)
+            finally:
+                with self._lock:
+                    self._queued_run_ids.discard(run_id)
+                self._queue.task_done()
+
+
+epoch_worker = LocalEpochWorker()
 
 
 class HealthResponse(BaseModel):
@@ -392,7 +445,9 @@ class ExperimentsResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     preprocessing_worker.start()
+    epoch_worker.start()
     preprocessing_worker.recover()
+    epoch_worker.recover()
     yield
 
 
@@ -908,6 +963,7 @@ def create_epoch_run(
         warnings=config_warnings,
     )
     run_repository.save_epoch_run(run)
+    epoch_worker.enqueue(run_id)
     return _epoch_run_response(run)
 
 
@@ -1113,6 +1169,125 @@ def _epoch_input_provenance(
         "recording_id": recording.recording_id if recording is not None else None,
         "input_channel_count": recording.metadata.channel_count
         if recording is not None
+        else None,
+    }
+
+
+def _epoch_completed_provenance(
+    run: EpochRun,
+    output_path: Path,
+    processing_metadata: dict,
+) -> dict[str, str | int | float | bool | None]:
+    diagnostics_metadata = _write_epoch_diagnostics(
+        output_directory=output_path.parent,
+        processing_metadata=processing_metadata,
+        run=run,
+    )
+    manifest_metadata = _write_artifact_manifest(
+        output_directory=output_path.parent,
+        artifacts=[
+            _artifact_manifest_entry(
+                logical_name="epochs",
+                path=output_path,
+                artifact_type="primary_fif",
+                output_directory=output_path.parent,
+            ),
+            *[
+                _artifact_manifest_entry(
+                    logical_name=logical_name,
+                    path=Path(str(path_value)),
+                    artifact_type="diagnostic_json",
+                    output_directory=output_path.parent,
+                )
+                for logical_name, path_value in (
+                    ("epoch_summary", diagnostics_metadata.get("epoch_summary_path")),
+                    (
+                        "condition_counts",
+                        diagnostics_metadata.get("condition_counts_path"),
+                    ),
+                    ("drop_log", diagnostics_metadata.get("drop_log_path")),
+                )
+                if isinstance(path_value, str) and Path(path_value).is_file()
+            ],
+        ],
+    )
+    output_size_bytes = output_path.stat().st_size
+    output_checksum_sha256 = _sha256_file(output_path)
+    return {
+        **run.output_metadata,
+        "artifact_root": str(output_path.parent),
+        "primary_artifact_path": str(output_path),
+        "primary_artifact_size_bytes": output_size_bytes,
+        "primary_artifact_checksum_sha256": output_checksum_sha256,
+        "artifact_count": manifest_metadata["artifact_count"],
+        "artifact_manifest_path": manifest_metadata["artifact_manifest_path"],
+        "output_path": str(output_path),
+        "output_size_bytes": output_size_bytes,
+        "output_checksum_sha256": output_checksum_sha256,
+        "output_file_format": processing_metadata["file_format"],
+        "output_channel_count": processing_metadata["channel_count"],
+        "output_sampling_rate_hz": processing_metadata["sampling_rate_hz"],
+        "output_duration_seconds": processing_metadata["duration_seconds"],
+        "mne_version": processing_metadata["mne_version"],
+        "input_preprocessing_run_id": processing_metadata[
+            "input_preprocessing_run_id"
+        ],
+        "condition_count": processing_metadata["condition_count"],
+        "event_count_total": processing_metadata["event_count_total"],
+        "event_count_used": processing_metadata["event_count_used"],
+        "event_count_skipped": processing_metadata["event_count_skipped"],
+        "epoch_count": processing_metadata["epoch_count"],
+        "dropped_epoch_count": processing_metadata["dropped_epoch_count"],
+        **diagnostics_metadata,
+    }
+
+
+def _write_epoch_diagnostics(
+    output_directory: Path,
+    processing_metadata: dict,
+    run: EpochRun,
+) -> dict[str, str | int | float | bool | None]:
+    diagnostics = processing_metadata.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return {
+            "diagnostics_available": False,
+            "diagnostics_file_count": 0,
+        }
+
+    output_directory.mkdir(parents=True, exist_ok=True)
+    files = {
+        "epoch_summary": output_directory / "epoch_summary.json",
+        "condition_counts": output_directory / "condition_counts.json",
+        "drop_log": output_directory / "drop_log.json",
+    }
+    written_paths: dict[str, Path] = {}
+    for key, path in files.items():
+        payload = diagnostics.get(key)
+        if isinstance(payload, (dict, list)):
+            if key == "epoch_summary" and isinstance(payload, dict):
+                payload = {
+                    "run_id": run.run_id,
+                    "dataset_id": run.dataset_id,
+                    **payload,
+                }
+            serializable_payload = (
+                {"entries": payload} if isinstance(payload, list) else payload
+            )
+            _write_json_file(path, serializable_payload)
+            written_paths[key] = path
+
+    return {
+        "diagnostics_available": bool(written_paths),
+        "diagnostics_file_count": len(written_paths),
+        "diagnostics_directory": str(output_directory),
+        "epoch_summary_path": str(written_paths.get("epoch_summary"))
+        if "epoch_summary" in written_paths
+        else None,
+        "condition_counts_path": str(written_paths.get("condition_counts"))
+        if "condition_counts" in written_paths
+        else None,
+        "drop_log_path": str(written_paths.get("drop_log"))
+        if "drop_log" in written_paths
         else None,
     }
 
@@ -1470,11 +1645,188 @@ def _run_preprocessing_subprocess(
     )
 
 
+def _execute_epoch_run(run_id: str) -> None:
+    run = run_repository.get_epoch_run(run_id)
+    if run is None:
+        return
+    if run.status == EpochRunStatus.CANCELLED:
+        return
+    if run.status in {
+        EpochRunStatus.COMPLETED,
+        EpochRunStatus.FAILED,
+    }:
+        return
+    if run.status == EpochRunStatus.CANCELLING:
+        cancelled_run = replace(
+            run,
+            status=EpochRunStatus.CANCELLED,
+            finished_at_utc=_utc_now_iso(),
+            cancel_requested_at_utc=run.cancel_requested_at_utc,
+        )
+        run_repository.save_epoch_run(cancelled_run)
+        return
+
+    preprocessing_run = run_repository.get_preprocessing_run(
+        run.config.preprocessing_run_id
+    )
+    event_log = registry_repository.get_event_log(run.dataset_id)
+    if (
+        preprocessing_run is None
+        or event_log is None
+        or not preprocessing_run.output_path
+        or not run.output_path
+    ):
+        failed_run = replace(
+            run,
+            status=EpochRunStatus.FAILED,
+            finished_at_utc=_utc_now_iso(),
+            errors=["Epoch run is missing preprocessing output or event data."],
+        )
+        run_repository.save_epoch_run(failed_run)
+        return
+
+    running_run = replace(
+        run,
+        status=EpochRunStatus.RUNNING,
+        started_at_utc=_utc_now_iso(),
+    )
+    run_repository.save_epoch_run(running_run)
+
+    try:
+        metadata = _run_epoching_subprocess(
+            run_id=run_id,
+            input_path=preprocessing_run.output_path,
+            output_path=run.output_path,
+            event_log=event_log,
+            config=run.config,
+            preprocessing_run_id=preprocessing_run.run_id,
+        )
+        output_file_path = Path(run.output_path)
+        completed_run = replace(
+            running_run,
+            status=EpochRunStatus.COMPLETED,
+            finished_at_utc=_utc_now_iso(),
+            output_metadata=_epoch_completed_provenance(
+                run=running_run,
+                output_path=output_file_path,
+                processing_metadata=metadata,
+            ),
+            warnings=_dedupe_strings(
+                [
+                    *running_run.warnings,
+                    *[str(warning) for warning in metadata.get("warnings", [])],
+                ]
+            ),
+        )
+        current_run = run_repository.get_epoch_run(run_id)
+        if current_run and current_run.status == EpochRunStatus.CANCELLING:
+            cancelled_run = replace(
+                completed_run,
+                status=EpochRunStatus.CANCELLED,
+                finished_at_utc=_utc_now_iso(),
+                cancel_requested_at_utc=current_run.cancel_requested_at_utc,
+                warnings=_dedupe_strings(
+                    [
+                        *current_run.warnings,
+                        *completed_run.warnings,
+                        "Run cancelled after epoching completed; output was retained.",
+                    ]
+                ),
+            )
+            run_repository.save_epoch_run(cancelled_run)
+        else:
+            run_repository.save_epoch_run(completed_run)
+    except EpochingError as exc:
+        current_run = run_repository.get_epoch_run(run_id)
+        current_warnings = current_run.warnings if current_run else []
+        next_status = (
+            EpochRunStatus.CANCELLED
+            if current_run and current_run.status == EpochRunStatus.CANCELLING
+            else EpochRunStatus.FAILED
+        )
+        failed_run = replace(
+            running_run,
+            status=next_status,
+            finished_at_utc=_utc_now_iso(),
+            cancel_requested_at_utc=(
+                current_run.cancel_requested_at_utc if current_run else None
+            ),
+            warnings=_dedupe_strings([*current_warnings, *exc.processing_warnings]),
+            errors=[str(exc)],
+        )
+        run_repository.save_epoch_run(failed_run)
+
+
+def _run_epoching_subprocess(
+    run_id: str,
+    input_path: str,
+    output_path: str,
+    event_log: EventLog,
+    config: EpochConfig,
+    preprocessing_run_id: str,
+) -> dict:
+    context = get_context("spawn")
+    result_queue = context.Queue()
+    process = context.Process(
+        target=run_epoching_job,
+        args=(
+            input_path,
+            output_path,
+            event_log,
+            config,
+            preprocessing_run_id,
+            result_queue,
+        ),
+    )
+    process.start()
+
+    while process.is_alive():
+        process.join(timeout=0.1)
+        if _is_epoch_cancellation_requested(run_id):
+            process.terminate()
+            process.join(timeout=5)
+            if process.is_alive():
+                process.kill()
+                process.join()
+            raise EpochingError(
+                "Epoching cancelled.",
+                processing_warnings=["Cancellation terminated epoching subprocess."],
+            )
+
+    try:
+        result = result_queue.get_nowait()
+    except Empty as exc:
+        if process.exitcode == 0:
+            raise EpochingError("Epoching subprocess exited without a result.") from exc
+        raise EpochingError(
+            f"Epoching subprocess exited with code {process.exitcode}."
+        ) from exc
+
+    if result.get("status") == "completed":
+        metadata = result.get("metadata")
+        if isinstance(metadata, dict):
+            return metadata
+        raise EpochingError("Epoching subprocess returned invalid metadata.")
+
+    raise EpochingError(
+        str(result.get("error") or "Epoching subprocess failed."),
+        processing_warnings=[str(warning) for warning in result.get("warnings", [])],
+    )
+
+
 def _is_cancellation_requested(run_id: str) -> bool:
     run = run_repository.get_preprocessing_run(run_id)
     return run is not None and run.status in {
         PreprocessingRunStatus.CANCELLING,
         PreprocessingRunStatus.CANCELLED,
+    }
+
+
+def _is_epoch_cancellation_requested(run_id: str) -> bool:
+    run = run_repository.get_epoch_run(run_id)
+    return run is not None and run.status in {
+        EpochRunStatus.CANCELLING,
+        EpochRunStatus.CANCELLED,
     }
 
 

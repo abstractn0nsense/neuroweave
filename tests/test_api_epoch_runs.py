@@ -19,11 +19,21 @@ from eeg_core.domain import (
 from eeg_io.registry import JsonRegistryRepository, JsonRunRepository
 
 
+class FakeEpochWorker:
+    def __init__(self) -> None:
+        self.enqueued_run_ids: list[str] = []
+
+    def enqueue(self, run_id: str) -> None:
+        self.enqueued_run_ids.append(run_id)
+
+
 def _client(tmp_path, monkeypatch) -> TestClient:
     registry = JsonRegistryRepository(tmp_path / "uploads")
     runs = JsonRunRepository(tmp_path / "runs")
+    worker = FakeEpochWorker()
     monkeypatch.setattr(api_main, "registry_repository", registry)
     monkeypatch.setattr(api_main, "run_repository", runs)
+    monkeypatch.setattr(api_main, "epoch_worker", worker)
     monkeypatch.setattr(api_main, "EPOCHS_DIR", tmp_path / "epochs")
     return TestClient(api_main.app)
 
@@ -168,6 +178,7 @@ def test_create_epoch_run_persists_pending_run(tmp_path, monkeypatch):
     assert list_response.status_code == 200
     assert list_response.json()["runs"] == [payload]
     assert len(api_main.run_repository.list_preprocessing_runs("dataset-001")) == 1
+    assert api_main.epoch_worker.enqueued_run_ids == [payload["run_id"]]
 
 
 def test_create_epoch_run_requires_existing_dataset(tmp_path, monkeypatch):

@@ -3,6 +3,8 @@ from pathlib import Path
 from typing import Any
 
 from eeg_core.domain import PreprocessingConfig
+from eeg_core.domain import EpochConfig, EventLog
+from eeg_processing.epoching import EpochingError, epoch_preprocessed_eeg
 from eeg_processing.preprocessing import PreprocessingError, preprocess_raw_eeg
 
 
@@ -32,6 +34,41 @@ def run_preprocessing_job(
             {
                 "status": "failed",
                 "error": f"Preprocessing subprocess failed: {exc}",
+                "warnings": [],
+            }
+        )
+
+
+def run_epoching_job(
+    input_path: str,
+    output_path: str,
+    event_log: EventLog,
+    config: EpochConfig,
+    preprocessing_run_id: str,
+    result_queue: Queue,
+) -> None:
+    try:
+        metadata = epoch_preprocessed_eeg(
+            input_path=Path(input_path),
+            output_path=Path(output_path),
+            event_log=event_log,
+            config=config,
+            preprocessing_run_id=preprocessing_run_id,
+        )
+        result_queue.put({"status": "completed", "metadata": metadata})
+    except EpochingError as exc:
+        result_queue.put(
+            {
+                "status": "failed",
+                "error": str(exc),
+                "warnings": exc.processing_warnings,
+            }
+        )
+    except BaseException as exc:
+        result_queue.put(
+            {
+                "status": "failed",
+                "error": f"Epoching subprocess failed: {exc}",
                 "warnings": [],
             }
         )
