@@ -95,7 +95,7 @@ def _seed_epochable_dataset(tmp_path) -> PreprocessingRun:
         / "processed"
         / "dataset-001"
         / "preprocess-001"
-        / "raw_preprocessed.fif"
+        / "raw_preprocessed_raw.fif"
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile("tests/fixtures/eeg/sample_resting_raw.fif", output_path)
@@ -159,6 +159,7 @@ def test_epoch_worker_completes_run_and_writes_artifacts(tmp_path, monkeypatch):
     assert payload["finished_at_utc"] is not None
     assert payload["errors"] == []
     assert Path(payload["output_path"]).is_file()
+    assert Path(payload["output_path"]).name == "epochs-epo.fif"
     metadata = payload["output_metadata"]
     assert metadata["artifact_root"] == str(Path(payload["output_path"]).parent)
     assert metadata["primary_artifact_path"] == payload["output_path"]
@@ -279,7 +280,7 @@ def test_epoch_diagnostics_summarize_drop_reasons(tmp_path, monkeypatch):
 
     metadata = epoch_preprocessed_eeg(
         input_path=raw_path,
-        output_path=tmp_path / "epochs" / "epochs.fif",
+        output_path=tmp_path / "epochs" / "epochs-epo.fif",
         event_log=event_log,
         config=EpochConfig(**_epoch_payload(reject_eeg_uv=500.0)),
         preprocessing_run_id=preprocessing_run.run_id,
@@ -324,7 +325,7 @@ def test_epoch_worker_recovers_pending_runs(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     _seed_epochable_dataset(tmp_path)
     run_id = "epoch-recovered"
-    output_path = tmp_path / "epochs" / "dataset-001" / run_id / "epochs.fif"
+    output_path = tmp_path / "epochs" / "dataset-001" / run_id / "epochs-epo.fif"
     preprocessing_run = api_main.run_repository.get_preprocessing_run("preprocess-001")
     event_log = api_main.registry_repository.get_event_log("dataset-001")
     recording = api_main.registry_repository.get_recording("dataset-001")

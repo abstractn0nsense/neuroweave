@@ -75,6 +75,12 @@ from eeg_io.registry import JsonRegistryRepository, JsonRunRepository  # noqa: E
 from eeg_io.readers import EegMetadataReadError, read_eeg_metadata  # noqa: E402
 
 
+RAW_PREPROCESSED_FILENAME = "raw_preprocessed_raw.fif"
+LEGACY_RAW_PREPROCESSED_FILENAME = "raw_preprocessed.fif"
+EPOCHS_FILENAME = "epochs-epo.fif"
+LEGACY_EPOCHS_FILENAME = "epochs.fif"
+
+
 def _path_from_env(name: str, default: Path) -> Path:
     value = os.environ.get(name)
     if not value:
@@ -83,7 +89,7 @@ def _path_from_env(name: str, default: Path) -> Path:
 
 
 def _preprocessing_output_path(dataset_id: str, run_id: str) -> Path:
-    return PROCESSED_DIR / dataset_id / run_id / "raw_preprocessed.fif"
+    return PROCESSED_DIR / dataset_id / run_id / RAW_PREPROCESSED_FILENAME
 
 
 def _epoch_output_directory(dataset_id: str, run_id: str) -> Path:
@@ -91,7 +97,7 @@ def _epoch_output_directory(dataset_id: str, run_id: str) -> Path:
 
 
 def _epoch_output_path(dataset_id: str, run_id: str) -> Path:
-    return _epoch_output_directory(dataset_id, run_id) / "epochs.fif"
+    return _epoch_output_directory(dataset_id, run_id) / EPOCHS_FILENAME
 
 
 def _erp_output_directory(dataset_id: str, run_id: str) -> Path:
@@ -1425,9 +1431,12 @@ def _epoch_input_provenance(
     event_log: EventLog | None,
     recording: Recording | None,
 ) -> dict[str, str | int | float | bool | None]:
+    input_path = _resolve_preprocessing_output_path(preprocessing_run)
     return {
         "input_preprocessing_run_id": preprocessing_run.run_id,
-        "input_preprocessed_path": preprocessing_run.output_path,
+        "input_preprocessed_path": str(input_path)
+        if input_path is not None
+        else preprocessing_run.output_path,
         "input_sampling_rate_hz": _epoch_output_sampling_rate_hz(
             preprocessing_run=preprocessing_run,
             recording=recording,
@@ -1448,9 +1457,12 @@ def _epoch_input_provenance(
 def _erp_input_provenance(
     epoch_run: EpochRun,
 ) -> dict[str, str | int | float | bool | None]:
+    input_path = _resolve_epoch_output_path(epoch_run)
     return {
         "input_epoch_run_id": epoch_run.run_id,
-        "input_epochs_path": epoch_run.output_path,
+        "input_epochs_path": str(input_path)
+        if input_path is not None
+        else epoch_run.output_path,
         "input_preprocessing_run_id": epoch_run.output_metadata.get(
             "input_preprocessing_run_id"
         ),
@@ -1965,6 +1977,43 @@ def _artifact_root_for_run(run_id: str) -> Path | None:
     return None
 
 
+def _resolve_preprocessing_output_path(run: PreprocessingRun) -> Path | None:
+    if not run.output_path:
+        return None
+    path = Path(run.output_path)
+    return _first_existing_path(
+        [
+            path,
+            path.with_name(RAW_PREPROCESSED_FILENAME),
+            path.with_name(LEGACY_RAW_PREPROCESSED_FILENAME),
+        ]
+    )
+
+
+def _resolve_epoch_output_path(run: EpochRun) -> Path | None:
+    if not run.output_path:
+        return None
+    path = Path(run.output_path)
+    return _first_existing_path(
+        [
+            path,
+            path.with_name(EPOCHS_FILENAME),
+            path.with_name(LEGACY_EPOCHS_FILENAME),
+        ]
+    )
+
+
+def _first_existing_path(paths: list[Path]) -> Path | None:
+    seen: set[Path] = set()
+    for path in paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        if path.is_file():
+            return path
+    return None
+
+
 def _artifact_manifest_entry(
     logical_name: str,
     path: Path,
@@ -2215,9 +2264,12 @@ def _execute_epoch_run(run_id: str) -> None:
     run_repository.save_epoch_run(running_run)
 
     try:
+        input_path = _resolve_preprocessing_output_path(preprocessing_run)
+        if input_path is None:
+            raise EpochingError("Preprocessing output file was not found.")
         metadata = _run_epoching_subprocess(
             run_id=run_id,
-            input_path=preprocessing_run.output_path,
+            input_path=str(input_path),
             output_path=run.output_path,
             event_log=event_log,
             config=run.config,
@@ -2377,9 +2429,12 @@ def _execute_erp_run(run_id: str) -> None:
 
     try:
         output_path = Path(run.output_path)
+        epochs_path = _resolve_epoch_output_path(epoch_run)
+        if epochs_path is None:
+            raise ErpError("Epoch output file was not found.")
         metadata = _run_erp_subprocess(
             run_id=run_id,
-            epochs_path=epoch_run.output_path,
+            epochs_path=str(epochs_path),
             output_directory=str(output_path.parent),
             config=run.config,
         )
@@ -2590,7 +2645,7 @@ def _validate_epoch_config(
             errors.append("Preprocessing run must be completed before epoching.")
         if not preprocessing_run.output_path:
             errors.append("Preprocessing run is missing an output path.")
-        elif not Path(preprocessing_run.output_path).is_file():
+        elif _resolve_preprocessing_output_path(preprocessing_run) is None:
             errors.append("Preprocessing output file was not found.")
 
     if event_log is None or not event_log.events:
@@ -2675,7 +2730,7 @@ def _validate_erp_config(
             errors.append("Epoch run must be completed before ERP generation.")
         if not epoch_run.output_path:
             errors.append("Epoch run is missing an output path.")
-        elif not Path(epoch_run.output_path).is_file():
+        elif _resolve_epoch_output_path(epoch_run) is None:
             errors.append("Epoch output file was not found.")
 
     if config.method != "mean":
@@ -2846,14 +2901,38 @@ def _available_upload_path(path: Path) -> Path:
     if not path.exists():
         return path
 
-    stem = path.stem
-    suffix = path.suffix
     parent = path.parent
     for index in range(1, 10_000):
-        candidate = parent / f"{stem}-{index}{suffix}"
+        candidate = parent / _indexed_upload_filename(path.name, index)
         if not candidate.exists():
             return candidate
     raise HTTPException(status_code=409, detail="Could not allocate upload filename")
+
+
+def _indexed_upload_filename(filename: str, index: int) -> str:
+    lower_name = filename.lower()
+    for suffix in (
+        "_raw.fif.gz",
+        "raw.fif.gz",
+        "_sss.fif.gz",
+        "_tsss.fif.gz",
+        "_meg.fif.gz",
+        "_eeg.fif.gz",
+        "_ieeg.fif.gz",
+        "_raw.fif",
+        "raw.fif",
+        "_sss.fif",
+        "_tsss.fif",
+        "_meg.fif",
+        "_eeg.fif",
+        "_ieeg.fif",
+    ):
+        if lower_name.endswith(suffix):
+            prefix = filename[: -len(suffix)]
+            return f"{prefix}-{index}{filename[-len(suffix):]}"
+
+    path = Path(filename)
+    return f"{path.stem}-{index}{path.suffix}"
 
 
 def _sha256_file(path: Path) -> str:

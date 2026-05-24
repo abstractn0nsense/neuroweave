@@ -104,7 +104,7 @@ def _seed_dataset(
         / "processed"
         / "dataset-001"
         / "preprocess-001"
-        / "raw_preprocessed.fif"
+        / "raw_preprocessed_raw.fif"
     )
     if preprocessing_output_exists:
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -166,7 +166,7 @@ def test_create_epoch_run_persists_pending_run(tmp_path, monkeypatch):
     assert payload["output_metadata"]["event_count"] == 2
 
     output_path = Path(payload["output_path"])
-    assert output_path.name == "epochs.fif"
+    assert output_path.name == "epochs-epo.fif"
     assert output_path.parent.is_dir()
     assert not output_path.exists()
 

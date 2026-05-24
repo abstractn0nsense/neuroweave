@@ -259,7 +259,7 @@ def test_run_repository_persists_preprocessing_runs(tmp_path):
         started_at_utc="2026-05-24T00:00:00+00:00",
         finished_at_utc="2026-05-24T00:01:00+00:00",
         cancel_requested_at_utc="2026-05-24T00:00:30+00:00",
-        output_path="data/processed/dataset-001/preprocess-001/raw_preprocessed.fif",
+        output_path="data/processed/dataset-001/preprocess-001/raw_preprocessed_raw.fif",
         output_metadata={"sampling_rate_hz": 128.0},
         warnings=["reference unchanged"],
     )
@@ -297,7 +297,7 @@ def test_run_repository_persists_epoch_runs(tmp_path):
         started_at_utc="2026-05-25T00:00:00+00:00",
         finished_at_utc="2026-05-25T00:01:00+00:00",
         cancel_requested_at_utc="2026-05-25T00:00:30+00:00",
-        output_path="data/epochs/dataset-001/epoch-001/epochs.fif",
+        output_path="data/epochs/dataset-001/epoch-001/epochs-epo.fif",
         output_metadata={
             "artifact_root": "data/epochs/dataset-001/epoch-001",
             "condition_count": 2,

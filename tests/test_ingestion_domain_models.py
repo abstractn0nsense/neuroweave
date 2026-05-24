@@ -80,7 +80,7 @@ def test_epoch_run_contract_defaults_to_pending_epoch_run():
             baseline_end_seconds=0.0,
             reject_eeg_uv=150.0,
         ),
-        output_path="data/epochs/dataset-001/epoch-001/epochs.fif",
+        output_path="data/epochs/dataset-001/epoch-001/epochs-epo.fif",
     )
 
     payload = asdict(run)

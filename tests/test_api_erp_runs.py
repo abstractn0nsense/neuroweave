@@ -95,7 +95,7 @@ def _seed_epochable_dataset(tmp_path) -> PreprocessingRun:
         / "processed"
         / "dataset-001"
         / "preprocess-001"
-        / "raw_preprocessed.fif"
+        / "raw_preprocessed_raw.fif"
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile("tests/fixtures/eeg/sample_resting_raw.fif", output_path)
@@ -225,6 +225,7 @@ def test_erp_worker_completes_run_and_writes_evoked_artifacts(tmp_path, monkeypa
     }
     for condition in conditions:
         assert Path(condition["evoked_path"]).is_file()
+        assert Path(condition["evoked_path"]).name.endswith("-ave.fif")
         assert Path(condition["plot_png_path"]).is_file()
         assert Path(condition["plot_svg_path"]).is_file()
         assert condition["plot_status"] == "completed"
@@ -335,7 +336,7 @@ def test_erp_run_rejects_missing_or_failed_epoch_run(tmp_path, monkeypatch):
         ),
         status=EpochRunStatus.FAILED,
         output_path=str(
-            tmp_path / "epochs" / "dataset-001" / "epoch-failed" / "epochs.fif"
+            tmp_path / "epochs" / "dataset-001" / "epoch-failed" / "epochs-epo.fif"
         ),
     )
     api_main.run_repository.save_epoch_run(failed_epoch)
@@ -346,6 +347,34 @@ def test_erp_run_rejects_missing_or_failed_epoch_run(tmp_path, monkeypatch):
     )
     assert failed_response.status_code == 422
     assert "Epoch run must be completed before ERP generation." in failed_response.text
+
+
+def test_erp_config_validation_accepts_legacy_epoch_output(tmp_path, monkeypatch):
+    _client(tmp_path, monkeypatch)
+    legacy_path = tmp_path / "epochs" / "dataset-001" / "epoch-001" / "epochs.fif"
+    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_path.write_bytes(b"placeholder")
+    run = EpochRun(
+        run_id="epoch-001",
+        dataset_id="dataset-001",
+        config=EpochConfig(
+            preprocessing_run_id="preprocess-001",
+            condition_field="trial_type",
+            tmin_seconds=-0.1,
+            tmax_seconds=0.3,
+        ),
+        status=EpochRunStatus.COMPLETED,
+        output_path=str(legacy_path.with_name("epochs-epo.fif")),
+    )
+
+    errors, warnings = api_main._validate_erp_config(
+        config=api_main.ErpConfig(epoch_run_id="epoch-001"),
+        dataset_id="dataset-001",
+        epoch_run=run,
+    )
+
+    assert errors == []
+    assert warnings == []
 
 
 def test_erp_worker_persists_failed_execution(tmp_path, monkeypatch):

@@ -58,10 +58,11 @@ research-tool UI shell.
 
 Deliverables:
 
-- Load `raw_preprocessed.fif` from a completed preprocessing run.
+- Load `raw_preprocessed_raw.fif` from a completed preprocessing run, with legacy
+  fallback for `raw_preprocessed.fif`.
 - Generate MNE events and event IDs from normalized events.
 - Execute `mne.Epochs`.
-- Save `epochs.fif`.
+- Save `epochs-epo.fif`.
 - Save `epoch_summary.json` and `condition_counts.json`.
 - Persist rejection and drop-log summaries.
 - Add UI controls for preprocessing-run selection, condition field selection,
@@ -86,7 +87,7 @@ statistics yet.
 
 Deliverables:
 
-- Condition-level averaged evoked FIF files: `evoked_{condition}.fif`.
+- Condition-level averaged evoked FIF files: `evoked_{condition}-ave.fif`.
 - ERP metadata JSON with channel/time summaries.
 - PNG/SVG plot artifacts and UI preview.
 - Plot failure isolation: ERP or epoch runs stay queryable even if plotting fails.

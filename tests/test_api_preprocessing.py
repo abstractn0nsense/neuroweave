@@ -93,7 +93,7 @@ def _save_preprocessing_run(
         dataset_id=dataset_id,
         config=PreprocessingConfig(reference="average"),
         status=status,
-        output_path=f"data/processed/{dataset_id}/{run_id}/raw_preprocessed.fif",
+        output_path=f"data/processed/{dataset_id}/{run_id}/raw_preprocessed_raw.fif",
     )
     api_main.run_repository.save_preprocessing_run(run)
     return run
@@ -157,11 +157,9 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert payload["started_at_utc"] is not None
     assert payload["finished_at_utc"] is not None
     assert payload["errors"] == []
-    assert any(
-        "does not conform to MNE naming conventions" in warning
-        for warning in payload["warnings"]
-    )
+    assert payload["warnings"] == []
     assert Path(payload["output_path"]).is_file()
+    assert Path(payload["output_path"]).name == "raw_preprocessed_raw.fif"
     metadata = payload["output_metadata"]
     assert metadata["input_file_id"]
     assert metadata["input_original_filename"] == "sample_resting_raw.fif"
@@ -360,7 +358,9 @@ def test_preprocessing_worker_recovers_pending_runs(tmp_path, monkeypatch):
         if uploaded_file.file_id == recording.file_id
     )
     run_id = "preprocess-recovered"
-    output_path = tmp_path / "processed" / "dataset-001" / run_id / "raw_preprocessed.fif"
+    output_path = (
+        tmp_path / "processed" / "dataset-001" / run_id / "raw_preprocessed_raw.fif"
+    )
     run = PreprocessingRun(
         run_id=run_id,
         dataset_id="dataset-001",
@@ -447,10 +447,10 @@ def test_analysis_output_path_helpers_use_configured_roots(tmp_path, monkeypatch
         / "processed-root"
         / "dataset-001"
         / "preprocess-001"
-        / "raw_preprocessed.fif"
+        / "raw_preprocessed_raw.fif"
     )
     assert api_main._epoch_output_path("dataset-001", "epoch-001") == (
-        tmp_path / "epochs-root" / "dataset-001" / "epoch-001" / "epochs.fif"
+        tmp_path / "epochs-root" / "dataset-001" / "epoch-001" / "epochs-epo.fif"
     )
     assert api_main._erp_output_directory("dataset-001", "erp-001") == (
         tmp_path / "erp-root" / "dataset-001" / "erp-001"

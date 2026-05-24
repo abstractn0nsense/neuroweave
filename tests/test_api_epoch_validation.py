@@ -108,13 +108,24 @@ def _validate(config, preprocessing_run, event_log=None, recording=None):
 
 
 def test_epoch_config_validation_accepts_valid_config(tmp_path):
-    output_path = tmp_path / "raw_preprocessed.fif"
+    output_path = tmp_path / "raw_preprocessed_raw.fif"
     output_path.write_bytes(b"placeholder")
 
     errors, warnings = _validate(
         _epoch_config(),
         _preprocessing_run(output_path),
     )
+
+    assert errors == []
+    assert warnings == []
+
+
+def test_epoch_config_validation_accepts_legacy_preprocessing_output(tmp_path):
+    legacy_path = tmp_path / "raw_preprocessed.fif"
+    legacy_path.write_bytes(b"placeholder")
+    run = _preprocessing_run(tmp_path / "raw_preprocessed_raw.fif")
+
+    errors, warnings = _validate(_epoch_config(), run)
 
     assert errors == []
     assert warnings == []
@@ -143,7 +154,7 @@ def test_epoch_config_validation_rejects_dataset_and_input_run_errors(tmp_path):
 
 
 def test_epoch_config_validation_rejects_invalid_window_and_baseline(tmp_path):
-    output_path = tmp_path / "raw_preprocessed.fif"
+    output_path = tmp_path / "raw_preprocessed_raw.fif"
     output_path.write_bytes(b"placeholder")
 
     errors, _ = _validate(
@@ -162,7 +173,7 @@ def test_epoch_config_validation_rejects_invalid_window_and_baseline(tmp_path):
 
 
 def test_epoch_config_validation_rejects_partial_and_reversed_baseline(tmp_path):
-    output_path = tmp_path / "raw_preprocessed.fif"
+    output_path = tmp_path / "raw_preprocessed_raw.fif"
     output_path.write_bytes(b"placeholder")
 
     partial_errors, _ = _validate(
@@ -184,7 +195,7 @@ def test_epoch_config_validation_rejects_partial_and_reversed_baseline(tmp_path)
 
 
 def test_epoch_config_validation_rejects_unknown_condition_and_threshold(tmp_path):
-    output_path = tmp_path / "raw_preprocessed.fif"
+    output_path = tmp_path / "raw_preprocessed_raw.fif"
     output_path.write_bytes(b"placeholder")
 
     errors, _ = _validate(
@@ -197,7 +208,7 @@ def test_epoch_config_validation_rejects_unknown_condition_and_threshold(tmp_pat
 
 
 def test_epoch_config_validation_rejects_no_usable_condition_values(tmp_path):
-    output_path = tmp_path / "raw_preprocessed.fif"
+    output_path = tmp_path / "raw_preprocessed_raw.fif"
     output_path.write_bytes(b"placeholder")
 
     errors, warnings = _validate(
@@ -216,7 +227,7 @@ def test_epoch_config_validation_rejects_no_usable_condition_values(tmp_path):
 
 
 def test_epoch_config_validation_rejects_all_events_out_of_bounds(tmp_path):
-    output_path = tmp_path / "raw_preprocessed.fif"
+    output_path = tmp_path / "raw_preprocessed_raw.fif"
     output_path.write_bytes(b"placeholder")
 
     errors, warnings = _validate(
@@ -238,7 +249,7 @@ def test_epoch_config_validation_rejects_all_events_out_of_bounds(tmp_path):
 
 
 def test_epoch_config_validation_warns_for_partial_out_of_bounds_events(tmp_path):
-    output_path = tmp_path / "raw_preprocessed.fif"
+    output_path = tmp_path / "raw_preprocessed_raw.fif"
     output_path.write_bytes(b"placeholder")
 
     errors, warnings = _validate(
@@ -267,7 +278,7 @@ def test_epoch_config_validation_warns_for_partial_out_of_bounds_events(tmp_path
 
 
 def test_epoch_config_validation_falls_back_to_recording_metadata(tmp_path):
-    output_path = tmp_path / "raw_preprocessed.fif"
+    output_path = tmp_path / "raw_preprocessed_raw.fif"
     output_path.write_bytes(b"placeholder")
     run = replace(_preprocessing_run(output_path), output_metadata={})
 

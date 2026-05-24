@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>NeuroWeave Research Tool Completion Roadmap</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 18mm 16mm;
+    }
+    body {
+      font-family: "Malgun Gothic", "Noto Sans KR", "Segoe UI", Arial, sans-serif;
+      color: #111827;
+      line-height: 1.55;
+      font-size: 10.5pt;
+    }
+    h1 {
+      font-size: 22pt;
+      margin: 0 0 8pt;
+      color: #0f172a;
+    }
+    h2 {
+      font-size: 15pt;
+      margin: 18pt 0 6pt;
+      border-bottom: 1px solid #cbd5e1;
+      padding-bottom: 3pt;
+      color: #111827;
+    }
+    h3 {
+      font-size: 12.5pt;
+      margin: 12pt 0 4pt;
+      color: #1f2937;
+    }
+    p {
+      margin: 0 0 7pt;
+    }
+    ul, ol {
+      margin: 4pt 0 9pt 17pt;
+      padding: 0;
+    }
+    li {
+      margin: 2pt 0;
+    }
+    code {
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 9.5pt;
+      background: #f1f5f9;
+      padding: 1pt 3pt;
+      border-radius: 3px;
+    }
+    .meta {
+      color: #475569;
+      margin-bottom: 18pt;
+    }
+    .callout {
+      border-left: 4px solid #2563eb;
+      background: #eff6ff;
+      padding: 8pt 10pt;
+      margin: 10pt 0;
+    }
+    .diagram {
+      border: 1px solid #cbd5e1;
+      background: #f8fafc;
+      padding: 10pt;
+      margin: 8pt 0 14pt;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 9pt;
+      white-space: pre-wrap;
+    }
+    .page-break {
+      break-before: page;
+    }
+  </style>
+</head>
+<body>
+  <h1>NeuroWeave Research Tool Completion Roadmap</h1>
+  <p class="meta">작성일: 2026-05-25</p>
+
+  <h2>현재 판단</h2>
+  <p>지금까지 만든 것은 "실제 데이터로 끝까지 도는 분석 MVP"이고, 이제부터는 연구용으로 신뢰할 수 있는 툴이 되기 위한 안정화, 재현성, 검증 단계가 필요하다. 기준은 BIDS EEG 구조와 MNE/MNE-BIDS 쪽 관례를 따라가는 것이 맞다.</p>
+  <p>현재 상태는 "실제 공개 EEG 데이터 2종에서 ingestion -&gt; preprocessing -&gt; epoch -&gt; ERP -&gt; comparison까지 끝까지 도는 검증 가능한 프로토타입"이다. 하지만 아직 실제 연구 결론을 내리는 데 바로 쓰기에는 부족하다.</p>
+
+  <h2>현재 코드에서 바로 보이는 수정 필요점</h2>
+  <ul>
+    <li><code>apps/web/src/main.tsx</code>: event log가 mapping 직후에는 state에 들어가지만, 새로고침/재접속 시 <code>/datasets/{id}/events</code>를 다시 fetch하지 않아 UI가 <code>Unmapped</code>로 보인다.</li>
+    <li><code>apps/api/main.py</code>: CORS allowlist가 <code>5173/5174</code>에 고정되어 있어 임시 dev port에서 UI가 API unavailable로 보인다.</li>
+    <li><code>apps/api/main.py</code> worker subprocess: 실제 데이터 검증 때 Windows spawn/stdin 이슈 때문에 direct monkeypatch가 필요했다. 연구용이면 CLI entrypoint 기반 worker가 필요하다.</li>
+    <li><code>packages/eeg-io</code>: BIDS sidecar를 읽지 않아 OpenNeuro <code>.set</code>에서 channel type warning이 발생한다.</li>
+    <li><code>packages/eeg-io/src/eeg_io/event_logs.py</code>: BIDS <code>events.tsv</code>의 <code>n/a</code>, row filtering, condition source preset이 부족하다.</li>
+    <li>warnings는 지금 string 중심이다. 연구용이면 severity/code/impact/action이 있는 structured warning이 필요하다.</li>
+    <li>Phase 3 artifact naming/warning cleanup 변경은 아직 로컬 변경 상태다. 업로드 전이면 먼저 commit/push가 필요하다.</li>
+  </ul>
+
+  <h2>전체 파이프라인</h2>
+  <div class="diagram">Early: 연구용 기반 안정화
+  - BIDS ingest
+  - UI hydration
+  - worker hardening
+        |
+        v
+Middle: 분석 워크플로우 확장
+  - QC dashboard
+  - batch
+  - ERP/stat prep
+        |
+        v
+Late: 연구급 검증/재현성/배포
+  - validation suite
+  - audit
+  - export
+  - collaboration</div>
+
+  <h2>초반: 구조 안정화 중심</h2>
+  <p>목표: 지금 MVP를 "실제 공개 데이터 여러 개를 반복해서 안전하게 처리하는 기반"으로 바꾼다.</p>
+
+  <h3>1. <code>ResearchDataset</code> 계층 추가</h3>
+  <p>기존 <code>Dataset</code>, <code>Recording</code>, <code>EventLog</code>, <code>Run</code>은 유지하되, source/provenance 계층을 분리한다.</p>
+  <ul>
+    <li><code>SourceDataset</code>: source name, URL, DOI, license, downloaded file manifest</li>
+    <li><code>BidsSidecarSet</code>: eeg_json, channels_tsv, electrodes_tsv, coordsystem_json, events_tsv</li>
+    <li><code>RecordingMetadata</code>: 기존 channel names 외에 channel types, bads, line frequency, reference, units 추가</li>
+    <li>기존 JSON registry는 깨지지 않게 optional field로 확장</li>
+  </ul>
+
+  <h3>2. BIDS sidecar ingest</h3>
+  <p>새 모듈 권장:</p>
+  <ul>
+    <li><code>packages/eeg-io/src/eeg_io/bids_sidecars.py</code></li>
+    <li><code>read_bids_sidecars(base_path)</code></li>
+    <li><code>apply_channel_sidecar(raw, channels_tsv)</code></li>
+    <li><code>normalize_bids_events(events_tsv, preset)</code></li>
+  </ul>
+  <p>처리 목표:</p>
+  <ul>
+    <li><code>_channels.tsv</code>의 <code>type</code>, <code>status</code>, <code>units</code> 반영</li>
+    <li><code>_eeg.json</code>의 <code>PowerLineFrequency</code>, <code>EEGReference</code>, sampling metadata 저장</li>
+    <li>OpenNeuro <code>.set</code> warning을 "자동 보정됨/metadata 부족"으로 구조화</li>
+  </ul>
+
+  <h3>3. Event mapping v2</h3>
+  <p>현재 mapping은 column 매핑만 있다. 연구용은 filtering과 condition derivation이 필요하다.</p>
+  <ul>
+    <li><code>row_filter</code>: <code>trial_type == stimulus</code></li>
+    <li><code>condition_column</code>: <code>value</code>, <code>trial_type</code>, <code>stim_file</code> 등</li>
+    <li><code>null_values</code>: <code>["n/a", "NA", ""]</code></li>
+    <li>preset: <code>psychopy</code>, <code>bids_events</code>, <code>eeglab_annotations</code></li>
+    <li>normalized event에는 <code>raw_row</code>, <code>source_file</code>, <code>source_columns</code> 일부 보존</li>
+  </ul>
+
+  <h3>4. UI hydration 수정</h3>
+  <p>active dataset 변경 시 다음을 한 번에 로드하는 <code>loadDatasetContext(datasetId)</code>를 만든다.</p>
+  <ul>
+    <li>dataset detail</li>
+    <li><code>/events</code></li>
+    <li><code>/validation</code></li>
+    <li>preprocessing runs</li>
+    <li>epoch runs</li>
+    <li>ERP runs</li>
+    <li>latest completed run 자동 선택</li>
+  </ul>
+  <p>이걸 먼저 고치면 OpenNeuro처럼 "backend는 mapped인데 UI는 unmapped"인 문제가 사라진다.</p>
+
+  <h3>5. Worker 구조 교체</h3>
+  <p>현재 multiprocessing spawn을 API 내부 함수로 직접 물고 있다. 연구용은 분리해야 한다.</p>
+  <ul>
+    <li><code>python -m eeg_processing.worker_cli preprocessing --payload payload.json</code></li>
+    <li><code>epoching</code>, <code>erp</code>도 같은 구조</li>
+    <li>API는 payload JSON 작성 -&gt; subprocess 실행 -&gt; result JSON 읽기</li>
+    <li>stdin/pickle 의존 제거</li>
+    <li>cancellation은 process id + run status로 관리</li>
+  </ul>
+
+  <h3>6. Structured warning model</h3>
+  <p>기존 <code>warnings: list[str]</code>는 유지하되, 새 <code>diagnostics.warnings[]</code>를 추가한다.</p>
+  <ul>
+    <li><code>code</code>: <code>mne_unknown_channel_types</code></li>
+    <li><code>severity</code>: <code>info | warning | risk | error</code></li>
+    <li><code>source</code>: <code>mne | bids | validation | worker</code></li>
+    <li><code>impact</code></li>
+    <li><code>suggested_action</code></li>
+    <li>UI는 raw warning 대신 이 구조를 우선 표시</li>
+  </ul>
+
+  <h2 class="page-break">중반: 연구 워크플로우 확장</h2>
+  <p>목표: 단일 파일 데모를 넘어서 "분석 검토가 가능한 워크벤치"로 만든다.</p>
+  <ul>
+    <li>QC dashboard: preprocessing, epoch, ERP 품질 지표를 단계별로 보여준다.</li>
+    <li>Batch/multi-run support: subject/session/run grouping, 여러 run 생성, failed run retry.</li>
+    <li>Analysis config versioning: config hash, parent run id chain, artifact manifest schema version.</li>
+    <li>ERP comparison 확장: channel/ROI, time window, mean/peak/latency metric, per-condition metric table.</li>
+    <li>Export bundle: <code>analysis_report.json</code>, figures, artifact manifest, source/provenance, config snapshots.</li>
+  </ul>
+
+  <h3>초반과의 호환성 유의점</h3>
+  <ul>
+    <li><code>output_metadata</code>는 compact summary만 유지하고, 큰 QC는 별도 JSON artifact로 저장</li>
+    <li>legacy <code>raw_preprocessed.fif</code>, <code>epochs.fif</code>, <code>evoked_*.fif</code> fallback은 최소 한두 phase 유지</li>
+    <li>API response shape는 optional field 추가 방식으로만 확장</li>
+  </ul>
+
+  <h2>후반: 연구급 완성</h2>
+  <p>목표: "결과를 논문/프로젝트 분석에 쓸 수 있다"고 말할 수 있는 수준으로 올린다.</p>
+  <ul>
+    <li>통계 Phase: subject-level table, paired/unpaired test, permutation test, multiple comparison correction, effect size, confidence interval.</li>
+    <li>Reproducibility: full run graph, source file checksum, package versions, OS/Python/MNE version, one-click rerun.</li>
+    <li>Validation suite: PhysioNet, OpenNeuro <code>.set</code>, EDF/BDF/BrainVision 샘플 고정 smoke, expected warning snapshot, visual regression.</li>
+    <li>Data governance: local-only mode, PHI/subject label warning, delete/export project.</li>
+    <li>Collaboration: project archive, shareable report, immutable completed analysis snapshot.</li>
+  </ul>
+
+  <h2>추천 순서</h2>
+  <ol>
+    <li>지금 로컬 A/B/C 안정화 변경 commit/push</li>
+    <li>UI hydration + CORS env화</li>
+    <li>worker CLI 분리</li>
+    <li>BIDS sidecar ingest</li>
+    <li>BIDS event mapping/filter preset</li>
+    <li>structured warning/diagnostics</li>
+    <li>QC dashboard</li>
+    <li>batch/multi-subject</li>
+    <li>statistics/export/reproducibility</li>
+  </ol>
+
+  <h2>결론</h2>
+  <div class="callout">
+    현실적으로, 초반 안정화까지 끝나면 "실제 연구 데이터 탐색용 툴", 중반까지 가면 "내부 분석 워크벤치", 후반까지 가야 "연구 결과 산출에 쓸 수 있는 툴"이라고 보는 것이 맞다.
+  </div>
+</body>
+</html>

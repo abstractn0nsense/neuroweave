@@ -69,7 +69,7 @@ def generate_erps_from_epochs(
 
                 evoked = condition_epochs.average(method=config.method)
                 safe_condition = safe_condition_filename(condition)
-                evoked_path = output_directory / f"evoked_{safe_condition}.fif"
+                evoked_path = output_directory / f"evoked_{safe_condition}-ave.fif"
                 evoked.save(evoked_path, overwrite=True, verbose=False)
                 plot_metadata = _write_evoked_plot(
                     evoked=evoked,
@@ -212,12 +212,12 @@ def generate_comparison_summary(
     with python_warnings.catch_warnings():
         python_warnings.simplefilter("ignore", RuntimeWarning)
         evoked_a = mne.read_evokeds(
-            str(condition_a["evoked_path"]),
+            str(_resolve_evoked_path(condition_a["evoked_path"])),
             condition=0,
             verbose=False,
         )
         evoked_b = mne.read_evokeds(
-            str(condition_b["evoked_path"]),
+            str(_resolve_evoked_path(condition_b["evoked_path"])),
             condition=0,
             verbose=False,
         )
@@ -291,6 +291,23 @@ def _metadata_conditions_by_label(erp_metadata: dict[str, Any]) -> dict[str, dic
     if not conditions:
         raise ComparisonError("ERP metadata does not contain usable conditions.")
     return conditions
+
+
+def _resolve_evoked_path(path_value: str) -> Path:
+    path = Path(path_value)
+    if path.is_file():
+        return path
+    if path.name.startswith("evoked_") and path.name.endswith(".fif"):
+        stem = path.name[:-4]
+        candidates = []
+        if not stem.endswith("-ave"):
+            candidates.append(path.with_name(f"{stem}-ave.fif"))
+        if stem.endswith("-ave"):
+            candidates.append(path.with_name(f"{stem[:-4]}.fif"))
+        for candidate in candidates:
+            if candidate.is_file():
+                return candidate
+    return path
 
 
 def _validate_comparison_window(times: Any, config: ComparisonConfig) -> None:
