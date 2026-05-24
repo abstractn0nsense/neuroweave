@@ -98,6 +98,7 @@ def test_erp_run_contract_defaults_to_pending_erp_run():
         config=ErpConfig(
             epoch_run_id="epoch-001",
             conditions=["target"],
+            plot_mode="gfp",
         ),
         output_path="data/erp/dataset-001/erp-001/erp_metadata.json",
     )
@@ -109,6 +110,7 @@ def test_erp_run_contract_defaults_to_pending_erp_run():
     assert payload["schema_version"] == 1
     assert payload["config"]["epoch_run_id"] == "epoch-001"
     assert payload["config"]["conditions"] == ["target"]
+    assert payload["config"]["plot_mode"] == "gfp"
 
 
 def test_validation_report_exposes_errors_and_warnings():

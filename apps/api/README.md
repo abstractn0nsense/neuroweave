@@ -70,7 +70,9 @@ Phase 3 analysis output roots are configurable with `NEUROWEAVE_EPOCHS_DIR` and 
 
 `POST /datasets/{dataset_id}/epoch-runs` creates a validation-backed `pending` epoch run from a completed preprocessing run, then queues MNE epoch execution in the local epoch worker. Completed epoch runs write `epochs.fif`, `epoch_summary.json`, `condition_counts.json`, `drop_log.json`, and `artifact_manifest.json` under `data/epochs/{dataset_id}/{run_id}/`. Epoch diagnostics include versioned summary metadata, UI-oriented condition counts, timing/baseline details, and deterministic drop reason summaries; failed runs remain queryable without diagnostics paths.
 
-`POST /datasets/{dataset_id}/erp-runs` creates a `pending` ERP run from a completed epoch run, then queues condition-level evoked generation in the local ERP worker. Completed ERP runs write `evoked_{condition}.fif`, `erp_metadata.json`, and `artifact_manifest.json` under `data/erp/{dataset_id}/{run_id}/`. ERP metadata stores the original condition labels, nave, channel/time bounds, sampling rate, and compact peak/GFP summaries in microvolts.
+`POST /datasets/{dataset_id}/erp-runs` creates a `pending` ERP run from a completed epoch run, then queues condition-level evoked generation in the local ERP worker. Completed ERP runs write `evoked_{condition}.fif`, `erp_{condition}.png`, `erp_{condition}.svg`, `erp_metadata.json`, and `artifact_manifest.json` under `data/erp/{dataset_id}/{run_id}/`. ERP metadata stores the original condition labels, nave, channel/time bounds, sampling rate, compact peak/GFP summaries in microvolts, and plot status. Plot failures are captured as warnings while the ERP run remains completed and queryable if evoked generation succeeds.
+
+Artifact files are served through `GET /artifacts/{run_id}/{filename}` with run artifact-root validation instead of exposing unrestricted filesystem paths.
 
 Preprocessing runs also persist captured MNE/Python warnings in `warnings`. Failed runs persist `errors`, retain input provenance, and remain available through the run lookup endpoints.
 

@@ -228,6 +228,8 @@ class ErpConfig:
     conditions: list[str] | None = None
     picks: list[str] | None = None
     method: str = "mean"
+    plot_mode: str = "gfp"
+    plot_channel: str | None = None
 
 
 @dataclass(frozen=True)

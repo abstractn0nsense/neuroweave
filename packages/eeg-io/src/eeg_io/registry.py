@@ -501,6 +501,8 @@ def _erp_config_from_json(data: JsonObject) -> ErpConfig:
         ),
         picks=[str(pick) for pick in picks] if isinstance(picks, list) else None,
         method=str(data.get("method", "mean")),
+        plot_mode=str(data.get("plot_mode", "gfp")),
+        plot_channel=data.get("plot_channel"),
     )
 
 

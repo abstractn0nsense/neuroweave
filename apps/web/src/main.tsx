@@ -187,6 +187,35 @@ type EpochRunsResponse = {
   runs: EpochRun[];
 };
 
+type ErpConfig = {
+  epoch_run_id: string;
+  conditions: string[] | null;
+  picks: string[] | null;
+  method: string;
+  plot_mode: string;
+  plot_channel: string | null;
+};
+
+type ErpRun = {
+  run_id: string;
+  dataset_id: string;
+  run_kind: string;
+  schema_version: number;
+  config: ErpConfig;
+  status: string;
+  started_at_utc: string | null;
+  finished_at_utc: string | null;
+  cancel_requested_at_utc: string | null;
+  output_path: string | null;
+  output_metadata: Record<string, MetadataValue>;
+  warnings: string[];
+  errors: string[];
+};
+
+type ErpRunsResponse = {
+  runs: ErpRun[];
+};
+
 type MetadataValue = string | number | boolean | null;
 
 type NoticeState = {
@@ -240,6 +269,15 @@ const DEFAULT_EPOCH_CONFIG = {
   baseline_start_seconds: "-0.2",
   baseline_end_seconds: "0",
   reject_eeg_uv: "",
+};
+
+const DEFAULT_ERP_CONFIG = {
+  epoch_run_id: "",
+  conditions: "",
+  picks: "",
+  method: "mean",
+  plot_mode: "gfp",
+  plot_channel: "",
 };
 
 function App() {
@@ -313,6 +351,12 @@ function App() {
     data: null,
     error: null,
   });
+  const [erpConfig, setErpConfig] = useState(DEFAULT_ERP_CONFIG);
+  const [erpRuns, setErpRuns] = useState<LoadState<ErpRun[]>>({
+    status: "idle",
+    data: null,
+    error: null,
+  });
   const [notice, setNotice] = useState<NoticeState>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
@@ -345,6 +389,13 @@ function App() {
         (run) => run.status === "completed" && Boolean(run.output_path),
       ),
     [preprocessingRuns.data],
+  );
+  const completedEpochRuns = useMemo(
+    () =>
+      (epochRuns.data ?? []).filter(
+        (run) => run.status === "completed" && Boolean(run.output_path),
+      ),
+    [epochRuns.data],
   );
 
   useEffect(() => {
@@ -432,11 +483,13 @@ function App() {
     if (!activeDatasetId) {
       setPreprocessingRuns({ status: "idle", data: null, error: null });
       setEpochRuns({ status: "idle", data: null, error: null });
+      setErpRuns({ status: "idle", data: null, error: null });
       return;
     }
 
     void refreshPreprocessingRuns(activeDatasetId);
     void refreshEpochRuns(activeDatasetId);
+    void refreshErpRuns(activeDatasetId);
   }, [activeDatasetId]);
 
   useEffect(() => {
@@ -455,6 +508,21 @@ function App() {
       };
     });
   }, [completedPreprocessingRuns]);
+
+  useEffect(() => {
+    setErpConfig((current) => {
+      if (
+        current.epoch_run_id &&
+        completedEpochRuns.some((run) => run.run_id === current.epoch_run_id)
+      ) {
+        return current;
+      }
+      return {
+        ...current,
+        epoch_run_id: completedEpochRuns[0]?.run_id ?? "",
+      };
+    });
+  }, [completedEpochRuns]);
 
   useEffect(() => {
     const hasActiveRun =
@@ -487,6 +555,22 @@ function App() {
 
     return () => window.clearInterval(intervalId);
   }, [activeDatasetId, epochRuns.data]);
+
+  useEffect(() => {
+    const hasActiveRun =
+      erpRuns.data?.some((run) =>
+        ["pending", "running", "cancelling"].includes(run.status),
+      ) ?? false;
+    if (!activeDatasetId || !hasActiveRun) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void refreshErpRuns(activeDatasetId, { silent: true });
+    }, 2000);
+
+    return () => window.clearInterval(intervalId);
+  }, [activeDatasetId, erpRuns.data]);
 
   async function refreshWorkspace() {
     setNotice(null);
@@ -638,7 +722,9 @@ function App() {
       setValidation(null);
       setPreprocessingRuns({ status: "success", data: [], error: null });
       setEpochRuns({ status: "success", data: [], error: null });
+      setErpRuns({ status: "success", data: [], error: null });
       setEpochConfig(DEFAULT_EPOCH_CONFIG);
+      setErpConfig(DEFAULT_ERP_CONFIG);
       await refreshDatasets();
       setNotice({ tone: "ok", message: "Dataset created." });
     });
@@ -805,6 +891,35 @@ function App() {
     });
   }
 
+  async function beginErpRun() {
+    if (!activeDataset) {
+      setNotice({ tone: "error", message: "Select a dataset first." });
+      return;
+    }
+
+    const configError = getErpConfigError(erpConfig);
+    if (configError) {
+      setNotice({ tone: "error", message: configError });
+      return;
+    }
+
+    await runAction("erp", async () => {
+      const run = await postJson<ErpRun>(
+        `/datasets/${encodeURIComponent(activeDataset.dataset_id)}/erp-runs`,
+        normalizeErpConfig(erpConfig),
+      );
+      setErpRuns((current) => ({
+        status: "success",
+        data: [run, ...(current.data ?? [])],
+        error: null,
+      }));
+      setNotice({
+        tone: "neutral",
+        message: `ERP run ${run.run_id} queued.`,
+      });
+    });
+  }
+
   async function cancelPreprocessingRun(runId: string) {
     await runAction(`cancel-${runId}`, async () => {
       const run = await requestJson<PreprocessingRun>(
@@ -897,6 +1012,31 @@ function App() {
       });
     } catch (error: unknown) {
       setEpochRuns({
+        status: "error",
+        data: null,
+        error: getErrorMessage(error),
+      });
+    }
+  }
+
+  async function refreshErpRuns(
+    datasetId: string,
+    options: { silent?: boolean } = {},
+  ) {
+    if (!options.silent) {
+      setErpRuns({ status: "loading", data: null, error: null });
+    }
+    try {
+      const response = await fetchJson<ErpRunsResponse>(
+        `/datasets/${encodeURIComponent(datasetId)}/erp-runs`,
+      );
+      setErpRuns({
+        status: "success",
+        data: response.runs,
+        error: null,
+      });
+    } catch (error: unknown) {
+      setErpRuns({
         status: "error",
         data: null,
         error: getErrorMessage(error),
@@ -1119,6 +1259,28 @@ function App() {
                   epochRuns={epochRuns}
                   onEpochConfigChange={setEpochConfig}
                   onStartEpochRun={beginEpochRun}
+                />
+              </section>
+
+              <section className="panel" aria-labelledby="erp-title">
+                <div className="panel-header">
+                  <div>
+                    <h2 id="erp-title">ERP Preview</h2>
+                    <p className="subtle">
+                      {activeDataset
+                        ? "Generate condition averages and plot previews"
+                        : "Create or select a dataset"}
+                    </p>
+                  </div>
+                </div>
+                <ErpSection
+                  activeDataset={activeDataset}
+                  busyAction={busyAction}
+                  completedEpochRuns={completedEpochRuns}
+                  erpConfig={erpConfig}
+                  erpRuns={erpRuns}
+                  onErpConfigChange={setErpConfig}
+                  onStartErpRun={beginErpRun}
                 />
               </section>
 
@@ -2121,6 +2283,206 @@ function ConditionCountSummary({
   );
 }
 
+function ErpSection({
+  activeDataset,
+  busyAction,
+  completedEpochRuns,
+  erpConfig,
+  erpRuns,
+  onErpConfigChange,
+  onStartErpRun,
+}: {
+  activeDataset: Dataset | null;
+  busyAction: string | null;
+  completedEpochRuns: EpochRun[];
+  erpConfig: typeof DEFAULT_ERP_CONFIG;
+  erpRuns: LoadState<ErpRun[]>;
+  onErpConfigChange: (config: typeof DEFAULT_ERP_CONFIG) => void;
+  onStartErpRun: () => void;
+}) {
+  const disabled = !activeDataset || completedEpochRuns.length === 0;
+  const configError = getErpConfigError(erpConfig);
+
+  return (
+    <div className="intake-stack">
+      <section className="tool-section" aria-labelledby="erp-config-title">
+        <div className="tool-section-header">
+          <span>06</span>
+          <h3 id="erp-config-title">ERP Run</h3>
+          <small>{disabled ? "blocked" : "ready"}</small>
+        </div>
+        {completedEpochRuns.length === 0 ? (
+          <p className="muted">No completed epoch runs yet.</p>
+        ) : null}
+        {configError ? <p className="error-text">{configError}</p> : null}
+        <div className="epoch-grid">
+          <label className="wide-field">
+            <span>Epoch Run</span>
+            <select
+              data-testid="erp-epoch-run-select"
+              disabled={disabled}
+              onChange={(event) =>
+                onErpConfigChange({
+                  ...erpConfig,
+                  epoch_run_id: event.target.value,
+                })
+              }
+              value={erpConfig.epoch_run_id}
+            >
+              <option value="">Select completed run</option>
+              {completedEpochRuns.map((run) => (
+                <option key={run.run_id} value={run.run_id}>
+                  {run.run_id}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Conditions</span>
+            <input
+              data-testid="erp-conditions-input"
+              disabled={disabled}
+              onChange={(event) =>
+                onErpConfigChange({
+                  ...erpConfig,
+                  conditions: event.target.value,
+                })
+              }
+              placeholder="All"
+              type="text"
+              value={erpConfig.conditions}
+            />
+          </label>
+          <label>
+            <span>Picks</span>
+            <input
+              disabled={disabled}
+              onChange={(event) =>
+                onErpConfigChange({
+                  ...erpConfig,
+                  picks: event.target.value,
+                })
+              }
+              placeholder="All channels"
+              type="text"
+              value={erpConfig.picks}
+            />
+          </label>
+          <label>
+            <span>Plot Mode</span>
+            <select
+              data-testid="erp-plot-mode-select"
+              disabled={disabled}
+              onChange={(event) =>
+                onErpConfigChange({
+                  ...erpConfig,
+                  plot_mode: event.target.value,
+                })
+              }
+              value={erpConfig.plot_mode}
+            >
+              <option value="gfp">GFP</option>
+              <option value="channel">Channel</option>
+            </select>
+          </label>
+          <label>
+            <span>Plot Channel</span>
+            <input
+              data-testid="erp-plot-channel-input"
+              disabled={disabled || erpConfig.plot_mode !== "channel"}
+              onChange={(event) =>
+                onErpConfigChange({
+                  ...erpConfig,
+                  plot_channel: event.target.value,
+                })
+              }
+              placeholder="Fp1"
+              type="text"
+              value={erpConfig.plot_channel}
+            />
+          </label>
+        </div>
+        <button
+          className="primary-button"
+          data-testid="start-erp-button"
+          disabled={disabled || Boolean(configError) || busyAction === "erp"}
+          onClick={onStartErpRun}
+          type="button"
+        >
+          Generate ERP
+        </button>
+      </section>
+      <ErpRunList runs={erpRuns} />
+    </div>
+  );
+}
+
+function ErpRunList({ runs }: { runs: LoadState<ErpRun[]> }) {
+  if (runs.status === "loading" || runs.status === "idle") {
+    return <p className="muted">Loading ERP runs...</p>;
+  }
+
+  if (runs.status === "error") {
+    return <p className="error-text">{runs.error}</p>;
+  }
+
+  const runData = runs.data ?? [];
+  if (runData.length === 0) {
+    return <p className="muted">No ERP runs yet.</p>;
+  }
+
+  return (
+    <div className="run-list" data-testid="erp-runs">
+      {runData.map((run) => (
+        <div className="run-row" key={run.run_id}>
+          <div>
+            <strong>{run.run_id}</strong>
+            <small>{run.output_path ?? "No output file"}</small>
+          </div>
+          <div className="run-meta">
+            <span>{run.status}</span>
+            <span>{formatErpMetadata(run.output_metadata)}</span>
+            <span>{run.config.plot_mode}</span>
+          </div>
+          <ErpPreview run={run} />
+          {run.warnings.length > 0 ? (
+            <p className="muted">{run.warnings.join(" ")}</p>
+          ) : null}
+          {run.errors.length > 0 ? (
+            <p className="error-text">{run.errors.join(" ")}</p>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ErpPreview({ run }: { run: ErpRun }) {
+  const filename = run.output_metadata.preview_plot_filename;
+  const condition = run.output_metadata.preview_plot_condition;
+  const plotStatus = run.output_metadata.plot_status;
+
+  if (typeof filename !== "string" || !filename) {
+    if (run.status === "completed" && plotStatus !== "completed") {
+      return <p className="muted">Plot preview unavailable: {String(plotStatus)}</p>;
+    }
+    return null;
+  }
+
+  return (
+    <figure className="erp-preview" data-testid="erp-preview">
+      <img
+        alt={`ERP plot ${typeof condition === "string" ? condition : run.run_id}`}
+        src={artifactUrl(run.run_id, filename)}
+      />
+      <figcaption>
+        {typeof condition === "string" ? condition : "ERP"} /{" "}
+        {String(run.output_metadata.preview_plot_mode ?? "plot")}
+      </figcaption>
+    </figure>
+  );
+}
+
 function EventPreviewTable({ preview }: { preview: EventPreview }) {
   const columns = preview.columns.slice(0, 6);
 
@@ -2451,6 +2813,20 @@ function normalizeEpochConfig(config: typeof DEFAULT_EPOCH_CONFIG): EpochConfig 
   };
 }
 
+function normalizeErpConfig(config: typeof DEFAULT_ERP_CONFIG): ErpConfig {
+  return {
+    epoch_run_id: config.epoch_run_id,
+    conditions: parseOptionalCsv(config.conditions),
+    picks: parseOptionalCsv(config.picks),
+    method: config.method,
+    plot_mode: config.plot_mode,
+    plot_channel:
+      config.plot_mode === "channel" && config.plot_channel.trim()
+        ? config.plot_channel.trim()
+        : null,
+  };
+}
+
 function getPreprocessingConfigError(
   config: typeof DEFAULT_PREPROCESSING_CONFIG,
 ): string | null {
@@ -2546,11 +2922,43 @@ function getEpochConfigError(config: typeof DEFAULT_EPOCH_CONFIG): string | null
   return null;
 }
 
+function getErpConfigError(config: typeof DEFAULT_ERP_CONFIG): string | null {
+  if (!config.epoch_run_id) {
+    return "Select a completed epoch run.";
+  }
+  if (config.method !== "mean") {
+    return "ERP method must be mean.";
+  }
+  if (!["gfp", "channel"].includes(config.plot_mode)) {
+    return "Select GFP or channel plot mode.";
+  }
+  if (config.plot_mode === "channel" && !config.plot_channel.trim()) {
+    return "Enter a channel for channel plot mode.";
+  }
+  if (parseOptionalCsv(config.conditions)?.length === 0) {
+    return "Conditions must not be empty.";
+  }
+  if (parseOptionalCsv(config.picks)?.length === 0) {
+    return "Picks must not be empty.";
+  }
+  return null;
+}
+
 function parseOptionalNumber(value: string): number | null {
   if (!value.trim()) {
     return null;
   }
   return Number(value);
+}
+
+function parseOptionalCsv(value: string): string[] | null {
+  if (!value.trim()) {
+    return null;
+  }
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function formatRunMetadata(metadata: Record<string, MetadataValue>): string {
@@ -2578,6 +2986,26 @@ function formatEpochMetadata(metadata: Record<string, MetadataValue>): string {
     typeof droppedCount === "number" ? `${droppedCount} dropped` : null,
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(" / ") : "Metadata pending";
+}
+
+function formatErpMetadata(metadata: Record<string, MetadataValue>): string {
+  const conditionCount = metadata.condition_count;
+  const evokedCount = metadata.evoked_count;
+  const plotCount = metadata.plot_count;
+  const plotStatus = metadata.plot_status;
+  const parts = [
+    typeof conditionCount === "number" ? `${conditionCount} cond` : null,
+    typeof evokedCount === "number" ? `${evokedCount} evoked` : null,
+    typeof plotCount === "number" ? `${plotCount} plots` : null,
+    typeof plotStatus === "string" ? plotStatus : null,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" / ") : "Metadata pending";
+}
+
+function artifactUrl(runId: string, filename: string): string {
+  return `${API_BASE_URL}/artifacts/${encodeURIComponent(runId)}/${encodeURIComponent(
+    filename,
+  )}`;
 }
 
 function getErrorMessage(error: unknown): string {

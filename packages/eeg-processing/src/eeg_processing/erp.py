@@ -24,6 +24,12 @@ class ErpConditionArtifact:
     time_max_seconds: float
     sampling_rate_hz: float
     channel_time_summary: dict[str, Any]
+    plot_status: str
+    plot_mode: str
+    plot_channel: str | None
+    plot_png_path: str | None
+    plot_svg_path: str | None
+    plot_warnings: list[str]
 
 
 def generate_erps_from_epochs(
@@ -49,6 +55,7 @@ def generate_erps_from_epochs(
             )
             output_directory.mkdir(parents=True, exist_ok=True)
             artifacts: list[ErpConditionArtifact] = []
+            plot_warnings: list[str] = []
 
             for condition in conditions:
                 condition_epochs = epochs[condition]
@@ -59,6 +66,13 @@ def generate_erps_from_epochs(
                 safe_condition = safe_condition_filename(condition)
                 evoked_path = output_directory / f"evoked_{safe_condition}.fif"
                 evoked.save(evoked_path, overwrite=True, verbose=False)
+                plot_metadata = _write_evoked_plot(
+                    evoked=evoked,
+                    output_directory=output_directory,
+                    safe_condition=safe_condition,
+                    config=config,
+                )
+                plot_warnings.extend(plot_metadata["plot_warnings"])
                 artifacts.append(
                     ErpConditionArtifact(
                         condition=condition,
@@ -70,6 +84,12 @@ def generate_erps_from_epochs(
                         time_max_seconds=float(evoked.times[-1]),
                         sampling_rate_hz=float(evoked.info["sfreq"]),
                         channel_time_summary=_channel_time_summary(evoked),
+                        plot_status=str(plot_metadata["plot_status"]),
+                        plot_mode=str(plot_metadata["plot_mode"]),
+                        plot_channel=plot_metadata["plot_channel"],
+                        plot_png_path=plot_metadata["plot_png_path"],
+                        plot_svg_path=plot_metadata["plot_svg_path"],
+                        plot_warnings=plot_metadata["plot_warnings"],
                     )
                 )
     except ErpError as exc:
@@ -85,7 +105,7 @@ def generate_erps_from_epochs(
             processing_warnings=_dedupe(_format_warning_records(warning_records)),
         ) from exc
 
-    warnings = _dedupe(_format_warning_records(warning_records))
+    warnings = _dedupe(_format_warning_records(warning_records) + plot_warnings)
     condition_payloads = [
         {
             "condition": artifact.condition,
@@ -97,9 +117,20 @@ def generate_erps_from_epochs(
             "time_max_seconds": artifact.time_max_seconds,
             "sampling_rate_hz": artifact.sampling_rate_hz,
             "channel_time_summary": artifact.channel_time_summary,
+            "plot_status": artifact.plot_status,
+            "plot_mode": artifact.plot_mode,
+            "plot_channel": artifact.plot_channel,
+            "plot_png_path": artifact.plot_png_path,
+            "plot_svg_path": artifact.plot_svg_path,
+            "plot_warnings": artifact.plot_warnings,
         }
         for artifact in artifacts
     ]
+    plot_count = sum(
+        1
+        for condition in condition_payloads
+        if condition.get("plot_status") == "completed"
+    )
     return {
         "file_format": "fif",
         "mne_version": str(mne.__version__),
@@ -107,6 +138,8 @@ def generate_erps_from_epochs(
         "input_epochs_path": str(epochs_path),
         "condition_count": len(condition_payloads),
         "evoked_count": len(condition_payloads),
+        "plot_count": plot_count,
+        "plot_status": "completed" if plot_count == len(condition_payloads) else "partial",
         "conditions": condition_payloads,
         "warnings": warnings,
         "metadata": {
@@ -120,8 +153,19 @@ def generate_erps_from_epochs(
                 "conditions": config.conditions,
                 "picks": config.picks,
                 "method": config.method,
+                "plot_mode": config.plot_mode,
+                "plot_channel": config.plot_channel,
             },
             "conditions": condition_payloads,
+            "plot": {
+                "mode": config.plot_mode,
+                "channel": config.plot_channel,
+                "status": "completed"
+                if plot_count == len(condition_payloads)
+                else "partial",
+                "completed_count": plot_count,
+                "requested_count": len(condition_payloads),
+            },
             "warnings": warnings,
         },
     }
@@ -182,6 +226,70 @@ def _channel_time_summary(evoked: Any) -> dict[str, Any]:
             "time_seconds": float(times[gfp_index]),
             "amplitude_uv": float(gfp_uv[gfp_index]),
         },
+    }
+
+
+def _write_evoked_plot(
+    evoked: Any,
+    output_directory: Path,
+    safe_condition: str,
+    config: ErpConfig,
+) -> dict[str, Any]:
+    plot_mode = config.plot_mode if config.plot_mode in {"gfp", "channel"} else "gfp"
+    plot_channel = config.plot_channel.strip() if config.plot_channel else None
+    png_path = output_directory / f"erp_{safe_condition}.png"
+    svg_path = output_directory / f"erp_{safe_condition}.svg"
+
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg", force=True)
+        import matplotlib.pyplot as plt
+
+        times_ms = evoked.times * 1000
+        if plot_mode == "channel" and plot_channel:
+            if plot_channel not in evoked.ch_names:
+                raise ValueError(f"Plot channel not found: {plot_channel}")
+            channel_index = evoked.ch_names.index(plot_channel)
+            values_uv = evoked.data[channel_index] * 1e6
+            ylabel = "Amplitude (uV)"
+            title = f"{safe_condition} / {plot_channel}"
+        else:
+            plot_mode = "gfp"
+            plot_channel = None
+            values_uv = evoked.data.std(axis=0) * 1e6
+            ylabel = "GFP (uV)"
+            title = f"{safe_condition} / GFP"
+
+        figure, axis = plt.subplots(figsize=(7.2, 3.8), dpi=144)
+        axis.plot(times_ms, values_uv, color="#38bdf8", linewidth=1.8)
+        axis.axvline(0, color="#94a3b8", linewidth=0.8, linestyle="--")
+        axis.axhline(0, color="#475569", linewidth=0.6)
+        axis.set_title(title)
+        axis.set_xlabel("Time (ms)")
+        axis.set_ylabel(ylabel)
+        axis.grid(True, color="#cbd5e1", linewidth=0.4, alpha=0.45)
+        figure.tight_layout()
+        figure.savefig(png_path)
+        figure.savefig(svg_path)
+        plt.close(figure)
+    except Exception as exc:
+        return {
+            "plot_status": "failed",
+            "plot_mode": plot_mode,
+            "plot_channel": plot_channel,
+            "plot_png_path": None,
+            "plot_svg_path": None,
+            "plot_warnings": [f"ERP plot generation failed: {exc}"],
+        }
+
+    return {
+        "plot_status": "completed",
+        "plot_mode": plot_mode,
+        "plot_channel": plot_channel,
+        "plot_png_path": str(png_path),
+        "plot_svg_path": str(svg_path),
+        "plot_warnings": [],
     }
 
 

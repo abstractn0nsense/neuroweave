@@ -13,6 +13,7 @@ import sys
 from uuid import uuid4
 
 from fastapi import FastAPI, File, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -463,6 +464,8 @@ class ErpConfigPayload(BaseModel):
     conditions: list[str] | None = None
     picks: list[str] | None = None
     method: str = "mean"
+    plot_mode: str = "gfp"
+    plot_channel: str | None = None
 
 
 class ErpRunResponse(BaseModel):
@@ -1152,6 +1155,30 @@ def list_dataset_erp_runs(dataset_id: str) -> ErpRunsResponse:
     )
 
 
+@app.get("/artifacts/{run_id}/{filename}")
+def get_run_artifact(run_id: str, filename: str) -> FileResponse:
+    artifact_root = _artifact_root_for_run(run_id)
+    if artifact_root is None:
+        raise HTTPException(status_code=404, detail="Run artifact root not found")
+    if "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid artifact filename")
+
+    artifact_path = artifact_root / filename
+    try:
+        resolved_artifact_path = artifact_path.resolve()
+        resolved_artifact_root = artifact_root.resolve()
+    except OSError as exc:
+        raise HTTPException(status_code=404, detail="Artifact not found") from exc
+
+    if (
+        not resolved_artifact_path.is_relative_to(resolved_artifact_root)
+        or not resolved_artifact_path.is_file()
+    ):
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
+    return FileResponse(resolved_artifact_path)
+
+
 @app.get("/datasets/{dataset_id}", response_model=DatasetResponse)
 def get_dataset(dataset_id: str) -> DatasetResponse:
     dataset = registry_repository.get_dataset(dataset_id)
@@ -1457,10 +1484,26 @@ def _erp_completed_provenance(
         and isinstance(item.get("safe_condition"), str)
         and isinstance(item.get("evoked_path"), str)
     ]
+    plot_artifacts = [
+        _artifact_manifest_entry(
+            logical_name=f"{plot_kind}_{item['safe_condition']}",
+            path=Path(str(path_value)),
+            artifact_type=f"{plot_kind}_plot",
+            output_directory=output_path.parent,
+        )
+        for item in processing_metadata.get("conditions", [])
+        if isinstance(item, dict) and isinstance(item.get("safe_condition"), str)
+        for plot_kind, path_value in (
+            ("png", item.get("plot_png_path")),
+            ("svg", item.get("plot_svg_path")),
+        )
+        if isinstance(path_value, str) and Path(path_value).is_file()
+    ]
     manifest_metadata = _write_artifact_manifest(
         output_directory=output_path.parent,
         artifacts=[
             *condition_artifacts,
+            *plot_artifacts,
             _artifact_manifest_entry(
                 logical_name="erp_metadata",
                 path=metadata_path,
@@ -1482,6 +1525,9 @@ def _erp_completed_provenance(
         "input_epochs_path": processing_metadata["input_epochs_path"],
         "condition_count": processing_metadata["condition_count"],
         "evoked_count": processing_metadata["evoked_count"],
+        "plot_count": processing_metadata.get("plot_count", 0),
+        "plot_status": processing_metadata.get("plot_status", "unknown"),
+        **_erp_preview_plot_metadata(run.run_id, processing_metadata),
         "erp_metadata_path": str(metadata_path),
         "erp_metadata_available": True,
     }
@@ -1508,6 +1554,53 @@ def _write_erp_metadata(
     }
     _write_json_file(metadata_path, payload)
     return metadata_path
+
+
+def _erp_preview_plot_metadata(
+    run_id: str,
+    processing_metadata: dict,
+) -> dict[str, str | int | float | bool | None]:
+    conditions = processing_metadata.get("conditions")
+    if not isinstance(conditions, list):
+        return {
+            "preview_plot_path": None,
+            "preview_plot_filename": None,
+            "preview_plot_url": None,
+            "preview_plot_condition": None,
+            "preview_plot_mode": None,
+            "preview_plot_channel": None,
+        }
+
+    labels: list[str] = []
+    for item in conditions:
+        if isinstance(item, dict) and isinstance(item.get("condition"), str):
+            labels.append(str(item["condition"]))
+    for item in conditions:
+        if not isinstance(item, dict):
+            continue
+        plot_path = item.get("plot_png_path")
+        if not isinstance(plot_path, str) or not Path(plot_path).is_file():
+            continue
+        filename = Path(plot_path).name
+        return {
+            "condition_labels": ",".join(labels),
+            "preview_plot_path": plot_path,
+            "preview_plot_filename": filename,
+            "preview_plot_url": f"/artifacts/{run_id}/{filename}",
+            "preview_plot_condition": item.get("condition"),
+            "preview_plot_mode": item.get("plot_mode"),
+            "preview_plot_channel": item.get("plot_channel"),
+        }
+
+    return {
+        "condition_labels": ",".join(labels),
+        "preview_plot_path": None,
+        "preview_plot_filename": None,
+        "preview_plot_url": None,
+        "preview_plot_condition": None,
+        "preview_plot_mode": None,
+        "preview_plot_channel": None,
+    }
 
 
 def _write_epoch_diagnostics(
@@ -1709,6 +1802,22 @@ def _write_artifact_manifest(
         "artifact_count": len(artifacts),
         "artifact_manifest_path": str(manifest_path),
     }
+
+
+def _artifact_root_for_run(run_id: str) -> Path | None:
+    for run in (
+        run_repository.get_preprocessing_run(run_id),
+        run_repository.get_epoch_run(run_id),
+        run_repository.get_erp_run(run_id),
+    ):
+        if run is None:
+            continue
+        artifact_root = run.output_metadata.get("artifact_root")
+        if isinstance(artifact_root, str):
+            return Path(artifact_root)
+        if run.output_path:
+            return Path(run.output_path).parent
+    return None
 
 
 def _artifact_manifest_entry(
@@ -2426,6 +2535,11 @@ def _validate_erp_config(
 
     if config.method != "mean":
         errors.append("ERP method must be 'mean'.")
+
+    if config.plot_mode not in {"gfp", "channel"}:
+        errors.append("ERP plot_mode must be 'gfp' or 'channel'.")
+    if config.plot_mode == "channel" and not config.plot_channel:
+        errors.append("ERP plot_channel is required when plot_mode is 'channel'.")
 
     if config.conditions is not None:
         conditions = [condition.strip() for condition in config.conditions]

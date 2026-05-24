@@ -45,6 +45,11 @@ lets users choose the condition field, epoch window, baseline, and optional EEG
 rejection threshold, then polls epoch status and displays compact
 condition/epoch/drop counts.
 
+Phase 3 ERP preview uses completed epoch runs as inputs. The workbench can start
+ERP generation, poll ERP status, and display the first generated PNG plot through
+the API artifact endpoint. GFP is the default plot mode, with an optional channel
+plot mode when a channel name is provided.
+
 Expected responsibilities:
 
 - upload or select EEG datasets

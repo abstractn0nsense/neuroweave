@@ -1141,6 +1141,12 @@ Contract notes:
 Purpose: create previewable ERP plots while isolating plotting failures from
 successful computational artifacts.
 
+Status: implemented with non-interactive PNG/SVG plot generation during ERP runs,
+artifact-root validated serving via `GET /artifacts/{run_id}/{filename}`, workbench
+ERP run controls, status polling, and PNG preview. Plot failures are recorded as
+warnings/metadata while successful evoked FIF generation keeps the ERP run
+completed and queryable.
+
 Implementation steps:
 
 1. Add plot generation in the ERP processing module.

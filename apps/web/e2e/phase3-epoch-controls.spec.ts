@@ -21,7 +21,7 @@ const eventFixture = path.join(
   "psychopy_minimal.csv",
 );
 
-test("creates an epoch run from a completed preprocessing run", async ({ page }) => {
+test("creates epoch and ERP runs from completed preprocessing", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByText("Study Setup")).toBeVisible();
 
@@ -72,4 +72,15 @@ test("creates an epoch run from a completed preprocessing run", async ({ page })
     timeout: 60_000,
   });
   await expect(page.getByTestId("epoch-runs")).toContainText("2 cond");
+
+  await expect(page.getByTestId("erp-epoch-run-select")).not.toHaveValue("", {
+    timeout: 15_000,
+  });
+  await page.getByTestId("start-erp-button").click();
+  await expect(page.getByText(/ERP run .* queued\./)).toBeVisible();
+  await expect(page.getByTestId("erp-runs")).toContainText("completed", {
+    timeout: 60_000,
+  });
+  await expect(page.getByTestId("erp-runs")).toContainText("2 plots");
+  await expect(page.getByTestId("erp-preview")).toBeVisible();
 });

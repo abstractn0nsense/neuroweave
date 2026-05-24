@@ -330,6 +330,8 @@ def test_run_repository_persists_erp_runs(tmp_path):
             epoch_run_id="epoch-001",
             conditions=["target", "standard"],
             picks=["Fp1", "Fp2"],
+            plot_mode="channel",
+            plot_channel="Fp1",
         ),
         status=ErpRunStatus.COMPLETED,
         started_at_utc="2026-05-25T00:00:00+00:00",
@@ -355,6 +357,8 @@ def test_run_repository_persists_erp_runs(tmp_path):
     assert stored["schema_version"] == 1
     assert stored["config"]["epoch_run_id"] == "epoch-001"
     assert stored["config"]["conditions"] == ["target", "standard"]
+    assert stored["config"]["plot_mode"] == "channel"
+    assert stored["config"]["plot_channel"] == "Fp1"
 
 
 def test_run_repository_lists_epoch_runs_by_dataset(tmp_path):

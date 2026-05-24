@@ -170,12 +170,16 @@ def test_erp_worker_completes_run_and_writes_evoked_artifacts(tmp_path, monkeypa
     metadata = payload["output_metadata"]
     assert metadata["artifact_root"] == str(Path(payload["output_path"]).parent)
     assert metadata["primary_artifact_path"] == payload["output_path"]
-    assert metadata["artifact_count"] == 3
+    assert metadata["artifact_count"] == 7
     assert metadata["output_path"] == payload["output_path"]
     assert metadata["output_file_format"] == "fif"
     assert metadata["input_epoch_run_id"] == epoch_run["run_id"]
     assert metadata["condition_count"] == 2
     assert metadata["evoked_count"] == 2
+    assert metadata["plot_count"] == 2
+    assert metadata["plot_status"] == "completed"
+    assert metadata["preview_plot_filename"] == "erp_standard.png"
+    assert metadata["preview_plot_url"].startswith(f"/artifacts/{payload['run_id']}/")
     assert metadata["erp_metadata_available"] is True
 
     erp_metadata_path = Path(str(metadata["erp_metadata_path"]))
@@ -195,14 +199,33 @@ def test_erp_worker_completes_run_and_writes_evoked_artifacts(tmp_path, monkeypa
     assert [condition["nave"] for condition in conditions] == [1, 2]
     assert {
         artifact["logical_name"] for artifact in artifact_manifest["artifacts"]
-    } == {"evoked_standard", "evoked_target", "erp_metadata"}
+    } == {
+        "evoked_standard",
+        "evoked_target",
+        "png_standard",
+        "png_target",
+        "svg_standard",
+        "svg_target",
+        "erp_metadata",
+    }
     for condition in conditions:
         assert Path(condition["evoked_path"]).is_file()
+        assert Path(condition["plot_png_path"]).is_file()
+        assert Path(condition["plot_svg_path"]).is_file()
+        assert condition["plot_status"] == "completed"
+        assert condition["plot_mode"] == "gfp"
         assert condition["channel_count"] == 8
         assert condition["sampling_rate_hz"] == 256.0
         assert "peak_positive" in condition["channel_time_summary"]
         assert "peak_negative" in condition["channel_time_summary"]
         assert "global_field_power_peak" in condition["channel_time_summary"]
+
+    artifact_response = client.get(
+        f"/artifacts/{payload['run_id']}/{metadata['preview_plot_filename']}"
+    )
+    assert artifact_response.status_code == 200
+    assert artifact_response.headers["content-type"] == "image/png"
+    assert artifact_response.content.startswith(b"\x89PNG")
 
 
 def test_erp_run_can_select_condition_subset(tmp_path, monkeypatch):
@@ -232,6 +255,48 @@ def test_erp_run_can_select_condition_subset(tmp_path, monkeypatch):
         "target"
     ]
     assert erp_metadata["conditions"][0]["nave"] == 2
+
+
+def test_erp_plot_failure_keeps_completed_run_queryable(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _seed_epochable_dataset(tmp_path)
+    epoch_run = _create_completed_epoch_run(client)
+
+    response = client.post(
+        "/datasets/dataset-001/erp-runs",
+        json={
+            "epoch_run_id": epoch_run["run_id"],
+            "plot_mode": "channel",
+            "plot_channel": "missing-channel",
+        },
+    )
+    assert response.status_code == 201
+
+    payload = _wait_for_run_status(
+        client,
+        f"/erp-runs/{response.json()['run_id']}",
+        "completed",
+    )
+    metadata = payload["output_metadata"]
+    erp_metadata = json.loads(
+        Path(str(metadata["erp_metadata_path"])).read_text(encoding="utf-8")
+    )
+
+    assert payload["status"] == "completed"
+    assert payload["errors"] == []
+    assert metadata["evoked_count"] == 2
+    assert metadata["plot_count"] == 0
+    assert metadata["plot_status"] == "partial"
+    assert metadata["preview_plot_filename"] is None
+    assert payload["warnings"]
+    assert all(
+        condition["plot_status"] == "failed"
+        for condition in erp_metadata["conditions"]
+    )
+    assert all(
+        "ERP plot generation failed" in condition["plot_warnings"][0]
+        for condition in erp_metadata["conditions"]
+    )
 
 
 def test_erp_run_rejects_missing_or_failed_epoch_run(tmp_path, monkeypatch):
