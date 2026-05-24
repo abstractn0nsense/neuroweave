@@ -44,9 +44,29 @@ POST /datasets/{dataset_id}/files/events
 POST /datasets/{dataset_id}/events/mapping
 GET /datasets/{dataset_id}/events
 GET /datasets/{dataset_id}/validation
+POST /datasets/{dataset_id}/preprocessing-runs
+GET /datasets/{dataset_id}/preprocessing-runs
+GET /preprocessing-runs/{run_id}
+POST /preprocessing-runs/{run_id}/cancel
 ```
 
 These endpoints write through `eeg_io.registry.JsonRegistryRepository` to the local JSON registry under `data/raw/uploads/`.
+
+Preprocessing run metadata is written through `eeg_io.registry.JsonRunRepository` under `data/runs/`, and processed FIF outputs are written under `data/processed/`.
+
+Preprocessing config validation rejects invalid filter ordering, cutoff frequencies at or above Nyquist, upsampling beyond the input sampling rate, and custom reference channels that do not exist in the uploaded recording.
+
+Completed preprocessing runs store provenance in `output_metadata`, including input file identity, paths, checksums, size, input/output signal metadata, output checksum, and MNE version. The run `config` field is the persisted preprocessing configuration snapshot.
+
+Completed preprocessing runs also write diagnostics beside `raw_preprocessed.fif`: `preprocessing_summary.json`, `filter_report.json`, and `artifact_summary.json`. Their paths and key artifact counts are recorded in `output_metadata`.
+
+Preprocessing runs also persist captured MNE/Python warnings in `warnings`. Failed runs persist `errors`, retain input provenance, and remain available through the run lookup endpoints.
+
+`POST /datasets/{dataset_id}/preprocessing-runs` creates a `pending` run and returns immediately after enqueueing it in the local preprocessing worker. Use `GET /preprocessing-runs/{run_id}` or `GET /datasets/{dataset_id}/preprocessing-runs` to poll for `running`, `completed`, or `failed` status. On API startup, the worker recovers `pending` and stale `running` runs from `data/runs`.
+
+`POST /preprocessing-runs/{run_id}/cancel` cancels pending runs immediately. Running runs are marked `cancelling` and become `cancelled` at the next background checkpoint.
+
+Cancellation requests persist `cancel_requested_at_utc`. The preprocessing worker checks cancellation before and after read, filter, notch, reference, resample, and save stages. MNE execution runs in a child process so running jobs can also be terminated when cancellation is requested during a long processing call.
 
 Expected responsibilities:
 

@@ -1,6 +1,13 @@
 from pathlib import Path
+from multiprocessing import get_context
+from queue import Empty, Queue
+from threading import Lock, Thread
 from dataclasses import replace
+from datetime import UTC, datetime
+from contextlib import asynccontextmanager
 import hashlib
+import json
+import os
 import shutil
 import sys
 from uuid import uuid4
@@ -11,7 +18,11 @@ from pydantic import BaseModel, Field
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-for package_src in ("packages/eeg-core/src", "packages/eeg-io/src"):
+for package_src in (
+    "packages/eeg-core/src",
+    "packages/eeg-io/src",
+    "packages/eeg-processing/src",
+):
     sys.path.insert(0, str(REPO_ROOT / package_src))
 
 from eeg_core.domain import (  # noqa: E402
@@ -21,6 +32,9 @@ from eeg_core.domain import (  # noqa: E402
     EventLog,
     Experiment,
     Participant,
+    PreprocessingConfig,
+    PreprocessingRun,
+    PreprocessingRunStatus,
     Project,
     Recording,
     UploadedFile as IngestionUploadedFile,
@@ -30,6 +44,7 @@ from eeg_core.domain import (  # noqa: E402
     ValidationSeverity,
     validate_ingestion_dataset,
 )
+from eeg_processing import PreprocessingError, run_preprocessing_job  # noqa: E402
 from eeg_io.datasets import find_eeg_file_by_id, list_eeg_files  # noqa: E402
 from eeg_io.event_logs import (  # noqa: E402
     EventLogNormalizationError,
@@ -37,13 +52,80 @@ from eeg_io.event_logs import (  # noqa: E402
     normalize_event_log,
     preview_event_log,
 )
-from eeg_io.registry import JsonRegistryRepository  # noqa: E402
+from eeg_io.registry import JsonRegistryRepository, JsonRunRepository  # noqa: E402
 from eeg_io.readers import EegMetadataReadError, read_eeg_metadata  # noqa: E402
 
 
-SAMPLE_DATASET_DIR = REPO_ROOT / "data" / "raw" / "samples"
-UPLOADS_DIR = REPO_ROOT / "data" / "raw" / "uploads"
+def _path_from_env(name: str, default: Path) -> Path:
+    value = os.environ.get(name)
+    if not value:
+        return default
+    return Path(value).expanduser().resolve()
+
+
+SAMPLE_DATASET_DIR = _path_from_env(
+    "NEUROWEAVE_SAMPLE_DATASET_DIR",
+    REPO_ROOT / "data" / "raw" / "samples",
+)
+UPLOADS_DIR = _path_from_env(
+    "NEUROWEAVE_UPLOADS_DIR",
+    REPO_ROOT / "data" / "raw" / "uploads",
+)
+RUNS_DIR = _path_from_env("NEUROWEAVE_RUNS_DIR", REPO_ROOT / "data" / "runs")
+PROCESSED_DIR = _path_from_env(
+    "NEUROWEAVE_PROCESSED_DIR",
+    REPO_ROOT / "data" / "processed",
+)
 registry_repository = JsonRegistryRepository(UPLOADS_DIR)
+run_repository = JsonRunRepository(RUNS_DIR)
+
+
+class LocalPreprocessingWorker:
+    def __init__(self) -> None:
+        self._queue: Queue[str] = Queue()
+        self._queued_run_ids: set[str] = set()
+        self._lock = Lock()
+        self._thread: Thread | None = None
+
+    def start(self) -> None:
+        with self._lock:
+            if self._thread and self._thread.is_alive():
+                return
+            self._thread = Thread(
+                target=self._run_loop,
+                name="neuroweave-preprocessing-worker",
+                daemon=True,
+            )
+            self._thread.start()
+
+    def enqueue(self, run_id: str) -> None:
+        self.start()
+        with self._lock:
+            if run_id in self._queued_run_ids:
+                return
+            self._queued_run_ids.add(run_id)
+            self._queue.put(run_id)
+
+    def recover(self) -> None:
+        for run in run_repository.list_preprocessing_runs():
+            if run.status in {
+                PreprocessingRunStatus.PENDING,
+                PreprocessingRunStatus.RUNNING,
+            }:
+                self.enqueue(run.run_id)
+
+    def _run_loop(self) -> None:
+        while True:
+            run_id = self._queue.get()
+            try:
+                _execute_preprocessing_run(run_id)
+            finally:
+                with self._lock:
+                    self._queued_run_ids.discard(run_id)
+                self._queue.task_done()
+
+
+preprocessing_worker = LocalPreprocessingWorker()
 
 
 class HealthResponse(BaseModel):
@@ -185,6 +267,32 @@ class EventMappingRequest(BaseModel):
     mapping: EventColumnMappingPayload | None = None
 
 
+class PreprocessingConfigPayload(BaseModel):
+    high_pass_hz: float | None = Field(default=None, ge=0)
+    low_pass_hz: float | None = Field(default=None, gt=0)
+    notch_hz: float | None = Field(default=None, gt=0)
+    resample_hz: float | None = Field(default=None, gt=0)
+    reference: str | None = None
+
+
+class PreprocessingRunResponse(BaseModel):
+    run_id: str
+    dataset_id: str
+    config: PreprocessingConfigPayload
+    status: str
+    started_at_utc: str | None
+    finished_at_utc: str | None
+    cancel_requested_at_utc: str | None
+    output_path: str | None
+    output_metadata: dict[str, str | int | float | bool | None]
+    warnings: list[str]
+    errors: list[str]
+
+
+class PreprocessingRunsResponse(BaseModel):
+    runs: list[PreprocessingRunResponse]
+
+
 class CreateProjectRequest(BaseModel):
     project_id: str | None = None
     name: str
@@ -226,11 +334,23 @@ class ExperimentsResponse(BaseModel):
     experiments: list[ExperimentResponse]
 
 
-app = FastAPI(title="NeuroWeave API", version="0.1.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    preprocessing_worker.start()
+    preprocessing_worker.recover()
+    yield
+
+
+app = FastAPI(title="NeuroWeave API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -564,6 +684,125 @@ def get_dataset_validation(dataset_id: str) -> ValidationReportResponse:
     return _validation_report_response(report)
 
 
+@app.post(
+    "/datasets/{dataset_id}/preprocessing-runs",
+    response_model=PreprocessingRunResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_preprocessing_run(
+    dataset_id: str,
+    config_payload: PreprocessingConfigPayload,
+) -> PreprocessingRunResponse:
+    dataset = registry_repository.get_dataset(dataset_id)
+    if dataset is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    report = _validate_dataset(dataset)
+    if not report.valid:
+        updated_dataset = replace(dataset, status=report.status)
+        registry_repository.update_dataset(updated_dataset)
+        raise HTTPException(
+            status_code=409,
+            detail="Dataset must be valid before preprocessing.",
+        )
+
+    recording = registry_repository.get_recording(dataset_id)
+    if recording is None:
+        raise HTTPException(status_code=409, detail="Recording not found")
+
+    uploaded_file = _find_uploaded_file(dataset_id, recording.file_id)
+    if uploaded_file is None or uploaded_file.kind != UploadedFileKind.EEG:
+        raise HTTPException(status_code=409, detail="EEG file not found")
+
+    config = PreprocessingConfig(**config_payload.model_dump())
+    config_errors = _validate_preprocessing_config(config, recording)
+    if config_errors:
+        raise HTTPException(status_code=422, detail=config_errors)
+
+    run_id = _new_id("preprocess")
+    output_path = PROCESSED_DIR / dataset_id / run_id / "raw_preprocessed.fif"
+
+    run = PreprocessingRun(
+        run_id=run_id,
+        dataset_id=dataset_id,
+        config=config,
+        status=PreprocessingRunStatus.PENDING,
+        output_path=str(output_path),
+        output_metadata=_preprocessing_input_provenance(
+            uploaded_file=uploaded_file,
+            recording=recording,
+        ),
+    )
+    run_repository.save_preprocessing_run(run)
+    preprocessing_worker.enqueue(run_id)
+    return _preprocessing_run_response(run)
+
+
+@app.get(
+    "/preprocessing-runs/{run_id}",
+    response_model=PreprocessingRunResponse,
+)
+def get_preprocessing_run(run_id: str) -> PreprocessingRunResponse:
+    run = run_repository.get_preprocessing_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Preprocessing run not found")
+
+    return _preprocessing_run_response(run)
+
+
+@app.post(
+    "/preprocessing-runs/{run_id}/cancel",
+    response_model=PreprocessingRunResponse,
+)
+def cancel_preprocessing_run(run_id: str) -> PreprocessingRunResponse:
+    run = run_repository.get_preprocessing_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Preprocessing run not found")
+
+    if run.status == PreprocessingRunStatus.PENDING:
+        cancelled_at = _utc_now_iso()
+        cancelled_run = replace(
+            run,
+            status=PreprocessingRunStatus.CANCELLED,
+            finished_at_utc=cancelled_at,
+            cancel_requested_at_utc=run.cancel_requested_at_utc or cancelled_at,
+            warnings=[*run.warnings, "Run cancelled before preprocessing started."],
+        )
+        run_repository.save_preprocessing_run(cancelled_run)
+        return _preprocessing_run_response(cancelled_run)
+
+    if run.status == PreprocessingRunStatus.RUNNING:
+        cancelling_run = replace(
+            run,
+            status=PreprocessingRunStatus.CANCELLING,
+            cancel_requested_at_utc=run.cancel_requested_at_utc or _utc_now_iso(),
+            warnings=[
+                *run.warnings,
+                "Cancellation requested; preprocessing will stop at the next checkpoint.",
+            ],
+        )
+        run_repository.save_preprocessing_run(cancelling_run)
+        return _preprocessing_run_response(cancelling_run)
+
+    return _preprocessing_run_response(run)
+
+
+@app.get(
+    "/datasets/{dataset_id}/preprocessing-runs",
+    response_model=PreprocessingRunsResponse,
+)
+def list_dataset_preprocessing_runs(dataset_id: str) -> PreprocessingRunsResponse:
+    if registry_repository.get_dataset(dataset_id) is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    return PreprocessingRunsResponse(
+        runs=[
+            _preprocessing_run_response(run)
+            for run in run_repository.list_preprocessing_runs(dataset_id=dataset_id)
+        ]
+    )
+
+
 @app.get("/datasets/{dataset_id}", response_model=DatasetResponse)
 def get_dataset(dataset_id: str) -> DatasetResponse:
     dataset = registry_repository.get_dataset(dataset_id)
@@ -681,6 +920,122 @@ def _validation_report_response(report: ValidationReport) -> ValidationReportRes
     )
 
 
+def _preprocessing_run_response(run: PreprocessingRun) -> PreprocessingRunResponse:
+    return PreprocessingRunResponse(
+        run_id=run.run_id,
+        dataset_id=run.dataset_id,
+        config=PreprocessingConfigPayload(**run.config.__dict__),
+        status=run.status.value,
+        started_at_utc=run.started_at_utc,
+        finished_at_utc=run.finished_at_utc,
+        cancel_requested_at_utc=run.cancel_requested_at_utc,
+        output_path=run.output_path,
+        output_metadata=run.output_metadata,
+        warnings=run.warnings,
+        errors=run.errors,
+    )
+
+
+def _preprocessing_input_provenance(
+    uploaded_file: IngestionUploadedFile,
+    recording: Recording,
+) -> dict[str, str | int | float | bool | None]:
+    return {
+        "input_file_id": uploaded_file.file_id,
+        "input_original_filename": uploaded_file.original_filename,
+        "input_path": uploaded_file.stored_path,
+        "input_size_bytes": uploaded_file.size_bytes,
+        "input_checksum_sha256": uploaded_file.checksum_sha256,
+        "input_file_format": recording.metadata.file_format,
+        "input_channel_count": recording.metadata.channel_count,
+        "input_sampling_rate_hz": recording.metadata.sampling_rate_hz,
+        "input_duration_seconds": recording.metadata.duration_seconds,
+        "input_channel_names": ",".join(recording.metadata.channel_names),
+    }
+
+
+def _preprocessing_completed_provenance(
+    run: PreprocessingRun,
+    output_path: Path,
+    processing_metadata: dict,
+) -> dict[str, str | int | float | bool | None]:
+    diagnostics_metadata = _write_preprocessing_diagnostics(
+        output_directory=output_path.parent,
+        processing_metadata=processing_metadata,
+    )
+    return {
+        **run.output_metadata,
+        "output_path": str(output_path),
+        "output_size_bytes": output_path.stat().st_size,
+        "output_checksum_sha256": _sha256_file(output_path),
+        "output_file_format": processing_metadata["file_format"],
+        "output_channel_count": processing_metadata["channel_count"],
+        "output_sampling_rate_hz": processing_metadata["sampling_rate_hz"],
+        "output_duration_seconds": processing_metadata["duration_seconds"],
+        "mne_version": processing_metadata["mne_version"],
+        **diagnostics_metadata,
+    }
+
+
+def _write_preprocessing_diagnostics(
+    output_directory: Path,
+    processing_metadata: dict,
+) -> dict[str, str | int | float | bool | None]:
+    diagnostics = processing_metadata.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return {
+            "diagnostics_available": False,
+            "diagnostics_file_count": 0,
+        }
+
+    output_directory.mkdir(parents=True, exist_ok=True)
+    files = {
+        "preprocessing_summary": output_directory / "preprocessing_summary.json",
+        "filter_report": output_directory / "filter_report.json",
+        "artifact_summary": output_directory / "artifact_summary.json",
+    }
+    written_paths: dict[str, Path] = {}
+    for key, path in files.items():
+        payload = diagnostics.get(key)
+        if isinstance(payload, dict):
+            _write_json_file(path, payload)
+            written_paths[key] = path
+
+    artifact_summary = diagnostics.get("artifact_summary")
+    output_artifacts = (
+        artifact_summary.get("output", {})
+        if isinstance(artifact_summary, dict)
+        else {}
+    )
+    return {
+        "diagnostics_available": bool(written_paths),
+        "diagnostics_file_count": len(written_paths),
+        "diagnostics_directory": str(output_directory),
+        "preprocessing_summary_path": str(written_paths.get("preprocessing_summary"))
+        if "preprocessing_summary" in written_paths
+        else None,
+        "filter_report_path": str(written_paths.get("filter_report"))
+        if "filter_report" in written_paths
+        else None,
+        "artifact_summary_path": str(written_paths.get("artifact_summary"))
+        if "artifact_summary" in written_paths
+        else None,
+        "artifact_bad_channel_count": output_artifacts.get("bad_channel_count")
+        if isinstance(output_artifacts, dict)
+        else None,
+        "artifact_annotation_count": output_artifacts.get("annotation_count")
+        if isinstance(output_artifacts, dict)
+        else None,
+    }
+
+
+def _write_json_file(path: Path, payload: dict) -> None:
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
 def _validation_issue_response(issue: ValidationIssue) -> ValidationIssueResponse:
     return ValidationIssueResponse(
         severity=issue.severity.value,
@@ -698,6 +1053,222 @@ def _validate_dataset(dataset: IngestionDataset) -> ValidationReport:
         recording=recording,
         event_log=event_log,
     )
+
+
+def _execute_preprocessing_run(run_id: str) -> None:
+    run = run_repository.get_preprocessing_run(run_id)
+    if run is None:
+        return
+    if run.status == PreprocessingRunStatus.CANCELLED:
+        return
+    if run.status in {
+        PreprocessingRunStatus.COMPLETED,
+        PreprocessingRunStatus.FAILED,
+    }:
+        return
+    if run.status == PreprocessingRunStatus.CANCELLING:
+        cancelled_run = replace(
+            run,
+            status=PreprocessingRunStatus.CANCELLED,
+            finished_at_utc=_utc_now_iso(),
+            cancel_requested_at_utc=run.cancel_requested_at_utc,
+        )
+        run_repository.save_preprocessing_run(cancelled_run)
+        return
+
+    input_path = run.output_metadata.get("input_path")
+    output_path = run.output_path
+    if not isinstance(input_path, str) or not output_path:
+        failed_run = replace(
+            run,
+            status=PreprocessingRunStatus.FAILED,
+            finished_at_utc=_utc_now_iso(),
+            errors=["Preprocessing run is missing input or output paths."],
+        )
+        run_repository.save_preprocessing_run(failed_run)
+        return
+
+    running_run = replace(
+        run,
+        status=PreprocessingRunStatus.RUNNING,
+        started_at_utc=_utc_now_iso(),
+    )
+    run_repository.save_preprocessing_run(running_run)
+
+    try:
+        metadata = _run_preprocessing_subprocess(
+            run_id=run_id,
+            input_path=input_path,
+            output_path=output_path,
+            config=run.config,
+        )
+        output_file_path = Path(output_path)
+        completed_run = replace(
+            running_run,
+            status=PreprocessingRunStatus.COMPLETED,
+            finished_at_utc=_utc_now_iso(),
+            output_metadata=_preprocessing_completed_provenance(
+                run=running_run,
+                output_path=output_file_path,
+                processing_metadata=metadata,
+            ),
+            warnings=[str(warning) for warning in metadata.get("warnings", [])],
+        )
+        current_run = run_repository.get_preprocessing_run(run_id)
+        if current_run and current_run.status == PreprocessingRunStatus.CANCELLING:
+            cancelled_run = replace(
+                completed_run,
+                status=PreprocessingRunStatus.CANCELLED,
+                finished_at_utc=_utc_now_iso(),
+                cancel_requested_at_utc=current_run.cancel_requested_at_utc,
+                warnings=_dedupe_strings(
+                    [
+                        *current_run.warnings,
+                        *completed_run.warnings,
+                        "Run cancelled after preprocessing completed; output was retained.",
+                    ]
+                ),
+            )
+            run_repository.save_preprocessing_run(cancelled_run)
+        else:
+            run_repository.save_preprocessing_run(completed_run)
+    except PreprocessingError as exc:
+        current_run = run_repository.get_preprocessing_run(run_id)
+        current_warnings = current_run.warnings if current_run else []
+        next_status = (
+            PreprocessingRunStatus.CANCELLED
+            if current_run and current_run.status == PreprocessingRunStatus.CANCELLING
+            else PreprocessingRunStatus.FAILED
+        )
+        failed_run = replace(
+            running_run,
+            status=next_status,
+            finished_at_utc=_utc_now_iso(),
+            cancel_requested_at_utc=(
+                current_run.cancel_requested_at_utc if current_run else None
+            ),
+            warnings=_dedupe_strings([*current_warnings, *exc.processing_warnings]),
+            errors=[str(exc)],
+        )
+        run_repository.save_preprocessing_run(failed_run)
+
+
+def _run_preprocessing_subprocess(
+    run_id: str,
+    input_path: str,
+    output_path: str,
+    config: PreprocessingConfig,
+) -> dict:
+    context = get_context("spawn")
+    result_queue = context.Queue()
+    process = context.Process(
+        target=run_preprocessing_job,
+        args=(input_path, output_path, config, result_queue),
+    )
+    process.start()
+
+    while process.is_alive():
+        process.join(timeout=0.1)
+        if _is_cancellation_requested(run_id):
+            process.terminate()
+            process.join(timeout=5)
+            if process.is_alive():
+                process.kill()
+                process.join()
+            raise PreprocessingError(
+                "Preprocessing cancelled.",
+                processing_warnings=[
+                    "Cancellation terminated preprocessing subprocess."
+                ],
+            )
+
+    try:
+        result = result_queue.get_nowait()
+    except Empty as exc:
+        if process.exitcode == 0:
+            raise PreprocessingError(
+                "Preprocessing subprocess exited without a result."
+            ) from exc
+        raise PreprocessingError(
+            f"Preprocessing subprocess exited with code {process.exitcode}."
+        ) from exc
+
+    if result.get("status") == "completed":
+        metadata = result.get("metadata")
+        if isinstance(metadata, dict):
+            return metadata
+        raise PreprocessingError("Preprocessing subprocess returned invalid metadata.")
+
+    raise PreprocessingError(
+        str(result.get("error") or "Preprocessing subprocess failed."),
+        processing_warnings=[
+            str(warning) for warning in result.get("warnings", [])
+        ],
+    )
+
+
+def _is_cancellation_requested(run_id: str) -> bool:
+    run = run_repository.get_preprocessing_run(run_id)
+    return run is not None and run.status in {
+        PreprocessingRunStatus.CANCELLING,
+        PreprocessingRunStatus.CANCELLED,
+    }
+
+
+def _validate_preprocessing_config(
+    config: PreprocessingConfig,
+    recording: Recording,
+) -> list[str]:
+    errors: list[str] = []
+    sampling_rate = recording.metadata.sampling_rate_hz
+    nyquist = sampling_rate / 2
+
+    if (
+        config.high_pass_hz is not None
+        and config.low_pass_hz is not None
+        and config.high_pass_hz >= config.low_pass_hz
+    ):
+        errors.append("high_pass_hz must be lower than low_pass_hz.")
+
+    for field_name, value in (
+        ("high_pass_hz", config.high_pass_hz),
+        ("low_pass_hz", config.low_pass_hz),
+        ("notch_hz", config.notch_hz),
+    ):
+        if value is not None and value >= nyquist:
+            errors.append(
+                f"{field_name} must be lower than the Nyquist frequency ({nyquist:g} Hz)."
+            )
+
+    if config.resample_hz is not None and config.resample_hz > sampling_rate:
+        errors.append(
+            f"resample_hz must not exceed the input sampling rate ({sampling_rate:g} Hz)."
+        )
+
+    if config.reference:
+        reference = config.reference.strip().lower()
+        if reference not in {"average", "avg", "none", "original"}:
+            channel_names = set(recording.metadata.channel_names)
+            requested_channels = [
+                channel.strip()
+                for channel in config.reference.split(",")
+                if channel.strip()
+            ]
+            if not requested_channels:
+                errors.append("reference must be average, none, or existing channel names.")
+            else:
+                missing_channels = [
+                    channel
+                    for channel in requested_channels
+                    if channel not in channel_names
+                ]
+                if missing_channels:
+                    errors.append(
+                        "reference contains unknown channels: "
+                        + ", ".join(missing_channels)
+                    )
+
+    return errors
 
 
 def _find_uploaded_file(
@@ -725,6 +1296,20 @@ def _resolve_event_mapping(
 
 def _new_id(prefix: str) -> str:
     return f"{prefix}-{uuid4().hex[:12]}"
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            deduped.append(value)
+    return deduped
 
 
 def _store_upload_file(file: UploadFile, destination_directory: Path) -> Path:

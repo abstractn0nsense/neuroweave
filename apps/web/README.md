@@ -31,6 +31,15 @@ Phase 1 ingestion checks:
 - dataset validation status, errors, and warnings
 - preprocessing handoff remains disabled until validation succeeds
 
+Phase 2 browser smoke:
+
+```powershell
+cd apps/web
+npm run e2e:phase2
+```
+
+The smoke starts the API and web dev servers, uploads fixture EEG/events through the UI, validates the dataset, starts preprocessing, and waits for a completed run.
+
 Expected responsibilities:
 
 - upload or select EEG datasets

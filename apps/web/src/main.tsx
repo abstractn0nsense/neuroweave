@@ -129,6 +129,32 @@ type ValidationReport = {
   issues: ValidationIssue[];
 };
 
+type PreprocessingConfig = {
+  high_pass_hz: number | null;
+  low_pass_hz: number | null;
+  notch_hz: number | null;
+  resample_hz: number | null;
+  reference: string | null;
+};
+
+type PreprocessingRun = {
+  run_id: string;
+  dataset_id: string;
+  config: PreprocessingConfig;
+  status: string;
+  started_at_utc: string | null;
+  finished_at_utc: string | null;
+  cancel_requested_at_utc: string | null;
+  output_path: string | null;
+  output_metadata: Record<string, MetadataValue>;
+  warnings: string[];
+  errors: string[];
+};
+
+type PreprocessingRunsResponse = {
+  runs: PreprocessingRun[];
+};
+
 type MetadataValue = string | number | boolean | null;
 
 type NoticeState = {
@@ -159,6 +185,14 @@ const EMPTY_MAPPING: Record<MappingKey, string> = {
   response: "",
   correct: "",
   reaction_time_seconds: "",
+};
+
+const DEFAULT_PREPROCESSING_CONFIG = {
+  high_pass_hz: "1",
+  low_pass_hz: "40",
+  notch_hz: "",
+  resample_hz: "",
+  reference: "average",
 };
 
 function App() {
@@ -215,6 +249,16 @@ function App() {
   const [mapping, setMapping] = useState<Record<MappingKey, string>>(EMPTY_MAPPING);
   const [eventLog, setEventLog] = useState<EventLogResponse | null>(null);
   const [validation, setValidation] = useState<ValidationReport | null>(null);
+  const [preprocessingConfig, setPreprocessingConfig] = useState(
+    DEFAULT_PREPROCESSING_CONFIG,
+  );
+  const [preprocessingRuns, setPreprocessingRuns] = useState<
+    LoadState<PreprocessingRun[]>
+  >({
+    status: "idle",
+    data: null,
+    error: null,
+  });
   const [notice, setNotice] = useState<NoticeState>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
@@ -317,6 +361,31 @@ function App() {
       isCurrent = false;
     };
   }, [selectedSampleId]);
+
+  useEffect(() => {
+    if (!activeDatasetId) {
+      setPreprocessingRuns({ status: "idle", data: null, error: null });
+      return;
+    }
+
+    void refreshPreprocessingRuns(activeDatasetId);
+  }, [activeDatasetId]);
+
+  useEffect(() => {
+    const hasActiveRun =
+      preprocessingRuns.data?.some((run) =>
+        ["pending", "running", "cancelling"].includes(run.status),
+      ) ?? false;
+    if (!activeDatasetId || !hasActiveRun) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void refreshPreprocessingRuns(activeDatasetId, { silent: true });
+    }, 2000);
+
+    return () => window.clearInterval(intervalId);
+  }, [activeDatasetId, preprocessingRuns.data]);
 
   async function refreshWorkspace() {
     setNotice(null);
@@ -466,6 +535,7 @@ function App() {
       setEventPreview(null);
       setEventLog(null);
       setValidation(null);
+      setPreprocessingRuns({ status: "success", data: [], error: null });
       await refreshDatasets();
       setNotice({ tone: "ok", message: "Dataset created." });
     });
@@ -571,7 +641,7 @@ function App() {
     });
   }
 
-  function beginPreprocessingHandoff() {
+  async function beginPreprocessingHandoff() {
     if (!activeDataset || (validation?.valid !== true && activeDataset.status !== "valid")) {
       setNotice({
         tone: "error",
@@ -580,9 +650,46 @@ function App() {
       return;
     }
 
-    setNotice({
-      tone: "ok",
-      message: `${activeDataset.dataset_id} is cleared for the Phase 2 preprocessing handoff.`,
+    const configError = getPreprocessingConfigError(preprocessingConfig);
+    if (configError) {
+      setNotice({ tone: "error", message: configError });
+      return;
+    }
+
+    await runAction("preprocessing", async () => {
+      const run = await postJson<PreprocessingRun>(
+        `/datasets/${encodeURIComponent(activeDataset.dataset_id)}/preprocessing-runs`,
+        normalizePreprocessingConfig(preprocessingConfig),
+      );
+      setPreprocessingRuns((current) => ({
+        status: "success",
+        data: [run, ...(current.data ?? [])],
+        error: null,
+      }));
+      setNotice({
+        tone: "neutral",
+        message: `Preprocessing run ${run.run_id} queued.`,
+      });
+    });
+  }
+
+  async function cancelPreprocessingRun(runId: string) {
+    await runAction(`cancel-${runId}`, async () => {
+      const run = await requestJson<PreprocessingRun>(
+        `/preprocessing-runs/${encodeURIComponent(runId)}/cancel`,
+        { method: "POST" },
+      );
+      setPreprocessingRuns((current) => ({
+        status: "success",
+        data: (current.data ?? []).map((item) =>
+          item.run_id === run.run_id ? run : item,
+        ),
+        error: null,
+      }));
+      setNotice({
+        tone: run.status === "cancelled" ? "ok" : "neutral",
+        message: `Preprocessing run ${run.run_id} ${run.status}.`,
+      });
     });
   }
 
@@ -613,6 +720,31 @@ function App() {
   async function refreshDatasets() {
     const response = await fetchJson<DatasetsResponse>("/datasets");
     setDatasets({ status: "success", data: response.datasets, error: null });
+  }
+
+  async function refreshPreprocessingRuns(
+    datasetId: string,
+    options: { silent?: boolean } = {},
+  ) {
+    if (!options.silent) {
+      setPreprocessingRuns({ status: "loading", data: null, error: null });
+    }
+    try {
+      const response = await fetchJson<PreprocessingRunsResponse>(
+        `/datasets/${encodeURIComponent(datasetId)}/preprocessing-runs`,
+      );
+      setPreprocessingRuns({
+        status: "success",
+        data: response.runs,
+        error: null,
+      });
+    } catch (error: unknown) {
+      setPreprocessingRuns({
+        status: "error",
+        data: null,
+        error: getErrorMessage(error),
+      });
+    }
   }
 
   function updateDatasetInState(dataset: Dataset) {
@@ -746,10 +878,14 @@ function App() {
                 onEegFileChange={setEegFile}
                 onEventFileChange={setEventFile}
                 onMappingChange={setMapping}
+                onPreprocessingConfigChange={setPreprocessingConfig}
+                onCancelPreprocessingRun={cancelPreprocessingRun}
                 onSubmitEventMapping={submitEventMapping}
                 onUploadEeg={uploadEegFile}
                 onUploadEvent={uploadEventFile}
                 onValidate={validateDataset}
+                preprocessingConfig={preprocessingConfig}
+                preprocessingRuns={preprocessingRuns}
                 validation={validation}
               />
             </section>
@@ -813,6 +949,7 @@ function StudySetup({
         <label>
           <span>Name</span>
           <input
+            data-testid="project-name-input"
             onChange={(event) =>
               onProjectFormChange({ ...projectForm, name: event.target.value })
             }
@@ -837,6 +974,7 @@ function StudySetup({
         </label>
         <button
           className="secondary-button"
+          data-testid="create-project-button"
           disabled={busyAction === "project"}
           type="submit"
         >
@@ -847,6 +985,7 @@ function StudySetup({
       <label>
         <span>Selected Project</span>
         <select
+          data-testid="selected-project-select"
           onChange={(event) => onSelectProject(event.target.value)}
           value={selectedProjectId}
         >
@@ -865,6 +1004,7 @@ function StudySetup({
         <label>
           <span>Name</span>
           <input
+            data-testid="experiment-name-input"
             onChange={(event) =>
               onExperimentFormChange({
                 ...experimentForm,
@@ -892,6 +1032,7 @@ function StudySetup({
         </label>
         <button
           className="secondary-button"
+          data-testid="create-experiment-button"
           disabled={busyAction === "experiment" || !selectedProjectId}
           type="submit"
         >
@@ -902,6 +1043,7 @@ function StudySetup({
       <label>
         <span>Selected Experiment</span>
         <select
+          data-testid="selected-experiment-select"
           disabled={!selectedProjectId}
           onChange={(event) => onSelectExperiment(event.target.value)}
           value={selectedExperimentId}
@@ -957,6 +1099,7 @@ function DatasetSection({
         <label>
           <span>Participant</span>
           <input
+            data-testid="dataset-participant-input"
             disabled={disabled}
             onChange={(event) =>
               onDatasetFormChange({
@@ -972,6 +1115,7 @@ function DatasetSection({
         <label>
           <span>Group</span>
           <input
+            data-testid="dataset-session-input"
             disabled={disabled}
             onChange={(event) =>
               onDatasetFormChange({
@@ -1001,6 +1145,7 @@ function DatasetSection({
         </label>
         <button
           className="primary-button"
+          data-testid="create-dataset-button"
           disabled={disabled || busyAction === "dataset"}
           type="submit"
         >
@@ -1053,10 +1198,14 @@ function IntakeSection({
   onEegFileChange,
   onEventFileChange,
   onMappingChange,
+  onPreprocessingConfigChange,
+  onCancelPreprocessingRun,
   onSubmitEventMapping,
   onUploadEeg,
   onUploadEvent,
   onValidate,
+  preprocessingConfig,
+  preprocessingRuns,
   validation,
 }: {
   activeDataset: Dataset | null;
@@ -1070,14 +1219,21 @@ function IntakeSection({
   onEegFileChange: (file: File | null) => void;
   onEventFileChange: (file: File | null) => void;
   onMappingChange: (mapping: Record<MappingKey, string>) => void;
+  onPreprocessingConfigChange: (
+    config: typeof DEFAULT_PREPROCESSING_CONFIG,
+  ) => void;
+  onCancelPreprocessingRun: (runId: string) => void;
   onSubmitEventMapping: () => void;
   onUploadEeg: () => void;
   onUploadEvent: () => void;
   onValidate: () => void;
+  preprocessingConfig: typeof DEFAULT_PREPROCESSING_CONFIG;
+  preprocessingRuns: LoadState<PreprocessingRun[]>;
   validation: ValidationReport | null;
 }) {
   const disabled = !activeDataset;
   const canContinue = validation?.valid === true || activeDataset?.status === "valid";
+  const configError = getPreprocessingConfigError(preprocessingConfig);
 
   return (
     <div className="intake-stack">
@@ -1085,12 +1241,14 @@ function IntakeSection({
         <div className="upload-group">
           <h3>EEG Recording</h3>
           <input
+            data-testid="eeg-file-input"
             disabled={disabled}
             onChange={(event) => onEegFileChange(event.target.files?.[0] ?? null)}
             type="file"
           />
           <button
             className="secondary-button"
+            data-testid="upload-eeg-button"
             disabled={disabled || !eegFile || busyAction === "eeg-upload"}
             onClick={onUploadEeg}
             type="button"
@@ -1102,12 +1260,14 @@ function IntakeSection({
           <h3>Event Log</h3>
           <input
             accept=".csv,.tsv,text/csv,text/tab-separated-values"
+            data-testid="event-file-input"
             disabled={disabled}
             onChange={(event) => onEventFileChange(event.target.files?.[0] ?? null)}
             type="file"
           />
           <button
             className="secondary-button"
+            data-testid="upload-events-button"
             disabled={disabled || !eventFile || busyAction === "event-upload"}
             onClick={onUploadEvent}
             type="button"
@@ -1129,6 +1289,7 @@ function IntakeSection({
                     {field.required ? " *" : ""}
                   </span>
                   <select
+                    data-testid={`mapping-${field.key}-select`}
                     onChange={(event) =>
                       onMappingChange({
                         ...mapping,
@@ -1149,6 +1310,7 @@ function IntakeSection({
             </div>
             <button
               className="primary-button"
+              data-testid="save-mapping-button"
               disabled={!mapping.onset_seconds || busyAction === "event-mapping"}
               onClick={onSubmitEventMapping}
               type="button"
@@ -1166,6 +1328,7 @@ function IntakeSection({
       <div className="validation-bar">
         <button
           className="primary-button"
+          data-testid="validate-dataset-button"
           disabled={disabled || busyAction === "validation"}
           onClick={onValidate}
           type="button"
@@ -1181,24 +1344,169 @@ function IntakeSection({
 
       {validation ? <ValidationPanel report={validation} /> : null}
 
-      <div className="handoff-panel">
+      <div className="preprocessing-panel">
         <div>
           <h3>Preprocessing Handoff</h3>
           <p className="muted">
             {canContinue
-              ? "This dataset passed validation and can enter the next phase."
+              ? "Configure filters and create a run for this valid dataset."
               : "A dataset must pass validation before preprocessing can start."}
           </p>
+          {configError ? <p className="error-text">{configError}</p> : null}
+        </div>
+        <div className="preprocessing-grid">
+          <label>
+            <span>High-pass Hz</span>
+            <input
+              disabled={!canContinue}
+              min="0"
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  high_pass_hz: event.target.value,
+                })
+              }
+              step="0.1"
+              type="number"
+              value={preprocessingConfig.high_pass_hz}
+            />
+          </label>
+          <label>
+            <span>Low-pass Hz</span>
+            <input
+              disabled={!canContinue}
+              min="0.1"
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  low_pass_hz: event.target.value,
+                })
+              }
+              step="0.1"
+              type="number"
+              value={preprocessingConfig.low_pass_hz}
+            />
+          </label>
+          <label>
+            <span>Notch Hz</span>
+            <input
+              disabled={!canContinue}
+              min="0.1"
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  notch_hz: event.target.value,
+                })
+              }
+              placeholder="Optional"
+              step="0.1"
+              type="number"
+              value={preprocessingConfig.notch_hz}
+            />
+          </label>
+          <label>
+            <span>Resample Hz</span>
+            <input
+              data-testid="resample-hz-input"
+              disabled={!canContinue}
+              min="0.1"
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  resample_hz: event.target.value,
+                })
+              }
+              placeholder="Optional"
+              step="0.1"
+              type="number"
+              value={preprocessingConfig.resample_hz}
+            />
+          </label>
+          <label>
+            <span>Reference</span>
+            <select
+              data-testid="reference-select"
+              disabled={!canContinue}
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  reference: event.target.value,
+                })
+              }
+              value={preprocessingConfig.reference}
+            >
+              <option value="">Unchanged</option>
+              <option value="average">Average</option>
+            </select>
+          </label>
         </div>
         <button
           className="primary-button"
-          disabled={!canContinue}
+          data-testid="start-preprocessing-button"
+          disabled={!canContinue || Boolean(configError) || busyAction === "preprocessing"}
           onClick={onBeginPreprocessing}
           type="button"
         >
-          Continue
+          Start Preprocessing
         </button>
+        <PreprocessingRunList
+          onCancel={onCancelPreprocessingRun}
+          runs={preprocessingRuns}
+        />
       </div>
+    </div>
+  );
+}
+
+function PreprocessingRunList({
+  onCancel,
+  runs,
+}: {
+  onCancel: (runId: string) => void;
+  runs: LoadState<PreprocessingRun[]>;
+}) {
+  if (runs.status === "loading" || runs.status === "idle") {
+    return <p className="muted">Loading preprocessing runs...</p>;
+  }
+
+  if (runs.status === "error") {
+    return <p className="error-text">{runs.error}</p>;
+  }
+
+  const runData = runs.data ?? [];
+  if (runData.length === 0) {
+    return <p className="muted">No preprocessing runs yet.</p>;
+  }
+
+  return (
+    <div className="run-list" data-testid="preprocessing-runs">
+      {runData.map((run) => (
+        <div className="run-row" key={run.run_id}>
+          <div>
+            <strong>{run.run_id}</strong>
+            <small>{run.output_path ?? "No output file"}</small>
+          </div>
+          <div className="run-meta">
+            <span>{run.status}</span>
+            <span>{formatRunMetadata(run.output_metadata)}</span>
+            {["pending", "running"].includes(run.status) ? (
+              <button
+                className="secondary-button compact-button"
+                onClick={() => onCancel(run.run_id)}
+                type="button"
+              >
+                Cancel
+              </button>
+            ) : null}
+          </div>
+          {run.warnings.length > 0 ? (
+            <p className="muted">{run.warnings.join(" ")}</p>
+          ) : null}
+          {run.errors.length > 0 ? (
+            <p className="error-text">{run.errors.join(" ")}</p>
+          ) : null}
+        </div>
+      ))}
     </div>
   );
 }
@@ -1503,6 +1811,78 @@ function normalizeMappingPayload(mapping: Record<MappingKey, string>): EventColu
       reaction_time_seconds: null,
     },
   );
+}
+
+function normalizePreprocessingConfig(
+  config: typeof DEFAULT_PREPROCESSING_CONFIG,
+): PreprocessingConfig {
+  return {
+    high_pass_hz: parseOptionalNumber(config.high_pass_hz),
+    low_pass_hz: parseOptionalNumber(config.low_pass_hz),
+    notch_hz: parseOptionalNumber(config.notch_hz),
+    resample_hz: parseOptionalNumber(config.resample_hz),
+    reference: config.reference || null,
+  };
+}
+
+function getPreprocessingConfigError(
+  config: typeof DEFAULT_PREPROCESSING_CONFIG,
+): string | null {
+  const highPass = parseOptionalNumber(config.high_pass_hz);
+  const lowPass = parseOptionalNumber(config.low_pass_hz);
+  const notch = parseOptionalNumber(config.notch_hz);
+  const resample = parseOptionalNumber(config.resample_hz);
+
+  for (const [label, value] of [
+    ["High-pass", highPass],
+    ["Low-pass", lowPass],
+    ["Notch", notch],
+    ["Resample", resample],
+  ] as const) {
+    if (value !== null && (!Number.isFinite(value) || value < 0)) {
+      return `${label} must be a non-negative number.`;
+    }
+  }
+
+  if (lowPass !== null && lowPass <= 0) {
+    return "Low-pass must be greater than 0 Hz.";
+  }
+
+  if (notch !== null && notch <= 0) {
+    return "Notch must be greater than 0 Hz.";
+  }
+
+  if (resample !== null && resample <= 0) {
+    return "Resample must be greater than 0 Hz.";
+  }
+
+  if (highPass !== null && lowPass !== null && highPass >= lowPass) {
+    return "High-pass must be lower than low-pass.";
+  }
+
+  return null;
+}
+
+function parseOptionalNumber(value: string): number | null {
+  if (!value.trim()) {
+    return null;
+  }
+  return Number(value);
+}
+
+function formatRunMetadata(metadata: Record<string, MetadataValue>): string {
+  const samplingRate =
+    metadata.output_sampling_rate_hz ?? metadata.sampling_rate_hz;
+  const duration =
+    metadata.output_duration_seconds ?? metadata.duration_seconds;
+  const channels =
+    metadata.output_channel_count ?? metadata.channel_count;
+  const parts = [
+    typeof samplingRate === "number" ? `${samplingRate.toFixed(1)} Hz` : null,
+    typeof channels === "number" ? `${channels} ch` : null,
+    typeof duration === "number" ? `${duration.toFixed(1)} s` : null,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" / ") : "Metadata pending";
 }
 
 function getErrorMessage(error: unknown): string {

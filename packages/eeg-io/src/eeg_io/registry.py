@@ -1,7 +1,12 @@
 from dataclasses import asdict
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 import json
+import os
+import tempfile
+import threading
+import time
 
 from eeg_core.domain import (
     Dataset,
@@ -11,6 +16,9 @@ from eeg_core.domain import (
     Experiment,
     NormalizedEvent,
     Participant,
+    PreprocessingConfig,
+    PreprocessingRun,
+    PreprocessingRunStatus,
     Project,
     Recording,
     UploadedFile,
@@ -20,6 +28,10 @@ from eeg_core.domain import (
 
 
 JsonObject = dict[str, Any]
+_LOCK_TIMEOUT_SECONDS = 10.0
+_LOCK_POLL_SECONDS = 0.05
+_PROCESS_LOCKS: dict[Path, Any] = {}
+_PROCESS_LOCKS_GUARD = threading.Lock()
 
 
 class JsonRegistryError(Exception):
@@ -54,17 +66,19 @@ class JsonRegistryRepository:
             self.experiments_path,
             self.participants_path,
         ):
-            if not path.exists():
-                _write_json(path, [])
+            with _json_file_lock(path):
+                if not path.exists():
+                    _write_json_unlocked(path, [])
 
     def save_project(self, project: Project) -> Project:
         self.initialize()
-        projects = _upsert_by_id(
-            _read_json_list(self.projects_path),
-            asdict(project),
-            "project_id",
-        )
-        _write_json(self.projects_path, projects)
+        with _json_file_lock(self.projects_path):
+            projects = _upsert_by_id(
+                _read_json_list_unlocked(self.projects_path),
+                asdict(project),
+                "project_id",
+            )
+            _write_json_unlocked(self.projects_path, projects)
         return project
 
     def list_projects(self) -> list[Project]:
@@ -76,12 +90,13 @@ class JsonRegistryRepository:
 
     def save_experiment(self, experiment: Experiment) -> Experiment:
         self.initialize()
-        experiments = _upsert_by_id(
-            _read_json_list(self.experiments_path),
-            asdict(experiment),
-            "experiment_id",
-        )
-        _write_json(self.experiments_path, experiments)
+        with _json_file_lock(self.experiments_path):
+            experiments = _upsert_by_id(
+                _read_json_list_unlocked(self.experiments_path),
+                asdict(experiment),
+                "experiment_id",
+            )
+            _write_json_unlocked(self.experiments_path, experiments)
         return experiment
 
     def list_experiments(self, project_id: str | None = None) -> list[Experiment]:
@@ -103,12 +118,13 @@ class JsonRegistryRepository:
 
     def save_participant(self, participant: Participant) -> Participant:
         self.initialize()
-        participants = _upsert_by_id(
-            _read_json_list(self.participants_path),
-            asdict(participant),
-            "participant_id",
-        )
-        _write_json(self.participants_path, participants)
+        with _json_file_lock(self.participants_path):
+            participants = _upsert_by_id(
+                _read_json_list_unlocked(self.participants_path),
+                asdict(participant),
+                "participant_id",
+            )
+            _write_json_unlocked(self.participants_path, participants)
         return participant
 
     def list_participants(self, project_id: str | None = None) -> list[Participant]:
@@ -172,12 +188,15 @@ class JsonRegistryRepository:
 
     def save_uploaded_file(self, uploaded_file: UploadedFile) -> UploadedFile:
         self.save_dataset_files_directory(uploaded_file.dataset_id)
-        files = _upsert_by_id(
-            self.list_uploaded_files(uploaded_file.dataset_id, initialize=False),
-            asdict(uploaded_file),
-            "file_id",
-        )
-        _write_json(self.uploaded_files_path(uploaded_file.dataset_id), files)
+        path = self.uploaded_files_path(uploaded_file.dataset_id)
+        with _json_file_lock(path):
+            existing_files = _read_json_list_unlocked(path) if path.exists() else []
+            files = _upsert_by_id(
+                existing_files,
+                asdict(uploaded_file),
+                "file_id",
+            )
+            _write_json_unlocked(path, files)
         return uploaded_file
 
     def list_uploaded_files(
@@ -186,13 +205,14 @@ class JsonRegistryRepository:
         initialize: bool = True,
     ) -> list[UploadedFile] | list[JsonObject]:
         path = self.uploaded_files_path(dataset_id)
-        if not path.exists():
-            if initialize:
-                self.save_dataset_files_directory(dataset_id)
-                _write_json(path, [])
-            return []
+        with _json_file_lock(path):
+            if not path.exists():
+                if initialize:
+                    self.save_dataset_files_directory(dataset_id)
+                    _write_json_unlocked(path, [])
+                return []
 
-        files = _read_json_list(path)
+            files = _read_json_list_unlocked(path)
         if not initialize:
             return files
         return [_uploaded_file_from_json(item) for item in files]
@@ -246,6 +266,44 @@ class JsonRegistryRepository:
 
     def event_log_path(self, dataset_id: str) -> Path:
         return self.dataset_directory(dataset_id) / "event_log.json"
+
+
+class JsonRunRepository:
+    def __init__(self, runs_root: Path):
+        self.runs_root = runs_root
+
+    def initialize(self) -> None:
+        self.runs_root.mkdir(parents=True, exist_ok=True)
+
+    def save_preprocessing_run(self, run: PreprocessingRun) -> PreprocessingRun:
+        self.initialize()
+        _write_json(self.preprocessing_run_path(run.run_id), asdict(run))
+        return run
+
+    def get_preprocessing_run(self, run_id: str) -> PreprocessingRun | None:
+        path = self.preprocessing_run_path(run_id)
+        if not path.exists():
+            return None
+        return _preprocessing_run_from_json(_read_json_object(path))
+
+    def list_preprocessing_runs(
+        self,
+        dataset_id: str | None = None,
+    ) -> list[PreprocessingRun]:
+        self.initialize()
+        runs = [
+            _preprocessing_run_from_json(_read_json_object(path))
+            for path in sorted(self.runs_root.glob("*/run.json"))
+        ]
+        if dataset_id is None:
+            return runs
+        return [run for run in runs if run.dataset_id == dataset_id]
+
+    def preprocessing_run_directory(self, run_id: str) -> Path:
+        return self.runs_root / run_id
+
+    def preprocessing_run_path(self, run_id: str) -> Path:
+        return self.preprocessing_run_directory(run_id) / "run.json"
 
 
 def _project_from_json(data: JsonObject) -> Project:
@@ -330,6 +388,34 @@ def _event_log_from_json(data: JsonObject) -> EventLog:
     )
 
 
+def _preprocessing_config_from_json(data: JsonObject) -> PreprocessingConfig:
+    return PreprocessingConfig(
+        high_pass_hz=_optional_float(data.get("high_pass_hz")),
+        low_pass_hz=_optional_float(data.get("low_pass_hz")),
+        notch_hz=_optional_float(data.get("notch_hz")),
+        resample_hz=_optional_float(data.get("resample_hz")),
+        reference=data.get("reference"),
+    )
+
+
+def _preprocessing_run_from_json(data: JsonObject) -> PreprocessingRun:
+    return PreprocessingRun(
+        run_id=str(data["run_id"]),
+        dataset_id=str(data["dataset_id"]),
+        config=_preprocessing_config_from_json(data.get("config", {})),
+        status=PreprocessingRunStatus(
+            data.get("status", PreprocessingRunStatus.PENDING)
+        ),
+        started_at_utc=data.get("started_at_utc"),
+        finished_at_utc=data.get("finished_at_utc"),
+        cancel_requested_at_utc=data.get("cancel_requested_at_utc"),
+        output_path=data.get("output_path"),
+        output_metadata=dict(data.get("output_metadata", {})),
+        warnings=[str(warning) for warning in data.get("warnings", [])],
+        errors=[str(error) for error in data.get("errors", [])],
+    )
+
+
 def _normalized_event_from_json(data: JsonObject) -> NormalizedEvent:
     return NormalizedEvent(
         onset_seconds=float(data["onset_seconds"]),
@@ -371,20 +457,35 @@ def _upsert_by_id(
 
 
 def _read_json_list(path: Path) -> list[JsonObject]:
-    data = _read_json(path)
+    with _json_file_lock(path):
+        return _read_json_list_unlocked(path)
+
+
+def _read_json_list_unlocked(path: Path) -> list[JsonObject]:
+    data = _read_json_unlocked(path)
     if not isinstance(data, list):
         raise JsonRegistryError(f"Expected JSON list in {path}")
     return data
 
 
 def _read_json_object(path: Path) -> JsonObject:
-    data = _read_json(path)
+    with _json_file_lock(path):
+        return _read_json_object_unlocked(path)
+
+
+def _read_json_object_unlocked(path: Path) -> JsonObject:
+    data = _read_json_unlocked(path)
     if not isinstance(data, dict):
         raise JsonRegistryError(f"Expected JSON object in {path}")
     return data
 
 
 def _read_json(path: Path) -> Any:
+    with _json_file_lock(path):
+        return _read_json_unlocked(path)
+
+
+def _read_json_unlocked(path: Path) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
@@ -392,8 +493,104 @@ def _read_json(path: Path) -> Any:
 
 
 def _write_json(path: Path, data: Any) -> None:
+    with _json_file_lock(path):
+        _write_json_unlocked(path, data)
+
+
+def _write_json_unlocked(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(data, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    content = json.dumps(data, indent=2, sort_keys=True) + "\n"
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            delete=False,
+            dir=path.parent,
+            encoding="utf-8",
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+        ) as tmp_file:
+            tmp_file.write(content)
+            tmp_file.flush()
+            os.fsync(tmp_file.fileno())
+            tmp_path = Path(tmp_file.name)
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path is not None and tmp_path.exists():
+            tmp_path.unlink()
+
+
+@contextmanager
+def _json_file_lock(path: Path) -> Iterator[None]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_name(f".{path.name}.lock")
+    process_lock = _get_process_lock(lock_path)
+    with process_lock:
+        with lock_path.open("a+b") as lock_file:
+            _acquire_file_lock(lock_file, lock_path)
+            try:
+                yield
+            finally:
+                _release_file_lock(lock_file)
+
+
+def _get_process_lock(lock_path: Path) -> Any:
+    normalized_path = lock_path.resolve()
+    with _PROCESS_LOCKS_GUARD:
+        process_lock = _PROCESS_LOCKS.get(normalized_path)
+        if process_lock is None:
+            process_lock = threading.RLock()
+            _PROCESS_LOCKS[normalized_path] = process_lock
+        return process_lock
+
+
+def _acquire_file_lock(lock_file: Any, lock_path: Path) -> None:
+    deadline = time.monotonic() + _LOCK_TIMEOUT_SECONDS
+    while True:
+        try:
+            if os.name == "nt":
+                _acquire_windows_file_lock(lock_file)
+            else:
+                _acquire_posix_file_lock(lock_file)
+            return
+        except OSError as exc:
+            if time.monotonic() >= deadline:
+                raise JsonRegistryError(
+                    f"Timed out waiting for JSON registry lock: {lock_path}"
+                ) from exc
+            time.sleep(_LOCK_POLL_SECONDS)
+
+
+def _release_file_lock(lock_file: Any) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        lock_file.seek(0)
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _acquire_windows_file_lock(lock_file: Any) -> None:
+    import msvcrt
+
+    _ensure_lock_byte(lock_file)
+    lock_file.seek(0)
+    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+
+
+def _acquire_posix_file_lock(lock_file: Any) -> None:
+    import fcntl
+
+    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _ensure_lock_byte(lock_file: Any) -> None:
+    lock_file.seek(0, os.SEEK_END)
+    if lock_file.tell() == 0:
+        lock_file.write(b"\0")
+        lock_file.flush()
+    lock_file.seek(0)

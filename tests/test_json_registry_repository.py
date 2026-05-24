@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 import json
 
 from eeg_core.domain import (
@@ -8,13 +9,16 @@ from eeg_core.domain import (
     Experiment,
     NormalizedEvent,
     Participant,
+    PreprocessingConfig,
+    PreprocessingRun,
+    PreprocessingRunStatus,
     Project,
     Recording,
     RecordingMetadata,
     UploadedFile,
     UploadedFileKind,
 )
-from eeg_io.registry import JsonRegistryRepository
+from eeg_io.registry import JsonRegistryRepository, JsonRunRepository
 
 
 def test_initialize_creates_upload_registry_structure(tmp_path):
@@ -97,6 +101,21 @@ def test_registry_save_updates_existing_records(tmp_path):
     assert len(repository.list_projects()) == 1
 
 
+def test_registry_preserves_concurrent_project_writes(tmp_path):
+    repository = JsonRegistryRepository(tmp_path / "uploads")
+
+    def save_project(index: int) -> None:
+        repository.save_project(
+            Project(project_id=f"project-{index:03}", name=f"Project {index}")
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(save_project, range(24)))
+
+    project_ids = [project.project_id for project in repository.list_projects()]
+    assert project_ids == [f"project-{index:03}" for index in range(24)]
+
+
 def test_registry_persists_uploaded_files_and_recording(tmp_path):
     repository = JsonRegistryRepository(tmp_path / "uploads")
     dataset = Dataset(
@@ -140,6 +159,41 @@ def test_registry_persists_uploaded_files_and_recording(tmp_path):
     assert repository.recording_path(dataset.dataset_id).is_file()
 
 
+def test_registry_preserves_concurrent_uploaded_file_writes(tmp_path):
+    repository = JsonRegistryRepository(tmp_path / "uploads")
+    dataset = Dataset(
+        dataset_id="dataset-001",
+        project_id="project-001",
+        experiment_id="experiment-001",
+        participant_id="participant-001",
+        session_id="session-001",
+    )
+    repository.save_dataset(dataset)
+
+    def save_uploaded_file(index: int) -> None:
+        repository.save_uploaded_file(
+            UploadedFile(
+                file_id=f"file-{index:03}",
+                dataset_id=dataset.dataset_id,
+                kind=UploadedFileKind.EEG,
+                original_filename=f"sample-{index:03}_raw.fif",
+                stored_path=str(
+                    repository.eeg_directory(dataset.dataset_id)
+                    / f"sample-{index:03}_raw.fif"
+                ),
+            )
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(save_uploaded_file, range(24)))
+
+    file_ids = [
+        uploaded_file.file_id
+        for uploaded_file in repository.list_uploaded_files(dataset.dataset_id)
+    ]
+    assert file_ids == [f"file-{index:03}" for index in range(24)]
+
+
 def test_registry_persists_event_preview(tmp_path):
     repository = JsonRegistryRepository(tmp_path / "uploads")
     dataset_id = "dataset-001"
@@ -180,3 +234,31 @@ def test_registry_persists_normalized_event_log(tmp_path):
 
     assert repository.get_event_log("dataset-001") == event_log
     assert repository.event_log_path("dataset-001").is_file()
+
+
+def test_run_repository_persists_preprocessing_runs(tmp_path):
+    repository = JsonRunRepository(tmp_path / "runs")
+    run = PreprocessingRun(
+        run_id="preprocess-001",
+        dataset_id="dataset-001",
+        config=PreprocessingConfig(
+            high_pass_hz=1.0,
+            low_pass_hz=40.0,
+            notch_hz=50.0,
+            resample_hz=128.0,
+            reference="average",
+        ),
+        status=PreprocessingRunStatus.COMPLETED,
+        started_at_utc="2026-05-24T00:00:00+00:00",
+        finished_at_utc="2026-05-24T00:01:00+00:00",
+        cancel_requested_at_utc="2026-05-24T00:00:30+00:00",
+        output_path="data/processed/dataset-001/preprocess-001/raw_preprocessed.fif",
+        output_metadata={"sampling_rate_hz": 128.0},
+        warnings=["reference unchanged"],
+    )
+
+    repository.save_preprocessing_run(run)
+
+    assert repository.get_preprocessing_run("preprocess-001") == run
+    assert repository.list_preprocessing_runs(dataset_id="dataset-001") == [run]
+    assert repository.preprocessing_run_path("preprocess-001").is_file()

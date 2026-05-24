@@ -62,7 +62,7 @@ Completed:
 
 Next:
 
-11. Preprocessing handoff: create a validated-dataset entrypoint for filtering, epoching, and downstream analysis jobs.
+Phase 1 is closed after ingestion MVP and CI stabilization. Remaining launcher polish and preprocessing handoff are tracked as Phase 2 in `docs/phase-2-roadmap.md`.
 
 ## Event And Behavior Logs
 
