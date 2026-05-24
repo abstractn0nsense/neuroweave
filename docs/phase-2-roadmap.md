@@ -191,8 +191,6 @@ Implemented cancellation hardening:
 - cancellation observed at a checkpoint persists a warning on the run
 - running runs that observe cancellation finish as `cancelled` instead of `failed`
 
-Remaining `Phase 2.0.n` items:
-
 ### Phase 2.0.3: Cancellable Subprocess Execution
 
 Implemented subprocess execution:
@@ -205,8 +203,18 @@ Implemented subprocess execution:
 - failed subprocesses persist warnings and errors on the run
 - JSON writes use atomic temp-file replacement so status polling cannot read a partially written run file
 
+### Phase 2.0.4: JSON Persistence Locking
+
+Implemented JSON persistence hardening:
+
+- JSON registry files use per-file lock files during reads and writes
+- read-modify-write saves for project, experiment, participant, and uploaded-file registries run inside one lock
+- lock acquisition uses a process-local reentrant lock plus an OS file lock for cross-thread and cross-process safety
+- JSON writes still use atomic temp-file replacement after the lock is acquired
+- concurrent project registry writes are covered by regression tests
+- the existing repository boundary remains the migration point for a future SQLite backend
+
 Remaining `Phase 2.0.n` items:
 
-- `Phase 2.0.4`: JSON read/write file locking, then SQLite-backed registries
 - `Phase 2.0.5`: preprocessing summaries, filter reports, artifact summaries, and optional HTML diagnostics
 - `Phase 2.0.6`: browser E2E smoke test for upload, validation, preprocessing, and completed-run display

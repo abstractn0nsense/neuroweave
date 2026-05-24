@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 import json
 
 from eeg_core.domain import (
@@ -100,6 +101,21 @@ def test_registry_save_updates_existing_records(tmp_path):
     assert len(repository.list_projects()) == 1
 
 
+def test_registry_preserves_concurrent_project_writes(tmp_path):
+    repository = JsonRegistryRepository(tmp_path / "uploads")
+
+    def save_project(index: int) -> None:
+        repository.save_project(
+            Project(project_id=f"project-{index:03}", name=f"Project {index}")
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(save_project, range(24)))
+
+    project_ids = [project.project_id for project in repository.list_projects()]
+    assert project_ids == [f"project-{index:03}" for index in range(24)]
+
+
 def test_registry_persists_uploaded_files_and_recording(tmp_path):
     repository = JsonRegistryRepository(tmp_path / "uploads")
     dataset = Dataset(
@@ -141,6 +157,41 @@ def test_registry_persists_uploaded_files_and_recording(tmp_path):
     assert repository.get_recording(dataset.dataset_id) == recording
     assert repository.uploaded_files_path(dataset.dataset_id).is_file()
     assert repository.recording_path(dataset.dataset_id).is_file()
+
+
+def test_registry_preserves_concurrent_uploaded_file_writes(tmp_path):
+    repository = JsonRegistryRepository(tmp_path / "uploads")
+    dataset = Dataset(
+        dataset_id="dataset-001",
+        project_id="project-001",
+        experiment_id="experiment-001",
+        participant_id="participant-001",
+        session_id="session-001",
+    )
+    repository.save_dataset(dataset)
+
+    def save_uploaded_file(index: int) -> None:
+        repository.save_uploaded_file(
+            UploadedFile(
+                file_id=f"file-{index:03}",
+                dataset_id=dataset.dataset_id,
+                kind=UploadedFileKind.EEG,
+                original_filename=f"sample-{index:03}_raw.fif",
+                stored_path=str(
+                    repository.eeg_directory(dataset.dataset_id)
+                    / f"sample-{index:03}_raw.fif"
+                ),
+            )
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(save_uploaded_file, range(24)))
+
+    file_ids = [
+        uploaded_file.file_id
+        for uploaded_file in repository.list_uploaded_files(dataset.dataset_id)
+    ]
+    assert file_ids == [f"file-{index:03}" for index in range(24)]
 
 
 def test_registry_persists_event_preview(tmp_path):

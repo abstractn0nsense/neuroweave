@@ -45,8 +45,9 @@ Phase 2 is suitable to merge as an MVP, but these limitations should be handled 
    - MNE processing is not interrupted mid-call. A running job is marked `cancelling` and becomes `cancelled` at the next checkpoint.
 
 3. Run metadata is JSON-backed.
-   - JSON files are simple and inspectable, and writes now use atomic temp-file replacement to avoid partial reads.
-   - Concurrent read/write sequences and large run histories will eventually need file locks or a stronger persistence layer.
+   - JSON files are simple and inspectable.
+   - Writes use atomic temp-file replacement, and registry reads/writes now use per-file OS locks.
+   - Large run histories will eventually need a stronger persistence layer.
 
 4. Output artifacts are limited to preprocessed FIF.
    - There are no diagnostic plots, filter reports, or artifact summaries yet.
@@ -75,8 +76,10 @@ Recommended next hardening path:
    - The local worker terminates or kills the child process when cancellation is requested.
 
 4. Phase 2.0.4: Strengthen persistence.
-   - Add file locking for JSON read/write sequences as a short-term fix.
-   - Move run/dataset registries to SQLite when multi-run concurrency becomes common.
+   - Status: implemented for JSON locking.
+   - JSON registry reads/writes are protected by per-file locks.
+   - List-style read-modify-write updates are serialized to avoid lost updates.
+   - Move run/dataset registries to SQLite later if multi-run concurrency becomes common.
 
 5. Phase 2.0.5: Add diagnostic outputs.
    - Store preprocessing summaries alongside `raw_preprocessed.fif`.
