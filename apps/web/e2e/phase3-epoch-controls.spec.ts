@@ -83,4 +83,12 @@ test("creates epoch and ERP runs from completed preprocessing", async ({ page })
   });
   await expect(page.getByTestId("erp-runs")).toContainText("2 plots");
   await expect(page.getByTestId("erp-preview")).toBeVisible();
+
+  await expect(page.getByTestId("comparison-erp-run-select")).not.toHaveValue("", {
+    timeout: 15_000,
+  });
+  await page.getByTestId("start-comparison-button").click();
+  await expect(page.getByText("Comparison summary generated.")).toBeVisible();
+  await expect(page.getByTestId("comparison-summary")).toContainText("Difference");
+  await expect(page.getByTestId("comparison-summary")).toContainText("deferred");
 });

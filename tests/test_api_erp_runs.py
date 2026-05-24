@@ -4,6 +4,7 @@ import json
 import shutil
 
 from fastapi.testclient import TestClient
+import pytest
 
 from apps.api import main as api_main
 from eeg_core.domain import (
@@ -145,6 +146,20 @@ def _create_completed_epoch_run(client: TestClient) -> dict:
     assert response.status_code == 201
     run_id = response.json()["run_id"]
     return _wait_for_run_status(client, f"/epoch-runs/{run_id}", "completed")
+
+
+def _create_completed_erp_run(client: TestClient) -> dict:
+    epoch_run = _create_completed_epoch_run(client)
+    response = client.post(
+        "/datasets/dataset-001/erp-runs",
+        json={"epoch_run_id": epoch_run["run_id"]},
+    )
+    assert response.status_code == 201
+    return _wait_for_run_status(
+        client,
+        f"/erp-runs/{response.json()['run_id']}",
+        "completed",
+    )
 
 
 def test_erp_worker_completes_run_and_writes_evoked_artifacts(tmp_path, monkeypatch):
@@ -361,3 +376,128 @@ def test_erp_worker_persists_failed_execution(tmp_path, monkeypatch):
     assert payload["errors"] == ["synthetic ERP failure"]
     assert not Path(payload["output_path"]).exists()
     assert "erp_metadata_path" not in payload["output_metadata"]
+
+
+def test_comparison_summary_writes_descriptive_json(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _seed_epochable_dataset(tmp_path)
+    erp_run = _create_completed_erp_run(client)
+
+    response = client.post(
+        f"/erp-runs/{erp_run['run_id']}/comparison-summary",
+        json={
+            "condition_a": "target",
+            "condition_b": "standard",
+            "use_gfp": True,
+            "window_start_seconds": -0.05,
+            "window_end_seconds": 0.2,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    summary = payload["summary"]
+    updated_run = payload["erp_run"]
+    metadata = updated_run["output_metadata"]
+    assert summary["erp_run_id"] == erp_run["run_id"]
+    assert summary["metric"] == "mean_amplitude_uv"
+    assert summary["target"] == {"type": "gfp", "channel": None}
+    assert summary["statistics"] == {"implemented": False, "phase": "Phase 4"}
+    assert summary["conditions"]["a"]["label"] == "target"
+    assert summary["conditions"]["b"]["label"] == "standard"
+    assert isinstance(summary["conditions"]["a"]["mean_amplitude_uv"], float)
+    assert isinstance(summary["conditions"]["b"]["mean_amplitude_uv"], float)
+    assert summary["difference"]["mean_amplitude_uv"] == pytest.approx(
+        summary["conditions"]["a"]["mean_amplitude_uv"]
+        - summary["conditions"]["b"]["mean_amplitude_uv"]
+    )
+    assert metadata["comparison_available"] is True
+    assert metadata["comparison_condition_a"] == "target"
+    assert metadata["comparison_condition_b"] == "standard"
+    assert metadata["comparison_statistics_implemented"] is False
+    assert metadata["comparison_difference_uv"] == pytest.approx(
+        summary["difference"]["mean_amplitude_uv"]
+    )
+
+    summary_path = Path(str(metadata["comparison_summary_path"]))
+    assert summary_path.is_file()
+    assert json.loads(summary_path.read_text(encoding="utf-8")) == summary
+
+    artifact_manifest = json.loads(
+        Path(str(metadata["artifact_manifest_path"])).read_text(encoding="utf-8")
+    )
+    assert "comparison_summary" in {
+        artifact["logical_name"] for artifact in artifact_manifest["artifacts"]
+    }
+
+    repeat_response = client.post(
+        f"/erp-runs/{erp_run['run_id']}/comparison-summary",
+        json={
+            "condition_a": "target",
+            "condition_b": "standard",
+            "use_gfp": True,
+            "window_start_seconds": -0.05,
+            "window_end_seconds": 0.2,
+        },
+    )
+    assert repeat_response.status_code == 200
+    assert repeat_response.json()["summary"]["difference"] == summary["difference"]
+
+
+def test_comparison_summary_rejects_invalid_inputs(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _seed_epochable_dataset(tmp_path)
+    erp_run = _create_completed_erp_run(client)
+
+    unknown_condition = client.post(
+        f"/erp-runs/{erp_run['run_id']}/comparison-summary",
+        json={
+            "condition_a": "target",
+            "condition_b": "missing",
+            "use_gfp": True,
+            "window_start_seconds": -0.05,
+            "window_end_seconds": 0.2,
+        },
+    )
+    assert unknown_condition.status_code == 422
+    assert "Condition not found: missing" in unknown_condition.text
+
+    invalid_window = client.post(
+        f"/erp-runs/{erp_run['run_id']}/comparison-summary",
+        json={
+            "condition_a": "target",
+            "condition_b": "standard",
+            "use_gfp": True,
+            "window_start_seconds": 0.2,
+            "window_end_seconds": -0.05,
+        },
+    )
+    assert invalid_window.status_code == 422
+    assert "window_start_seconds must be lower" in invalid_window.text
+
+    channel_and_gfp = client.post(
+        f"/erp-runs/{erp_run['run_id']}/comparison-summary",
+        json={
+            "condition_a": "target",
+            "condition_b": "standard",
+            "channel": "Fp1",
+            "use_gfp": True,
+            "window_start_seconds": -0.05,
+            "window_end_seconds": 0.2,
+        },
+    )
+    assert channel_and_gfp.status_code == 422
+    assert "Use either GFP or a channel" in channel_and_gfp.text
+
+    missing_channel = client.post(
+        f"/erp-runs/{erp_run['run_id']}/comparison-summary",
+        json={
+            "condition_a": "target",
+            "condition_b": "standard",
+            "use_gfp": False,
+            "window_start_seconds": -0.05,
+            "window_end_seconds": 0.2,
+        },
+    )
+    assert missing_channel.status_code == 422
+    assert "A channel is required" in missing_channel.text

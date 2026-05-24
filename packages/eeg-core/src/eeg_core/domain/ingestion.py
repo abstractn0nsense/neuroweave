@@ -233,6 +233,18 @@ class ErpConfig:
 
 
 @dataclass(frozen=True)
+class ComparisonConfig:
+    erp_run_id: str
+    condition_a: str
+    condition_b: str
+    channel: str | None
+    use_gfp: bool
+    window_start_seconds: float
+    window_end_seconds: float
+    metric: str = "mean_amplitude_uv"
+
+
+@dataclass(frozen=True)
 class PreprocessingRun:
     run_id: str
     dataset_id: str

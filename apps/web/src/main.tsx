@@ -216,6 +216,21 @@ type ErpRunsResponse = {
   runs: ErpRun[];
 };
 
+type ComparisonConfig = {
+  condition_a: string;
+  condition_b: string;
+  channel: string | null;
+  use_gfp: boolean;
+  window_start_seconds: number;
+  window_end_seconds: number;
+  metric: string;
+};
+
+type ComparisonSummaryResponse = {
+  summary: Record<string, unknown>;
+  erp_run: ErpRun;
+};
+
 type MetadataValue = string | number | boolean | null;
 
 type NoticeState = {
@@ -278,6 +293,17 @@ const DEFAULT_ERP_CONFIG = {
   method: "mean",
   plot_mode: "gfp",
   plot_channel: "",
+};
+
+const DEFAULT_COMPARISON_CONFIG = {
+  erp_run_id: "",
+  condition_a: "",
+  condition_b: "",
+  use_gfp: true,
+  channel: "",
+  window_start_seconds: "-0.05",
+  window_end_seconds: "0.2",
+  metric: "mean_amplitude_uv",
 };
 
 function App() {
@@ -357,6 +383,9 @@ function App() {
     data: null,
     error: null,
   });
+  const [comparisonConfig, setComparisonConfig] = useState(
+    DEFAULT_COMPARISON_CONFIG,
+  );
   const [notice, setNotice] = useState<NoticeState>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
@@ -396,6 +425,18 @@ function App() {
         (run) => run.status === "completed" && Boolean(run.output_path),
       ),
     [epochRuns.data],
+  );
+  const completedErpRuns = useMemo(
+    () =>
+      (erpRuns.data ?? []).filter((run) => {
+        const conditionCount = run.output_metadata.condition_count;
+        return (
+          run.status === "completed" &&
+          typeof conditionCount === "number" &&
+          conditionCount >= 2
+        );
+      }),
+    [erpRuns.data],
   );
 
   useEffect(() => {
@@ -484,6 +525,7 @@ function App() {
       setPreprocessingRuns({ status: "idle", data: null, error: null });
       setEpochRuns({ status: "idle", data: null, error: null });
       setErpRuns({ status: "idle", data: null, error: null });
+      setComparisonConfig(DEFAULT_COMPARISON_CONFIG);
       return;
     }
 
@@ -523,6 +565,31 @@ function App() {
       };
     });
   }, [completedEpochRuns]);
+
+  useEffect(() => {
+    setComparisonConfig((current) => {
+      const selectedRun =
+        completedErpRuns.find((run) => run.run_id === current.erp_run_id) ??
+        completedErpRuns[0] ??
+        null;
+      if (!selectedRun) {
+        return { ...current, erp_run_id: "", condition_a: "", condition_b: "" };
+      }
+      const labels = getErpConditionLabels(selectedRun);
+      const conditionA = labels.includes(current.condition_a)
+        ? current.condition_a
+        : labels[0] ?? "";
+      const conditionB = labels.includes(current.condition_b)
+        ? current.condition_b
+        : labels.find((label) => label !== conditionA) ?? "";
+      return {
+        ...current,
+        erp_run_id: selectedRun.run_id,
+        condition_a: conditionA,
+        condition_b: conditionB,
+      };
+    });
+  }, [completedErpRuns]);
 
   useEffect(() => {
     const hasActiveRun =
@@ -725,6 +792,7 @@ function App() {
       setErpRuns({ status: "success", data: [], error: null });
       setEpochConfig(DEFAULT_EPOCH_CONFIG);
       setErpConfig(DEFAULT_ERP_CONFIG);
+      setComparisonConfig(DEFAULT_COMPARISON_CONFIG);
       await refreshDatasets();
       setNotice({ tone: "ok", message: "Dataset created." });
     });
@@ -916,6 +984,34 @@ function App() {
       setNotice({
         tone: "neutral",
         message: `ERP run ${run.run_id} queued.`,
+      });
+    });
+  }
+
+  async function beginComparisonSummary() {
+    const configError = getComparisonConfigError(comparisonConfig);
+    if (configError) {
+      setNotice({ tone: "error", message: configError });
+      return;
+    }
+
+    await runAction("comparison", async () => {
+      const response = await postJson<ComparisonSummaryResponse>(
+        `/erp-runs/${encodeURIComponent(
+          comparisonConfig.erp_run_id,
+        )}/comparison-summary`,
+        normalizeComparisonConfig(comparisonConfig),
+      );
+      setErpRuns((current) => ({
+        status: "success",
+        data: (current.data ?? []).map((run) =>
+          run.run_id === response.erp_run.run_id ? response.erp_run : run,
+        ),
+        error: null,
+      }));
+      setNotice({
+        tone: "ok",
+        message: "Comparison summary generated.",
       });
     });
   }
@@ -1276,10 +1372,14 @@ function App() {
                 <ErpSection
                   activeDataset={activeDataset}
                   busyAction={busyAction}
+                  comparisonConfig={comparisonConfig}
                   completedEpochRuns={completedEpochRuns}
+                  completedErpRuns={completedErpRuns}
                   erpConfig={erpConfig}
                   erpRuns={erpRuns}
+                  onComparisonConfigChange={setComparisonConfig}
                   onErpConfigChange={setErpConfig}
+                  onStartComparisonSummary={beginComparisonSummary}
                   onStartErpRun={beginErpRun}
                 />
               </section>
@@ -2286,18 +2386,26 @@ function ConditionCountSummary({
 function ErpSection({
   activeDataset,
   busyAction,
+  comparisonConfig,
   completedEpochRuns,
+  completedErpRuns,
   erpConfig,
   erpRuns,
+  onComparisonConfigChange,
   onErpConfigChange,
+  onStartComparisonSummary,
   onStartErpRun,
 }: {
   activeDataset: Dataset | null;
   busyAction: string | null;
+  comparisonConfig: typeof DEFAULT_COMPARISON_CONFIG;
   completedEpochRuns: EpochRun[];
+  completedErpRuns: ErpRun[];
   erpConfig: typeof DEFAULT_ERP_CONFIG;
   erpRuns: LoadState<ErpRun[]>;
+  onComparisonConfigChange: (config: typeof DEFAULT_COMPARISON_CONFIG) => void;
   onErpConfigChange: (config: typeof DEFAULT_ERP_CONFIG) => void;
+  onStartComparisonSummary: () => void;
   onStartErpRun: () => void;
 }) {
   const disabled = !activeDataset || completedEpochRuns.length === 0;
@@ -2413,6 +2521,13 @@ function ErpSection({
         </button>
       </section>
       <ErpRunList runs={erpRuns} />
+      <ComparisonSection
+        busyAction={busyAction}
+        comparisonConfig={comparisonConfig}
+        completedErpRuns={completedErpRuns}
+        onComparisonConfigChange={onComparisonConfigChange}
+        onStartComparisonSummary={onStartComparisonSummary}
+      />
     </div>
   );
 }
@@ -2480,6 +2595,232 @@ function ErpPreview({ run }: { run: ErpRun }) {
         {String(run.output_metadata.preview_plot_mode ?? "plot")}
       </figcaption>
     </figure>
+  );
+}
+
+function ComparisonSection({
+  busyAction,
+  comparisonConfig,
+  completedErpRuns,
+  onComparisonConfigChange,
+  onStartComparisonSummary,
+}: {
+  busyAction: string | null;
+  comparisonConfig: typeof DEFAULT_COMPARISON_CONFIG;
+  completedErpRuns: ErpRun[];
+  onComparisonConfigChange: (config: typeof DEFAULT_COMPARISON_CONFIG) => void;
+  onStartComparisonSummary: () => void;
+}) {
+  const selectedRun =
+    completedErpRuns.find((run) => run.run_id === comparisonConfig.erp_run_id) ??
+    null;
+  const conditionLabels = selectedRun ? getErpConditionLabels(selectedRun) : [];
+  const disabled = !selectedRun || conditionLabels.length < 2;
+  const configError = getComparisonConfigError(comparisonConfig);
+
+  return (
+    <section className="tool-section" aria-labelledby="comparison-config-title">
+      <div className="tool-section-header">
+        <span>07</span>
+        <h3 id="comparison-config-title">Comparison Prep</h3>
+        <small>{disabled ? "blocked" : "ready"}</small>
+      </div>
+      {completedErpRuns.length === 0 ? (
+        <p className="muted">No completed ERP runs with two conditions yet.</p>
+      ) : null}
+      {configError ? <p className="error-text">{configError}</p> : null}
+      <div className="epoch-grid">
+        <label className="wide-field">
+          <span>ERP Run</span>
+          <select
+            data-testid="comparison-erp-run-select"
+            disabled={completedErpRuns.length === 0}
+            onChange={(event) => {
+              const nextRun = completedErpRuns.find(
+                (run) => run.run_id === event.target.value,
+              );
+              const labels = nextRun ? getErpConditionLabels(nextRun) : [];
+              onComparisonConfigChange({
+                ...comparisonConfig,
+                erp_run_id: event.target.value,
+                condition_a: labels[0] ?? "",
+                condition_b: labels[1] ?? "",
+              });
+            }}
+            value={comparisonConfig.erp_run_id}
+          >
+            <option value="">Select completed ERP run</option>
+            {completedErpRuns.map((run) => (
+              <option key={run.run_id} value={run.run_id}>
+                {run.run_id}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Condition A</span>
+          <select
+            data-testid="comparison-condition-a-select"
+            disabled={disabled}
+            onChange={(event) =>
+              onComparisonConfigChange({
+                ...comparisonConfig,
+                condition_a: event.target.value,
+              })
+            }
+            value={comparisonConfig.condition_a}
+          >
+            <option value="">Select</option>
+            {conditionLabels.map((label) => (
+              <option key={label} value={label}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Condition B</span>
+          <select
+            data-testid="comparison-condition-b-select"
+            disabled={disabled}
+            onChange={(event) =>
+              onComparisonConfigChange({
+                ...comparisonConfig,
+                condition_b: event.target.value,
+              })
+            }
+            value={comparisonConfig.condition_b}
+          >
+            <option value="">Select</option>
+            {conditionLabels.map((label) => (
+              <option key={label} value={label}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Window Start</span>
+          <input
+            data-testid="comparison-window-start-input"
+            disabled={disabled}
+            onChange={(event) =>
+              onComparisonConfigChange({
+                ...comparisonConfig,
+                window_start_seconds: event.target.value,
+              })
+            }
+            step="0.01"
+            type="number"
+            value={comparisonConfig.window_start_seconds}
+          />
+        </label>
+        <label>
+          <span>Window End</span>
+          <input
+            data-testid="comparison-window-end-input"
+            disabled={disabled}
+            onChange={(event) =>
+              onComparisonConfigChange({
+                ...comparisonConfig,
+                window_end_seconds: event.target.value,
+              })
+            }
+            step="0.01"
+            type="number"
+            value={comparisonConfig.window_end_seconds}
+          />
+        </label>
+        <label className="checkbox-field">
+          <input
+            checked={comparisonConfig.use_gfp}
+            disabled={disabled}
+            onChange={(event) =>
+              onComparisonConfigChange({
+                ...comparisonConfig,
+                use_gfp: event.target.checked,
+                channel: event.target.checked ? "" : comparisonConfig.channel,
+              })
+            }
+            type="checkbox"
+          />
+          <span>GFP</span>
+        </label>
+        <label>
+          <span>Channel</span>
+          <input
+            data-testid="comparison-channel-input"
+            disabled={disabled || comparisonConfig.use_gfp}
+            onChange={(event) =>
+              onComparisonConfigChange({
+                ...comparisonConfig,
+                channel: event.target.value,
+              })
+            }
+            placeholder="Fp1"
+            type="text"
+            value={comparisonConfig.channel}
+          />
+        </label>
+      </div>
+      <button
+        className="primary-button"
+        data-testid="start-comparison-button"
+        disabled={disabled || Boolean(configError) || busyAction === "comparison"}
+        onClick={onStartComparisonSummary}
+        type="button"
+      >
+        Generate Summary
+      </button>
+      {selectedRun ? <ComparisonSummary run={selectedRun} /> : null}
+    </section>
+  );
+}
+
+function ComparisonSummary({ run }: { run: ErpRun }) {
+  const metadata = run.output_metadata;
+  if (metadata.comparison_available !== true) {
+    return null;
+  }
+
+  return (
+    <dl className="run-summary-grid" data-testid="comparison-summary">
+      <div>
+        <dt>Condition A</dt>
+        <dd>{String(metadata.comparison_condition_a ?? "-")}</dd>
+      </div>
+      <div>
+        <dt>Condition B</dt>
+        <dd>{String(metadata.comparison_condition_b ?? "-")}</dd>
+      </div>
+      <div>
+        <dt>Mean A</dt>
+        <dd>{formatUv(metadata.comparison_mean_a_uv)}</dd>
+      </div>
+      <div>
+        <dt>Mean B</dt>
+        <dd>{formatUv(metadata.comparison_mean_b_uv)}</dd>
+      </div>
+      <div>
+        <dt>Difference</dt>
+        <dd>{formatUv(metadata.comparison_difference_uv)}</dd>
+      </div>
+      <div>
+        <dt>Target</dt>
+        <dd>{String(metadata.comparison_target_type ?? "-")}</dd>
+      </div>
+      <div>
+        <dt>Window</dt>
+        <dd>
+          {String(metadata.comparison_window_start_seconds ?? "-")} to{" "}
+          {String(metadata.comparison_window_end_seconds ?? "-")}
+        </dd>
+      </div>
+      <div>
+        <dt>Statistics</dt>
+        <dd>deferred</dd>
+      </div>
+    </dl>
   );
 }
 
@@ -2827,6 +3168,21 @@ function normalizeErpConfig(config: typeof DEFAULT_ERP_CONFIG): ErpConfig {
   };
 }
 
+function normalizeComparisonConfig(
+  config: typeof DEFAULT_COMPARISON_CONFIG,
+): ComparisonConfig {
+  return {
+    condition_a: config.condition_a,
+    condition_b: config.condition_b,
+    channel:
+      !config.use_gfp && config.channel.trim() ? config.channel.trim() : null,
+    use_gfp: config.use_gfp,
+    window_start_seconds: Number(config.window_start_seconds),
+    window_end_seconds: Number(config.window_end_seconds),
+    metric: config.metric,
+  };
+}
+
 function getPreprocessingConfigError(
   config: typeof DEFAULT_PREPROCESSING_CONFIG,
 ): string | null {
@@ -2944,6 +3300,41 @@ function getErpConfigError(config: typeof DEFAULT_ERP_CONFIG): string | null {
   return null;
 }
 
+function getComparisonConfigError(
+  config: typeof DEFAULT_COMPARISON_CONFIG,
+): string | null {
+  if (!config.erp_run_id) {
+    return "Select a completed ERP run.";
+  }
+  if (!config.condition_a || !config.condition_b) {
+    return "Select two conditions.";
+  }
+  if (config.condition_a === config.condition_b) {
+    return "Comparison conditions must be different.";
+  }
+  if (config.metric !== "mean_amplitude_uv") {
+    return "Comparison metric must be mean amplitude.";
+  }
+  const windowStart = parseOptionalNumber(config.window_start_seconds);
+  const windowEnd = parseOptionalNumber(config.window_end_seconds);
+  if (windowStart === null || windowEnd === null) {
+    return "Comparison window values are required.";
+  }
+  if (!Number.isFinite(windowStart) || !Number.isFinite(windowEnd)) {
+    return "Comparison window values must be numbers.";
+  }
+  if (windowStart >= windowEnd) {
+    return "Window start must be lower than window end.";
+  }
+  if (config.use_gfp && config.channel.trim()) {
+    return "Use either GFP or a channel.";
+  }
+  if (!config.use_gfp && !config.channel.trim()) {
+    return "Enter a channel or enable GFP.";
+  }
+  return null;
+}
+
 function parseOptionalNumber(value: string): number | null {
   if (!value.trim()) {
     return null;
@@ -3000,6 +3391,24 @@ function formatErpMetadata(metadata: Record<string, MetadataValue>): string {
     typeof plotStatus === "string" ? plotStatus : null,
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(" / ") : "Metadata pending";
+}
+
+function getErpConditionLabels(run: ErpRun): string[] {
+  const labels = run.output_metadata.condition_labels;
+  if (typeof labels !== "string") {
+    return [];
+  }
+  return labels
+    .split(",")
+    .map((label) => label.trim())
+    .filter(Boolean);
+}
+
+function formatUv(value: MetadataValue): string {
+  if (typeof value !== "number") {
+    return "-";
+  }
+  return `${value.toFixed(3)} uV`;
 }
 
 function artifactUrl(runId: string, filename: string): string {

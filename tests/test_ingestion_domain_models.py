@@ -1,6 +1,7 @@
 from dataclasses import asdict
 
 from eeg_core.domain import (
+    ComparisonConfig,
     Dataset,
     DatasetStatus,
     EpochConfig,
@@ -111,6 +112,25 @@ def test_erp_run_contract_defaults_to_pending_erp_run():
     assert payload["config"]["epoch_run_id"] == "epoch-001"
     assert payload["config"]["conditions"] == ["target"]
     assert payload["config"]["plot_mode"] == "gfp"
+
+
+def test_comparison_config_contract_is_descriptive_only():
+    config = ComparisonConfig(
+        erp_run_id="erp-001",
+        condition_a="target",
+        condition_b="standard",
+        channel=None,
+        use_gfp=True,
+        window_start_seconds=-0.05,
+        window_end_seconds=0.2,
+    )
+
+    payload = asdict(config)
+
+    assert payload["erp_run_id"] == "erp-001"
+    assert payload["condition_a"] == "target"
+    assert payload["condition_b"] == "standard"
+    assert payload["metric"] == "mean_amplitude_uv"
 
 
 def test_validation_report_exposes_errors_and_warnings():

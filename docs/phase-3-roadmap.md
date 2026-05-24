@@ -1210,6 +1210,11 @@ Contract notes:
 Purpose: prepare stable configuration and summary artifacts for Phase 4 statistics
 without implementing statistical tests yet.
 
+Status: implemented as ERP-run-scoped comparison prep with `ComparisonConfig`,
+`POST /erp-runs/{run_id}/comparison-summary`, `comparison_summary.json`, artifact
+manifest updates, workbench condition pair/window controls, descriptive mean
+amplitude summaries, and an explicit Phase 4 statistics-deferred marker.
+
 Implementation steps:
 
 1. Decide whether comparison prep is tied to ERP or has its own run.

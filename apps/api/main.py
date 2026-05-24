@@ -27,6 +27,7 @@ for package_src in (
     sys.path.insert(0, str(REPO_ROOT / package_src))
 
 from eeg_core.domain import (  # noqa: E402
+    ComparisonConfig,
     Dataset as IngestionDataset,
     DatasetStatus,
     EpochConfig,
@@ -53,9 +54,11 @@ from eeg_core.domain import (  # noqa: E402
     validate_ingestion_dataset,
 )
 from eeg_processing import (  # noqa: E402
+    ComparisonError,
     EpochingError,
     ErpError,
     PreprocessingError,
+    generate_comparison_summary,
     run_epoching_job,
     run_erp_job,
     run_preprocessing_job,
@@ -486,6 +489,21 @@ class ErpRunResponse(BaseModel):
 
 class ErpRunsResponse(BaseModel):
     runs: list[ErpRunResponse]
+
+
+class ComparisonConfigPayload(BaseModel):
+    condition_a: str
+    condition_b: str
+    channel: str | None = None
+    use_gfp: bool = True
+    window_start_seconds: float
+    window_end_seconds: float
+    metric: str = "mean_amplitude_uv"
+
+
+class ComparisonSummaryResponse(BaseModel):
+    summary: dict
+    erp_run: ErpRunResponse
 
 
 class CreateProjectRequest(BaseModel):
@@ -1155,6 +1173,58 @@ def list_dataset_erp_runs(dataset_id: str) -> ErpRunsResponse:
     )
 
 
+@app.post(
+    "/erp-runs/{run_id}/comparison-summary",
+    response_model=ComparisonSummaryResponse,
+)
+def create_comparison_summary(
+    run_id: str,
+    config_payload: ComparisonConfigPayload,
+) -> ComparisonSummaryResponse:
+    run = run_repository.get_erp_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="ERP run not found")
+    errors = _validate_comparison_config(config_payload=config_payload, run=run)
+    if errors:
+        raise HTTPException(status_code=422, detail=errors)
+
+    assert run.output_path is not None
+    output_path = Path(run.output_path).parent / "comparison_summary.json"
+    config = ComparisonConfig(
+        erp_run_id=run.run_id,
+        condition_a=config_payload.condition_a,
+        condition_b=config_payload.condition_b,
+        channel=config_payload.channel,
+        use_gfp=config_payload.use_gfp,
+        window_start_seconds=config_payload.window_start_seconds,
+        window_end_seconds=config_payload.window_end_seconds,
+        metric=config_payload.metric,
+    )
+
+    try:
+        summary = generate_comparison_summary(
+            erp_metadata_path=Path(run.output_path),
+            output_path=output_path,
+            config=config,
+        )
+    except ComparisonError as exc:
+        raise HTTPException(status_code=422, detail=[str(exc)]) from exc
+
+    completed_run = replace(
+        run,
+        output_metadata=_comparison_completed_metadata(
+            run=run,
+            summary_path=output_path,
+            summary=summary,
+        ),
+    )
+    run_repository.save_erp_run(completed_run)
+    return ComparisonSummaryResponse(
+        summary=summary,
+        erp_run=_erp_run_response(completed_run),
+    )
+
+
 @app.get("/artifacts/{run_id}/{filename}")
 def get_run_artifact(run_id: str, filename: str) -> FileResponse:
     artifact_root = _artifact_root_for_run(run_id)
@@ -1603,6 +1673,46 @@ def _erp_preview_plot_metadata(
     }
 
 
+def _comparison_completed_metadata(
+    run: ErpRun,
+    summary_path: Path,
+    summary: dict,
+) -> dict[str, str | int | float | bool | None]:
+    manifest_metadata = _append_artifact_manifest_entry(
+        output_directory=summary_path.parent,
+        entry=_artifact_manifest_entry(
+            logical_name="comparison_summary",
+            path=summary_path,
+            artifact_type="comparison_json",
+            output_directory=summary_path.parent,
+        ),
+    )
+    condition_a = summary.get("conditions", {}).get("a", {})
+    condition_b = summary.get("conditions", {}).get("b", {})
+    difference = summary.get("difference", {})
+    target = summary.get("target", {})
+    window = summary.get("window", {})
+    return {
+        **run.output_metadata,
+        "artifact_count": manifest_metadata["artifact_count"],
+        "artifact_manifest_path": manifest_metadata["artifact_manifest_path"],
+        "comparison_available": True,
+        "comparison_summary_path": str(summary_path),
+        "comparison_summary_url": f"/artifacts/{run.run_id}/{summary_path.name}",
+        "comparison_metric": summary.get("metric"),
+        "comparison_condition_a": condition_a.get("label"),
+        "comparison_condition_b": condition_b.get("label"),
+        "comparison_target_type": target.get("type"),
+        "comparison_target_channel": target.get("channel"),
+        "comparison_window_start_seconds": window.get("start_seconds"),
+        "comparison_window_end_seconds": window.get("end_seconds"),
+        "comparison_mean_a_uv": condition_a.get("mean_amplitude_uv"),
+        "comparison_mean_b_uv": condition_b.get("mean_amplitude_uv"),
+        "comparison_difference_uv": difference.get("mean_amplitude_uv"),
+        "comparison_statistics_implemented": False,
+    }
+
+
 def _write_epoch_diagnostics(
     output_directory: Path,
     processing_metadata: dict,
@@ -1792,6 +1902,41 @@ def _write_artifact_manifest(
     output_directory.mkdir(parents=True, exist_ok=True)
     manifest_path = output_directory / "artifact_manifest.json"
     manifest = {
+        "schema_version": 1,
+        "artifact_root": str(output_directory),
+        "artifact_count": len(artifacts),
+        "artifacts": artifacts,
+    }
+    _write_json_file(manifest_path, manifest)
+    return {
+        "artifact_count": len(artifacts),
+        "artifact_manifest_path": str(manifest_path),
+    }
+
+
+def _append_artifact_manifest_entry(
+    output_directory: Path,
+    entry: dict[str, str | int],
+) -> dict[str, str | int]:
+    output_directory.mkdir(parents=True, exist_ok=True)
+    manifest_path = output_directory / "artifact_manifest.json"
+    if manifest_path.is_file():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        artifacts = [
+            artifact
+            for artifact in manifest.get("artifacts", [])
+            if artifact.get("logical_name") != entry["logical_name"]
+        ]
+    else:
+        manifest = {
+            "schema_version": 1,
+            "artifact_root": str(output_directory),
+        }
+        artifacts = []
+
+    artifacts.append(entry)
+    manifest = {
+        **manifest,
         "schema_version": 1,
         "artifact_root": str(output_directory),
         "artifact_count": len(artifacts),
@@ -2556,6 +2701,30 @@ def _validate_erp_config(
             errors.append("ERP picks must be unique.")
 
     return errors, warnings
+
+
+def _validate_comparison_config(
+    config_payload: ComparisonConfigPayload,
+    run: ErpRun,
+) -> list[str]:
+    errors: list[str] = []
+    if run.status != ErpRunStatus.COMPLETED:
+        errors.append("ERP run must be completed before comparison summary.")
+    if not run.output_path:
+        errors.append("ERP run is missing metadata output path.")
+    elif not Path(run.output_path).is_file():
+        errors.append("ERP metadata file was not found.")
+    if config_payload.metric != "mean_amplitude_uv":
+        errors.append("Comparison metric must be 'mean_amplitude_uv'.")
+    if config_payload.window_start_seconds >= config_payload.window_end_seconds:
+        errors.append("window_start_seconds must be lower than window_end_seconds.")
+    if config_payload.condition_a == config_payload.condition_b:
+        errors.append("Comparison conditions must be different.")
+    if config_payload.use_gfp and config_payload.channel:
+        errors.append("Use either GFP or a channel, not both.")
+    if not config_payload.use_gfp and not config_payload.channel:
+        errors.append("A channel is required when use_gfp is false.")
+    return errors
 
 
 def _validate_epoch_baseline(config: EpochConfig) -> list[str]:

@@ -50,6 +50,11 @@ ERP generation, poll ERP status, and display the first generated PNG plot throug
 the API artifact endpoint. GFP is the default plot mode, with an optional channel
 plot mode when a channel name is provided.
 
+Phase 3 comparison prep uses completed ERP runs with at least two conditions. The
+workbench can choose a condition pair, GFP or channel target, and mean-amplitude
+window, then displays descriptive means and A-B difference while keeping
+statistics deferred to Phase 4.
+
 Expected responsibilities:
 
 - upload or select EEG datasets

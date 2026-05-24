@@ -1,16 +1,21 @@
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+import json
 import re
 import warnings as python_warnings
 
-from eeg_core.domain import ErpConfig
+from eeg_core.domain import ComparisonConfig, ErpConfig
 
 
 class ErpError(Exception):
     def __init__(self, message: str, processing_warnings: list[str] | None = None):
         super().__init__(message)
         self.processing_warnings = processing_warnings or []
+
+
+class ComparisonError(Exception):
+    pass
 
 
 @dataclass(frozen=True)
@@ -175,6 +180,140 @@ def safe_condition_filename(condition: str) -> str:
     safe = re.sub(r"[^A-Za-z0-9._-]+", "_", condition.strip())
     safe = safe.strip("._-")
     return safe or "condition"
+
+
+def generate_comparison_summary(
+    erp_metadata_path: Path,
+    output_path: Path,
+    config: ComparisonConfig,
+) -> dict[str, Any]:
+    import mne
+    import numpy as np
+
+    erp_metadata = json.loads(erp_metadata_path.read_text(encoding="utf-8"))
+    conditions = _metadata_conditions_by_label(erp_metadata)
+    if config.condition_a not in conditions:
+        raise ComparisonError(f"Condition not found: {config.condition_a}")
+    if config.condition_b not in conditions:
+        raise ComparisonError(f"Condition not found: {config.condition_b}")
+    if config.condition_a == config.condition_b:
+        raise ComparisonError("Comparison conditions must be different.")
+    if config.metric != "mean_amplitude_uv":
+        raise ComparisonError("Comparison metric must be 'mean_amplitude_uv'.")
+    if config.window_start_seconds >= config.window_end_seconds:
+        raise ComparisonError("window_start_seconds must be lower than window_end_seconds.")
+    if config.use_gfp and config.channel:
+        raise ComparisonError("Use either GFP or a channel, not both.")
+    if not config.use_gfp and not config.channel:
+        raise ComparisonError("A channel is required when use_gfp is false.")
+
+    condition_a = conditions[config.condition_a]
+    condition_b = conditions[config.condition_b]
+    with python_warnings.catch_warnings():
+        python_warnings.simplefilter("ignore", RuntimeWarning)
+        evoked_a = mne.read_evokeds(
+            str(condition_a["evoked_path"]),
+            condition=0,
+            verbose=False,
+        )
+        evoked_b = mne.read_evokeds(
+            str(condition_b["evoked_path"]),
+            condition=0,
+            verbose=False,
+        )
+    _validate_comparison_window(evoked_a.times, config)
+    _validate_comparison_window(evoked_b.times, config)
+
+    target = (
+        {"type": "gfp", "channel": None}
+        if config.use_gfp
+        else {"type": "channel", "channel": config.channel}
+    )
+    mean_a = _mean_amplitude_uv(evoked_a, config)
+    mean_b = _mean_amplitude_uv(evoked_b, config)
+    payload = {
+        "schema_version": 1,
+        "erp_run_id": config.erp_run_id,
+        "source_metadata_path": str(erp_metadata_path),
+        "note": "Statistical testing is not implemented in Phase 3.",
+        "metric": config.metric,
+        "target": target,
+        "window": {
+            "start_seconds": config.window_start_seconds,
+            "end_seconds": config.window_end_seconds,
+        },
+        "conditions": {
+            "a": {
+                "label": config.condition_a,
+                "evoked_path": condition_a["evoked_path"],
+                "mean_amplitude_uv": mean_a,
+                "nave": condition_a.get("nave"),
+            },
+            "b": {
+                "label": config.condition_b,
+                "evoked_path": condition_b["evoked_path"],
+                "mean_amplitude_uv": mean_b,
+                "nave": condition_b.get("nave"),
+            },
+        },
+        "difference": {
+            "label": f"{config.condition_a} - {config.condition_b}",
+            "mean_amplitude_uv": mean_a - mean_b,
+        },
+        "statistics": {
+            "implemented": False,
+            "phase": "Phase 4",
+        },
+        "mne_version": str(mne.__version__),
+        "numpy_version": str(np.__version__),
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return payload
+
+
+def _metadata_conditions_by_label(erp_metadata: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    items = erp_metadata.get("conditions")
+    if not isinstance(items, list):
+        raise ComparisonError("ERP metadata does not contain condition entries.")
+
+    conditions: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        label = item.get("condition")
+        evoked_path = item.get("evoked_path")
+        if isinstance(label, str) and isinstance(evoked_path, str):
+            conditions[label] = item
+    if not conditions:
+        raise ComparisonError("ERP metadata does not contain usable conditions.")
+    return conditions
+
+
+def _validate_comparison_window(times: Any, config: ComparisonConfig) -> None:
+    if config.window_end_seconds < float(times[0]) or config.window_start_seconds > float(times[-1]):
+        raise ComparisonError("Comparison window must overlap the ERP time range.")
+    mask = (times >= config.window_start_seconds) & (times <= config.window_end_seconds)
+    if not mask.any():
+        raise ComparisonError("Comparison window contains no ERP samples.")
+
+
+def _mean_amplitude_uv(evoked: Any, config: ComparisonConfig) -> float:
+    data_uv = evoked.data * 1e6
+    mask = (evoked.times >= config.window_start_seconds) & (
+        evoked.times <= config.window_end_seconds
+    )
+    if config.use_gfp:
+        values = data_uv.std(axis=0)[mask]
+    else:
+        assert config.channel is not None
+        if config.channel not in evoked.ch_names:
+            raise ComparisonError(f"Channel not found: {config.channel}")
+        values = data_uv[evoked.ch_names.index(config.channel), mask]
+    return float(values.mean())
 
 
 def _selected_conditions(

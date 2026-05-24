@@ -54,6 +54,7 @@ GET /epoch-runs/{run_id}
 POST /datasets/{dataset_id}/erp-runs
 GET /datasets/{dataset_id}/erp-runs
 GET /erp-runs/{run_id}
+POST /erp-runs/{run_id}/comparison-summary
 ```
 
 These endpoints write through `eeg_io.registry.JsonRegistryRepository` to the local JSON registry under `data/raw/uploads/`.
@@ -73,6 +74,8 @@ Phase 3 analysis output roots are configurable with `NEUROWEAVE_EPOCHS_DIR` and 
 `POST /datasets/{dataset_id}/erp-runs` creates a `pending` ERP run from a completed epoch run, then queues condition-level evoked generation in the local ERP worker. Completed ERP runs write `evoked_{condition}.fif`, `erp_{condition}.png`, `erp_{condition}.svg`, `erp_metadata.json`, and `artifact_manifest.json` under `data/erp/{dataset_id}/{run_id}/`. ERP metadata stores the original condition labels, nave, channel/time bounds, sampling rate, compact peak/GFP summaries in microvolts, and plot status. Plot failures are captured as warnings while the ERP run remains completed and queryable if evoked generation succeeds.
 
 Artifact files are served through `GET /artifacts/{run_id}/{filename}` with run artifact-root validation instead of exposing unrestricted filesystem paths.
+
+`POST /erp-runs/{run_id}/comparison-summary` writes descriptive Phase 3 comparison prep under the ERP run artifact directory as `comparison_summary.json`. The summary stores the selected condition pair, channel or GFP target, mean-amplitude window, condition means, A-B difference, and an explicit marker that statistical testing is deferred to Phase 4.
 
 Preprocessing runs also persist captured MNE/Python warnings in `warnings`. Failed runs persist `errors`, retain input provenance, and remain available through the run lookup endpoints.
 
