@@ -633,6 +633,12 @@ function App() {
       return;
     }
 
+    const configError = getPreprocessingConfigError(preprocessingConfig);
+    if (configError) {
+      setNotice({ tone: "error", message: configError });
+      return;
+    }
+
     await runAction("preprocessing", async () => {
       const run = await postJson<PreprocessingRun>(
         `/datasets/${encodeURIComponent(activeDataset.dataset_id)}/preprocessing-runs`,
@@ -1173,6 +1179,7 @@ function IntakeSection({
 }) {
   const disabled = !activeDataset;
   const canContinue = validation?.valid === true || activeDataset?.status === "valid";
+  const configError = getPreprocessingConfigError(preprocessingConfig);
 
   return (
     <div className="intake-stack">
@@ -1284,6 +1291,7 @@ function IntakeSection({
               ? "Configure filters and create a run for this valid dataset."
               : "A dataset must pass validation before preprocessing can start."}
           </p>
+          {configError ? <p className="error-text">{configError}</p> : null}
         </div>
         <div className="preprocessing-grid">
           <label>
@@ -1371,7 +1379,7 @@ function IntakeSection({
         </div>
         <button
           className="primary-button"
-          disabled={!canContinue || busyAction === "preprocessing"}
+          disabled={!canContinue || Boolean(configError) || busyAction === "preprocessing"}
           onClick={onBeginPreprocessing}
           type="button"
         >
@@ -1733,6 +1741,44 @@ function normalizePreprocessingConfig(
     resample_hz: parseOptionalNumber(config.resample_hz),
     reference: config.reference || null,
   };
+}
+
+function getPreprocessingConfigError(
+  config: typeof DEFAULT_PREPROCESSING_CONFIG,
+): string | null {
+  const highPass = parseOptionalNumber(config.high_pass_hz);
+  const lowPass = parseOptionalNumber(config.low_pass_hz);
+  const notch = parseOptionalNumber(config.notch_hz);
+  const resample = parseOptionalNumber(config.resample_hz);
+
+  for (const [label, value] of [
+    ["High-pass", highPass],
+    ["Low-pass", lowPass],
+    ["Notch", notch],
+    ["Resample", resample],
+  ] as const) {
+    if (value !== null && (!Number.isFinite(value) || value < 0)) {
+      return `${label} must be a non-negative number.`;
+    }
+  }
+
+  if (lowPass !== null && lowPass <= 0) {
+    return "Low-pass must be greater than 0 Hz.";
+  }
+
+  if (notch !== null && notch <= 0) {
+    return "Notch must be greater than 0 Hz.";
+  }
+
+  if (resample !== null && resample <= 0) {
+    return "Resample must be greater than 0 Hz.";
+  }
+
+  if (highPass !== null && lowPass !== null && highPass >= lowPass) {
+    return "High-pass must be lower than low-pass.";
+  }
+
+  return null;
 }
 
 function parseOptionalNumber(value: string): number | null {

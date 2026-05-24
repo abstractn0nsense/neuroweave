@@ -632,6 +632,10 @@ def create_preprocessing_run(
         raise HTTPException(status_code=409, detail="EEG file not found")
 
     config = PreprocessingConfig(**config_payload.model_dump())
+    config_errors = _validate_preprocessing_config(config, recording)
+    if config_errors:
+        raise HTTPException(status_code=422, detail=config_errors)
+
     run_id = _new_id("preprocess")
     started_at = _utc_now_iso()
     output_path = PROCESSED_DIR / dataset_id / run_id / "raw_preprocessed.fif"
@@ -854,6 +858,62 @@ def _validate_dataset(dataset: IngestionDataset) -> ValidationReport:
         recording=recording,
         event_log=event_log,
     )
+
+
+def _validate_preprocessing_config(
+    config: PreprocessingConfig,
+    recording: Recording,
+) -> list[str]:
+    errors: list[str] = []
+    sampling_rate = recording.metadata.sampling_rate_hz
+    nyquist = sampling_rate / 2
+
+    if (
+        config.high_pass_hz is not None
+        and config.low_pass_hz is not None
+        and config.high_pass_hz >= config.low_pass_hz
+    ):
+        errors.append("high_pass_hz must be lower than low_pass_hz.")
+
+    for field_name, value in (
+        ("high_pass_hz", config.high_pass_hz),
+        ("low_pass_hz", config.low_pass_hz),
+        ("notch_hz", config.notch_hz),
+    ):
+        if value is not None and value >= nyquist:
+            errors.append(
+                f"{field_name} must be lower than the Nyquist frequency ({nyquist:g} Hz)."
+            )
+
+    if config.resample_hz is not None and config.resample_hz > sampling_rate:
+        errors.append(
+            f"resample_hz must not exceed the input sampling rate ({sampling_rate:g} Hz)."
+        )
+
+    if config.reference:
+        reference = config.reference.strip().lower()
+        if reference not in {"average", "avg", "none", "original"}:
+            channel_names = set(recording.metadata.channel_names)
+            requested_channels = [
+                channel.strip()
+                for channel in config.reference.split(",")
+                if channel.strip()
+            ]
+            if not requested_channels:
+                errors.append("reference must be average, none, or existing channel names.")
+            else:
+                missing_channels = [
+                    channel
+                    for channel in requested_channels
+                    if channel not in channel_names
+                ]
+                if missing_channels:
+                    errors.append(
+                        "reference contains unknown channels: "
+                        + ", ".join(missing_channels)
+                    )
+
+    return errors
 
 
 def _find_uploaded_file(

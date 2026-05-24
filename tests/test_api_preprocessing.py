@@ -111,3 +111,56 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert get_response.json() == payload
     assert list_response.status_code == 200
     assert list_response.json()["runs"] == [payload]
+
+
+def test_create_preprocessing_run_rejects_invalid_filter_order(
+    tmp_path,
+    monkeypatch,
+):
+    client = _client_with_dataset(tmp_path, monkeypatch)
+    _upload_eeg(client)
+    _upload_and_map_events(client)
+
+    response = client.post(
+        "/datasets/dataset-001/preprocessing-runs",
+        json={"high_pass_hz": 40.0, "low_pass_hz": 1.0},
+    )
+
+    assert response.status_code == 422
+    assert "high_pass_hz must be lower than low_pass_hz." in response.json()["detail"]
+
+
+def test_create_preprocessing_run_rejects_cutoff_at_or_above_nyquist(
+    tmp_path,
+    monkeypatch,
+):
+    client = _client_with_dataset(tmp_path, monkeypatch)
+    _upload_eeg(client)
+    _upload_and_map_events(client)
+
+    response = client.post(
+        "/datasets/dataset-001/preprocessing-runs",
+        json={"low_pass_hz": 999.0},
+    )
+
+    assert response.status_code == 422
+    assert any("Nyquist frequency" in error for error in response.json()["detail"])
+
+
+def test_create_preprocessing_run_rejects_upsampling_and_unknown_reference(
+    tmp_path,
+    monkeypatch,
+):
+    client = _client_with_dataset(tmp_path, monkeypatch)
+    _upload_eeg(client)
+    _upload_and_map_events(client)
+
+    response = client.post(
+        "/datasets/dataset-001/preprocessing-runs",
+        json={"resample_hz": 999.0, "reference": "MissingChannel"},
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert any("input sampling rate" in error for error in detail)
+    assert "reference contains unknown channels: MissingChannel" in detail

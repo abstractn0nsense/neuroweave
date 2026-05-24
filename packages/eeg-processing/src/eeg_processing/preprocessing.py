@@ -19,7 +19,7 @@ def preprocess_raw_eeg(
     try:
         if config.high_pass_hz is not None or config.low_pass_hz is not None:
             raw.filter(
-                l_freq=config.high_pass_hz,
+                l_freq=config.high_pass_hz or None,
                 h_freq=config.low_pass_hz,
                 verbose=False,
             )

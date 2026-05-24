@@ -53,6 +53,8 @@ These endpoints write through `eeg_io.registry.JsonRegistryRepository` to the lo
 
 Preprocessing run metadata is written through `eeg_io.registry.JsonRunRepository` under `data/runs/`, and processed FIF outputs are written under `data/processed/`.
 
+Preprocessing config validation rejects invalid filter ordering, cutoff frequencies at or above Nyquist, upsampling beyond the input sampling rate, and custom reference channels that do not exist in the uploaded recording.
+
 Expected responsibilities:
 
 - expose dataset, workflow, job, and result endpoints

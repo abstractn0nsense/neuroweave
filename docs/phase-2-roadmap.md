@@ -105,3 +105,14 @@ Next likely hardening:
 1. Move long preprocessing jobs into a background worker.
 2. Add cancellation and progress state.
 3. Add richer MNE output metadata and artifact summaries.
+
+## Phase 2.4: Preprocessing Config Hardening
+
+Implemented validation:
+
+- `high_pass_hz` must be lower than `low_pass_hz` when both are set
+- filter cutoff and notch frequencies must be below the input Nyquist frequency
+- `resample_hz` must not exceed the input sampling rate
+- custom reference values must name existing EEG channels
+- UI blocks obvious numeric and high/low ordering mistakes before sending the request
+- API returns `422` with explicit validation messages for invalid preprocessing settings
