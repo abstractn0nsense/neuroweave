@@ -28,6 +28,13 @@ class ValidationSeverity(StrEnum):
     WARNING = "warning"
 
 
+class PreprocessingRunStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 @dataclass(frozen=True)
 class EventColumnMapping:
     onset_seconds: str | None = None
@@ -167,3 +174,26 @@ class ValidationReport:
             for issue in self.issues
             if issue.severity == ValidationSeverity.WARNING
         ]
+
+
+@dataclass(frozen=True)
+class PreprocessingConfig:
+    high_pass_hz: float | None = None
+    low_pass_hz: float | None = None
+    notch_hz: float | None = None
+    resample_hz: float | None = None
+    reference: str | None = None
+
+
+@dataclass(frozen=True)
+class PreprocessingRun:
+    run_id: str
+    dataset_id: str
+    config: PreprocessingConfig
+    status: PreprocessingRunStatus = PreprocessingRunStatus.PENDING
+    started_at_utc: str | None = None
+    finished_at_utc: str | None = None
+    output_path: str | None = None
+    output_metadata: Metadata = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)

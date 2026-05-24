@@ -1,5 +1,6 @@
 from pathlib import Path
 from dataclasses import replace
+from datetime import UTC, datetime
 import hashlib
 import shutil
 import sys
@@ -11,7 +12,11 @@ from pydantic import BaseModel, Field
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-for package_src in ("packages/eeg-core/src", "packages/eeg-io/src"):
+for package_src in (
+    "packages/eeg-core/src",
+    "packages/eeg-io/src",
+    "packages/eeg-processing/src",
+):
     sys.path.insert(0, str(REPO_ROOT / package_src))
 
 from eeg_core.domain import (  # noqa: E402
@@ -21,6 +26,9 @@ from eeg_core.domain import (  # noqa: E402
     EventLog,
     Experiment,
     Participant,
+    PreprocessingConfig,
+    PreprocessingRun,
+    PreprocessingRunStatus,
     Project,
     Recording,
     UploadedFile as IngestionUploadedFile,
@@ -30,6 +38,7 @@ from eeg_core.domain import (  # noqa: E402
     ValidationSeverity,
     validate_ingestion_dataset,
 )
+from eeg_processing import PreprocessingError, preprocess_raw_eeg  # noqa: E402
 from eeg_io.datasets import find_eeg_file_by_id, list_eeg_files  # noqa: E402
 from eeg_io.event_logs import (  # noqa: E402
     EventLogNormalizationError,
@@ -37,13 +46,16 @@ from eeg_io.event_logs import (  # noqa: E402
     normalize_event_log,
     preview_event_log,
 )
-from eeg_io.registry import JsonRegistryRepository  # noqa: E402
+from eeg_io.registry import JsonRegistryRepository, JsonRunRepository  # noqa: E402
 from eeg_io.readers import EegMetadataReadError, read_eeg_metadata  # noqa: E402
 
 
 SAMPLE_DATASET_DIR = REPO_ROOT / "data" / "raw" / "samples"
 UPLOADS_DIR = REPO_ROOT / "data" / "raw" / "uploads"
+RUNS_DIR = REPO_ROOT / "data" / "runs"
+PROCESSED_DIR = REPO_ROOT / "data" / "processed"
 registry_repository = JsonRegistryRepository(UPLOADS_DIR)
+run_repository = JsonRunRepository(RUNS_DIR)
 
 
 class HealthResponse(BaseModel):
@@ -183,6 +195,31 @@ class ValidationReportResponse(BaseModel):
 
 class EventMappingRequest(BaseModel):
     mapping: EventColumnMappingPayload | None = None
+
+
+class PreprocessingConfigPayload(BaseModel):
+    high_pass_hz: float | None = Field(default=None, ge=0)
+    low_pass_hz: float | None = Field(default=None, gt=0)
+    notch_hz: float | None = Field(default=None, gt=0)
+    resample_hz: float | None = Field(default=None, gt=0)
+    reference: str | None = None
+
+
+class PreprocessingRunResponse(BaseModel):
+    run_id: str
+    dataset_id: str
+    config: PreprocessingConfigPayload
+    status: str
+    started_at_utc: str | None
+    finished_at_utc: str | None
+    output_path: str | None
+    output_metadata: dict[str, str | int | float | bool | None]
+    warnings: list[str]
+    errors: list[str]
+
+
+class PreprocessingRunsResponse(BaseModel):
+    runs: list[PreprocessingRunResponse]
 
 
 class CreateProjectRequest(BaseModel):
@@ -564,6 +601,110 @@ def get_dataset_validation(dataset_id: str) -> ValidationReportResponse:
     return _validation_report_response(report)
 
 
+@app.post(
+    "/datasets/{dataset_id}/preprocessing-runs",
+    response_model=PreprocessingRunResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_preprocessing_run(
+    dataset_id: str,
+    config_payload: PreprocessingConfigPayload,
+) -> PreprocessingRunResponse:
+    dataset = registry_repository.get_dataset(dataset_id)
+    if dataset is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    report = _validate_dataset(dataset)
+    if not report.valid:
+        updated_dataset = replace(dataset, status=report.status)
+        registry_repository.update_dataset(updated_dataset)
+        raise HTTPException(
+            status_code=409,
+            detail="Dataset must be valid before preprocessing.",
+        )
+
+    recording = registry_repository.get_recording(dataset_id)
+    if recording is None:
+        raise HTTPException(status_code=409, detail="Recording not found")
+
+    uploaded_file = _find_uploaded_file(dataset_id, recording.file_id)
+    if uploaded_file is None or uploaded_file.kind != UploadedFileKind.EEG:
+        raise HTTPException(status_code=409, detail="EEG file not found")
+
+    config = PreprocessingConfig(**config_payload.model_dump())
+    run_id = _new_id("preprocess")
+    started_at = _utc_now_iso()
+    output_path = PROCESSED_DIR / dataset_id / run_id / "raw_preprocessed.fif"
+
+    run = PreprocessingRun(
+        run_id=run_id,
+        dataset_id=dataset_id,
+        config=config,
+        status=PreprocessingRunStatus.RUNNING,
+        started_at_utc=started_at,
+        output_path=str(output_path),
+    )
+    run_repository.save_preprocessing_run(run)
+
+    try:
+        metadata = preprocess_raw_eeg(
+            input_path=Path(uploaded_file.stored_path),
+            output_path=output_path,
+            config=config,
+        )
+        completed_run = replace(
+            run,
+            status=PreprocessingRunStatus.COMPLETED,
+            finished_at_utc=_utc_now_iso(),
+            output_metadata={
+                "channel_count": metadata["channel_count"],
+                "sampling_rate_hz": metadata["sampling_rate_hz"],
+                "duration_seconds": metadata["duration_seconds"],
+                "file_format": metadata["file_format"],
+            },
+            warnings=[str(warning) for warning in metadata.get("warnings", [])],
+        )
+        run_repository.save_preprocessing_run(completed_run)
+        return _preprocessing_run_response(completed_run)
+    except PreprocessingError as exc:
+        failed_run = replace(
+            run,
+            status=PreprocessingRunStatus.FAILED,
+            finished_at_utc=_utc_now_iso(),
+            errors=[str(exc)],
+        )
+        run_repository.save_preprocessing_run(failed_run)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get(
+    "/preprocessing-runs/{run_id}",
+    response_model=PreprocessingRunResponse,
+)
+def get_preprocessing_run(run_id: str) -> PreprocessingRunResponse:
+    run = run_repository.get_preprocessing_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Preprocessing run not found")
+
+    return _preprocessing_run_response(run)
+
+
+@app.get(
+    "/datasets/{dataset_id}/preprocessing-runs",
+    response_model=PreprocessingRunsResponse,
+)
+def list_dataset_preprocessing_runs(dataset_id: str) -> PreprocessingRunsResponse:
+    if registry_repository.get_dataset(dataset_id) is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    return PreprocessingRunsResponse(
+        runs=[
+            _preprocessing_run_response(run)
+            for run in run_repository.list_preprocessing_runs(dataset_id=dataset_id)
+        ]
+    )
+
+
 @app.get("/datasets/{dataset_id}", response_model=DatasetResponse)
 def get_dataset(dataset_id: str) -> DatasetResponse:
     dataset = registry_repository.get_dataset(dataset_id)
@@ -681,6 +822,21 @@ def _validation_report_response(report: ValidationReport) -> ValidationReportRes
     )
 
 
+def _preprocessing_run_response(run: PreprocessingRun) -> PreprocessingRunResponse:
+    return PreprocessingRunResponse(
+        run_id=run.run_id,
+        dataset_id=run.dataset_id,
+        config=PreprocessingConfigPayload(**run.config.__dict__),
+        status=run.status.value,
+        started_at_utc=run.started_at_utc,
+        finished_at_utc=run.finished_at_utc,
+        output_path=run.output_path,
+        output_metadata=run.output_metadata,
+        warnings=run.warnings,
+        errors=run.errors,
+    )
+
+
 def _validation_issue_response(issue: ValidationIssue) -> ValidationIssueResponse:
     return ValidationIssueResponse(
         severity=issue.severity.value,
@@ -725,6 +881,10 @@ def _resolve_event_mapping(
 
 def _new_id(prefix: str) -> str:
     return f"{prefix}-{uuid4().hex[:12]}"
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
 def _store_upload_file(file: UploadFile, destination_directory: Path) -> Path:

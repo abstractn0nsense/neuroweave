@@ -428,15 +428,64 @@ input[type="file"] {
   border-color: #e5b6b1;
 }
 
-.handoff-panel {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+.preprocessing-panel {
+  display: grid;
   gap: 16px;
   border: 1px solid #d8dde6;
   border-radius: 8px;
   background: #f8fafb;
   padding: 14px;
+}
+
+.preprocessing-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.run-list {
+  display: grid;
+  gap: 10px;
+}
+
+.run-row {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #d8dde6;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 12px;
+}
+
+.run-row div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.run-row strong,
+.run-row small {
+  overflow-wrap: anywhere;
+}
+
+.run-row small {
+  color: #607080;
+}
+
+.run-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.run-meta span {
+  border: 1px solid #d8dde6;
+  border-radius: 999px;
+  color: #3e4a59;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 4px 8px;
+  text-transform: uppercase;
 }
 
 .validation-heading {
@@ -583,8 +632,7 @@ dd {
     grid-template-columns: 1fr;
   }
 
-  .handoff-panel {
-    align-items: stretch;
-    flex-direction: column;
+  .preprocessing-grid {
+    grid-template-columns: 1fr;
   }
 }

@@ -44,12 +44,12 @@ Electron or Tauri should wait until the web and preprocessing workflows are stab
 
 Goal: pass a valid dataset into actual MNE preprocessing.
 
-Core objects:
+Implemented core objects:
 
 - `PreprocessingConfig`
 - `PreprocessingRun`
 
-Configuration fields:
+Implemented configuration fields:
 
 - high-pass filter
 - low-pass filter
@@ -57,7 +57,7 @@ Configuration fields:
 - resample rate
 - reference
 
-Run metadata:
+Implemented run metadata:
 
 - run ID
 - dataset ID
@@ -66,7 +66,7 @@ Run metadata:
 - output path
 - warnings and errors
 
-API shape:
+Implemented API shape:
 
 ```text
 POST /datasets/{id}/preprocessing-runs
@@ -74,7 +74,7 @@ GET /preprocessing-runs/{run_id}
 GET /datasets/{id}/preprocessing-runs
 ```
 
-Storage shape:
+Implemented storage shape:
 
 ```text
 data/
@@ -87,9 +87,21 @@ data/
         raw_preprocessed.fif
 ```
 
-UI shape:
+Implemented UI shape:
 
 - enable preprocessing only for valid datasets
 - collect filter settings
 - show run status
 - show output metadata
+
+Current scope:
+
+- Runs execute synchronously in the API process.
+- The first processing backend is MNE-based and writes FIF output.
+- Failed runs are persisted with error details before the API returns the failure.
+
+Next likely hardening:
+
+1. Move long preprocessing jobs into a background worker.
+2. Add cancellation and progress state.
+3. Add richer MNE output metadata and artifact summaries.

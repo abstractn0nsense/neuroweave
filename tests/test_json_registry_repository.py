@@ -8,13 +8,16 @@ from eeg_core.domain import (
     Experiment,
     NormalizedEvent,
     Participant,
+    PreprocessingConfig,
+    PreprocessingRun,
+    PreprocessingRunStatus,
     Project,
     Recording,
     RecordingMetadata,
     UploadedFile,
     UploadedFileKind,
 )
-from eeg_io.registry import JsonRegistryRepository
+from eeg_io.registry import JsonRegistryRepository, JsonRunRepository
 
 
 def test_initialize_creates_upload_registry_structure(tmp_path):
@@ -180,3 +183,30 @@ def test_registry_persists_normalized_event_log(tmp_path):
 
     assert repository.get_event_log("dataset-001") == event_log
     assert repository.event_log_path("dataset-001").is_file()
+
+
+def test_run_repository_persists_preprocessing_runs(tmp_path):
+    repository = JsonRunRepository(tmp_path / "runs")
+    run = PreprocessingRun(
+        run_id="preprocess-001",
+        dataset_id="dataset-001",
+        config=PreprocessingConfig(
+            high_pass_hz=1.0,
+            low_pass_hz=40.0,
+            notch_hz=50.0,
+            resample_hz=128.0,
+            reference="average",
+        ),
+        status=PreprocessingRunStatus.COMPLETED,
+        started_at_utc="2026-05-24T00:00:00+00:00",
+        finished_at_utc="2026-05-24T00:01:00+00:00",
+        output_path="data/processed/dataset-001/preprocess-001/raw_preprocessed.fif",
+        output_metadata={"sampling_rate_hz": 128.0},
+        warnings=["reference unchanged"],
+    )
+
+    repository.save_preprocessing_run(run)
+
+    assert repository.get_preprocessing_run("preprocess-001") == run
+    assert repository.list_preprocessing_runs(dataset_id="dataset-001") == [run]
+    assert repository.preprocessing_run_path("preprocess-001").is_file()

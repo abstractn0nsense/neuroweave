@@ -11,6 +11,9 @@ from eeg_core.domain import (
     Experiment,
     NormalizedEvent,
     Participant,
+    PreprocessingConfig,
+    PreprocessingRun,
+    PreprocessingRunStatus,
     Project,
     Recording,
     UploadedFile,
@@ -248,6 +251,44 @@ class JsonRegistryRepository:
         return self.dataset_directory(dataset_id) / "event_log.json"
 
 
+class JsonRunRepository:
+    def __init__(self, runs_root: Path):
+        self.runs_root = runs_root
+
+    def initialize(self) -> None:
+        self.runs_root.mkdir(parents=True, exist_ok=True)
+
+    def save_preprocessing_run(self, run: PreprocessingRun) -> PreprocessingRun:
+        self.initialize()
+        _write_json(self.preprocessing_run_path(run.run_id), asdict(run))
+        return run
+
+    def get_preprocessing_run(self, run_id: str) -> PreprocessingRun | None:
+        path = self.preprocessing_run_path(run_id)
+        if not path.exists():
+            return None
+        return _preprocessing_run_from_json(_read_json_object(path))
+
+    def list_preprocessing_runs(
+        self,
+        dataset_id: str | None = None,
+    ) -> list[PreprocessingRun]:
+        self.initialize()
+        runs = [
+            _preprocessing_run_from_json(_read_json_object(path))
+            for path in sorted(self.runs_root.glob("*/run.json"))
+        ]
+        if dataset_id is None:
+            return runs
+        return [run for run in runs if run.dataset_id == dataset_id]
+
+    def preprocessing_run_directory(self, run_id: str) -> Path:
+        return self.runs_root / run_id
+
+    def preprocessing_run_path(self, run_id: str) -> Path:
+        return self.preprocessing_run_directory(run_id) / "run.json"
+
+
 def _project_from_json(data: JsonObject) -> Project:
     return Project(
         project_id=str(data["project_id"]),
@@ -327,6 +368,33 @@ def _event_log_from_json(data: JsonObject) -> EventLog:
             _normalized_event_from_json(event)
             for event in data.get("events", [])
         ],
+    )
+
+
+def _preprocessing_config_from_json(data: JsonObject) -> PreprocessingConfig:
+    return PreprocessingConfig(
+        high_pass_hz=_optional_float(data.get("high_pass_hz")),
+        low_pass_hz=_optional_float(data.get("low_pass_hz")),
+        notch_hz=_optional_float(data.get("notch_hz")),
+        resample_hz=_optional_float(data.get("resample_hz")),
+        reference=data.get("reference"),
+    )
+
+
+def _preprocessing_run_from_json(data: JsonObject) -> PreprocessingRun:
+    return PreprocessingRun(
+        run_id=str(data["run_id"]),
+        dataset_id=str(data["dataset_id"]),
+        config=_preprocessing_config_from_json(data.get("config", {})),
+        status=PreprocessingRunStatus(
+            data.get("status", PreprocessingRunStatus.PENDING)
+        ),
+        started_at_utc=data.get("started_at_utc"),
+        finished_at_utc=data.get("finished_at_utc"),
+        output_path=data.get("output_path"),
+        output_metadata=dict(data.get("output_metadata", {})),
+        warnings=[str(warning) for warning in data.get("warnings", [])],
+        errors=[str(error) for error in data.get("errors", [])],
     )
 
 

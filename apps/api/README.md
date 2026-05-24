@@ -44,9 +44,14 @@ POST /datasets/{dataset_id}/files/events
 POST /datasets/{dataset_id}/events/mapping
 GET /datasets/{dataset_id}/events
 GET /datasets/{dataset_id}/validation
+POST /datasets/{dataset_id}/preprocessing-runs
+GET /datasets/{dataset_id}/preprocessing-runs
+GET /preprocessing-runs/{run_id}
 ```
 
 These endpoints write through `eeg_io.registry.JsonRegistryRepository` to the local JSON registry under `data/raw/uploads/`.
+
+Preprocessing run metadata is written through `eeg_io.registry.JsonRunRepository` under `data/runs/`, and processed FIF outputs are written under `data/processed/`.
 
 Expected responsibilities:
 
