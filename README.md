@@ -72,6 +72,20 @@ Phase 0 uses local per-app environments:
 
 Use CPython 3.12 or 3.13 for the API environment. Python 3.14 mingw builds may not have compatible wheels for the Phase 0 dependencies yet. On Windows, prefer the setup script because `python` may resolve to MSYS Python instead of CPython.
 
+### Double-Click Run
+
+On Windows, double-click `Start NeuroWeave.bat` from the repository root. The launcher starts the API and web servers, waits until both respond, writes logs under `data/logs/`, and opens `http://127.0.0.1:5173`.
+
+If the servers are already running, the launcher reuses them instead of starting duplicates. To stop repository-owned listeners on the default ports, double-click `Stop NeuroWeave.bat`.
+
+For an app-like entrypoint, install Windows shortcuts:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install_neuroweave_shortcut.ps1
+```
+
+This creates Desktop and Start Menu shortcuts with a NeuroWeave icon. The shortcut hides runtime server windows and opens only the browser once the local app is ready.
+
 ### Phase 0 Quickstart
 
 ```powershell
@@ -145,3 +159,5 @@ upload EEG recording and event log
 ```
 
 See `docs/phase-1-ingestion.md` for the next phase, including PsychoPy-style event and behavior logs.
+
+See `docs/phase-2-roadmap.md` for the current Phase 2 plan: click-to-run launch, app-like launch polish, and preprocessing handoff.

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="NeuroWeave">
+  <rect width="256" height="256" rx="48" fill="#101820"/>
+  <path d="M40 140c24-56 54-56 88 0s64 56 88 0" fill="none" stroke="#4fd1c5" stroke-width="16" stroke-linecap="round"/>
+  <path d="M40 116c24 56 54 56 88 0s64-56 88 0" fill="none" stroke="#f6ad55" stroke-width="16" stroke-linecap="round"/>
+  <circle cx="64" cy="128" r="10" fill="#f7fafc"/>
+  <circle cx="128" cy="128" r="10" fill="#f7fafc"/>
+  <circle cx="192" cy="128" r="10" fill="#f7fafc"/>
+</svg>
