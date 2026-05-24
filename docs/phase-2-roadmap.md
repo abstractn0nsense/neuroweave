@@ -96,15 +96,16 @@ Implemented UI shape:
 
 Current scope:
 
-- Runs execute synchronously in the API process.
 - The first processing backend is MNE-based and writes FIF output.
-- Failed runs are persisted with error details before the API returns the failure.
+- Runs are created as `pending`, then executed by FastAPI background tasks.
+- The UI polls pending/running runs until they reach `completed` or `failed`.
+- Failed runs are persisted with warning and error details.
 
 Next likely hardening:
 
-1. Move long preprocessing jobs into a background worker.
+1. Move background tasks into a durable worker process for very large EEG files.
 2. Add cancellation and progress state.
-3. Add richer MNE output metadata and artifact summaries.
+3. Add richer artifact summaries.
 
 ## Phase 2.4: Preprocessing Config Hardening
 
@@ -137,3 +138,13 @@ Implemented capture:
 - failed preprocessing runs persist any warnings collected before failure
 - failed preprocessing runs remain queryable through dataset run listing
 - UI run rows already separate warning text from error text
+
+## Phase 2.7: Background Preprocessing Runs
+
+Implemented execution model:
+
+- `POST /datasets/{id}/preprocessing-runs` validates the dataset and config, saves a `pending` run, and returns immediately
+- background execution updates the run to `running`, then `completed` or `failed`
+- successful runs persist output metadata, provenance, and captured warnings
+- failed runs persist errors, captured warnings, and input provenance
+- the web UI polls preprocessing runs while any selected-dataset run is `pending` or `running`

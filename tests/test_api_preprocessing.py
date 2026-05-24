@@ -95,13 +95,28 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     )
 
     assert response.status_code == 201
-    payload = response.json()
-    assert payload["dataset_id"] == "dataset-001"
+    queued_payload = response.json()
+    assert queued_payload["dataset_id"] == "dataset-001"
+    assert queued_payload["status"] == "pending"
+    assert queued_payload["started_at_utc"] is None
+    assert queued_payload["finished_at_utc"] is None
+    assert queued_payload["config"]["resample_hz"] == 50.0
+    assert queued_payload["output_metadata"]["input_file_id"]
+
+    completed_response = client.get(
+        f"/preprocessing-runs/{queued_payload['run_id']}"
+    )
+    payload = completed_response.json()
+
+    assert completed_response.status_code == 200
     assert payload["status"] == "completed"
-    assert payload["config"]["resample_hz"] == 50.0
+    assert payload["started_at_utc"] is not None
     assert payload["finished_at_utc"] is not None
     assert payload["errors"] == []
-    assert any("does not conform to MNE naming conventions" in warning for warning in payload["warnings"])
+    assert any(
+        "does not conform to MNE naming conventions" in warning
+        for warning in payload["warnings"]
+    )
     assert Path(payload["output_path"]).is_file()
     metadata = payload["output_metadata"]
     assert metadata["input_file_id"]
@@ -118,11 +133,8 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert metadata["output_duration_seconds"] > 0
     assert metadata["mne_version"]
 
-    get_response = client.get(f"/preprocessing-runs/{payload['run_id']}")
     list_response = client.get("/datasets/dataset-001/preprocessing-runs")
 
-    assert get_response.status_code == 200
-    assert get_response.json() == payload
     assert list_response.status_code == 200
     assert list_response.json()["runs"] == [payload]
 
@@ -149,8 +161,8 @@ def test_create_preprocessing_run_persists_failed_run_details(
     )
     list_response = client.get("/datasets/dataset-001/preprocessing-runs")
 
-    assert response.status_code == 422
-    assert response.json()["detail"] == "synthetic preprocessing failure"
+    assert response.status_code == 201
+    assert response.json()["status"] == "pending"
     assert list_response.status_code == 200
     runs = list_response.json()["runs"]
     assert len(runs) == 1

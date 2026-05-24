@@ -370,6 +370,22 @@ function App() {
     void refreshPreprocessingRuns(activeDatasetId);
   }, [activeDatasetId]);
 
+  useEffect(() => {
+    const hasActiveRun =
+      preprocessingRuns.data?.some((run) =>
+        ["pending", "running"].includes(run.status),
+      ) ?? false;
+    if (!activeDatasetId || !hasActiveRun) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void refreshPreprocessingRuns(activeDatasetId, { silent: true });
+    }, 2000);
+
+    return () => window.clearInterval(intervalId);
+  }, [activeDatasetId, preprocessingRuns.data]);
+
   async function refreshWorkspace() {
     setNotice(null);
     setHealth({ status: "loading", data: null, error: null });
@@ -650,8 +666,8 @@ function App() {
         error: null,
       }));
       setNotice({
-        tone: run.status === "completed" ? "ok" : "neutral",
-        message: `Preprocessing run ${run.run_id} ${run.status}.`,
+        tone: "neutral",
+        message: `Preprocessing run ${run.run_id} queued.`,
       });
     });
   }
@@ -685,8 +701,13 @@ function App() {
     setDatasets({ status: "success", data: response.datasets, error: null });
   }
 
-  async function refreshPreprocessingRuns(datasetId: string) {
-    setPreprocessingRuns({ status: "loading", data: null, error: null });
+  async function refreshPreprocessingRuns(
+    datasetId: string,
+    options: { silent?: boolean } = {},
+  ) {
+    if (!options.silent) {
+      setPreprocessingRuns({ status: "loading", data: null, error: null });
+    }
     try {
       const response = await fetchJson<PreprocessingRunsResponse>(
         `/datasets/${encodeURIComponent(datasetId)}/preprocessing-runs`,

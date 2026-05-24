@@ -6,7 +6,7 @@ import shutil
 import sys
 from uuid import uuid4
 
-from fastapi import FastAPI, File, HTTPException, UploadFile, status
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -609,6 +609,7 @@ def get_dataset_validation(dataset_id: str) -> ValidationReportResponse:
 def create_preprocessing_run(
     dataset_id: str,
     config_payload: PreprocessingConfigPayload,
+    background_tasks: BackgroundTasks,
 ) -> PreprocessingRunResponse:
     dataset = registry_repository.get_dataset(dataset_id)
     if dataset is None:
@@ -637,15 +638,13 @@ def create_preprocessing_run(
         raise HTTPException(status_code=422, detail=config_errors)
 
     run_id = _new_id("preprocess")
-    started_at = _utc_now_iso()
     output_path = PROCESSED_DIR / dataset_id / run_id / "raw_preprocessed.fif"
 
     run = PreprocessingRun(
         run_id=run_id,
         dataset_id=dataset_id,
         config=config,
-        status=PreprocessingRunStatus.RUNNING,
-        started_at_utc=started_at,
+        status=PreprocessingRunStatus.PENDING,
         output_path=str(output_path),
         output_metadata=_preprocessing_input_provenance(
             uploaded_file=uploaded_file,
@@ -653,36 +652,14 @@ def create_preprocessing_run(
         ),
     )
     run_repository.save_preprocessing_run(run)
-
-    try:
-        metadata = preprocess_raw_eeg(
-            input_path=Path(uploaded_file.stored_path),
-            output_path=output_path,
-            config=config,
-        )
-        completed_run = replace(
-            run,
-            status=PreprocessingRunStatus.COMPLETED,
-            finished_at_utc=_utc_now_iso(),
-            output_metadata=_preprocessing_completed_provenance(
-                run=run,
-                output_path=output_path,
-                processing_metadata=metadata,
-            ),
-            warnings=[str(warning) for warning in metadata.get("warnings", [])],
-        )
-        run_repository.save_preprocessing_run(completed_run)
-        return _preprocessing_run_response(completed_run)
-    except PreprocessingError as exc:
-        failed_run = replace(
-            run,
-            status=PreprocessingRunStatus.FAILED,
-            finished_at_utc=_utc_now_iso(),
-            warnings=exc.processing_warnings,
-            errors=[str(exc)],
-        )
-        run_repository.save_preprocessing_run(failed_run)
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    background_tasks.add_task(
+        _execute_preprocessing_run,
+        run_id=run_id,
+        input_path=str(uploaded_file.stored_path),
+        output_path=str(output_path),
+        config=config,
+    )
+    return _preprocessing_run_response(run)
 
 
 @app.get(
@@ -898,6 +875,53 @@ def _validate_dataset(dataset: IngestionDataset) -> ValidationReport:
         recording=recording,
         event_log=event_log,
     )
+
+
+def _execute_preprocessing_run(
+    run_id: str,
+    input_path: str,
+    output_path: str,
+    config: PreprocessingConfig,
+) -> None:
+    run = run_repository.get_preprocessing_run(run_id)
+    if run is None:
+        return
+
+    running_run = replace(
+        run,
+        status=PreprocessingRunStatus.RUNNING,
+        started_at_utc=_utc_now_iso(),
+    )
+    run_repository.save_preprocessing_run(running_run)
+
+    output_file_path = Path(output_path)
+    try:
+        metadata = preprocess_raw_eeg(
+            input_path=Path(input_path),
+            output_path=output_file_path,
+            config=config,
+        )
+        completed_run = replace(
+            running_run,
+            status=PreprocessingRunStatus.COMPLETED,
+            finished_at_utc=_utc_now_iso(),
+            output_metadata=_preprocessing_completed_provenance(
+                run=running_run,
+                output_path=output_file_path,
+                processing_metadata=metadata,
+            ),
+            warnings=[str(warning) for warning in metadata.get("warnings", [])],
+        )
+        run_repository.save_preprocessing_run(completed_run)
+    except PreprocessingError as exc:
+        failed_run = replace(
+            running_run,
+            status=PreprocessingRunStatus.FAILED,
+            finished_at_utc=_utc_now_iso(),
+            warnings=exc.processing_warnings,
+            errors=[str(exc)],
+        )
+        run_repository.save_preprocessing_run(failed_run)
 
 
 def _validate_preprocessing_config(
