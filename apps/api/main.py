@@ -25,6 +25,10 @@ from eeg_core.domain import (  # noqa: E402
     Recording,
     UploadedFile as IngestionUploadedFile,
     UploadedFileKind,
+    ValidationIssue,
+    ValidationReport,
+    ValidationSeverity,
+    validate_ingestion_dataset,
 )
 from eeg_io.datasets import find_eeg_file_by_id, list_eeg_files  # noqa: E402
 from eeg_io.event_logs import (  # noqa: E402
@@ -159,6 +163,22 @@ class EventLogResponse(BaseModel):
     mapping: EventColumnMappingPayload
     row_count: int
     events: list[NormalizedEventResponse]
+
+
+class ValidationIssueResponse(BaseModel):
+    severity: str
+    code: str
+    message: str
+    field: str | None
+
+
+class ValidationReportResponse(BaseModel):
+    dataset_id: str
+    status: str
+    valid: bool
+    errors: list[ValidationIssueResponse]
+    warnings: list[ValidationIssueResponse]
+    issues: list[ValidationIssueResponse]
 
 
 class EventMappingRequest(BaseModel):
@@ -529,6 +549,21 @@ def get_dataset_events(dataset_id: str) -> EventLogResponse:
     return _event_log_response(event_log)
 
 
+@app.get(
+    "/datasets/{dataset_id}/validation",
+    response_model=ValidationReportResponse,
+)
+def get_dataset_validation(dataset_id: str) -> ValidationReportResponse:
+    dataset = registry_repository.get_dataset(dataset_id)
+    if dataset is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    report = _validate_dataset(dataset)
+    updated_dataset = replace(dataset, status=report.status)
+    registry_repository.update_dataset(updated_dataset)
+    return _validation_report_response(report)
+
+
 @app.get("/datasets/{dataset_id}", response_model=DatasetResponse)
 def get_dataset(dataset_id: str) -> DatasetResponse:
     dataset = registry_repository.get_dataset(dataset_id)
@@ -623,6 +658,45 @@ def _event_log_response(event_log: EventLog) -> EventLogResponse:
             )
             for event in event_log.events
         ],
+    )
+
+
+def _validation_report_response(report: ValidationReport) -> ValidationReportResponse:
+    issues = [_validation_issue_response(issue) for issue in report.issues]
+    return ValidationReportResponse(
+        dataset_id=report.dataset_id,
+        status=report.status.value,
+        valid=report.valid,
+        errors=[
+            issue
+            for issue in issues
+            if issue.severity == ValidationSeverity.ERROR.value
+        ],
+        warnings=[
+            issue
+            for issue in issues
+            if issue.severity == ValidationSeverity.WARNING.value
+        ],
+        issues=issues,
+    )
+
+
+def _validation_issue_response(issue: ValidationIssue) -> ValidationIssueResponse:
+    return ValidationIssueResponse(
+        severity=issue.severity.value,
+        code=issue.code,
+        message=issue.message,
+        field=issue.field,
+    )
+
+
+def _validate_dataset(dataset: IngestionDataset) -> ValidationReport:
+    recording = registry_repository.get_recording(dataset.dataset_id)
+    event_log = registry_repository.get_event_log(dataset.dataset_id)
+    return validate_ingestion_dataset(
+        dataset=dataset,
+        recording=recording,
+        event_log=event_log,
     )
 
 

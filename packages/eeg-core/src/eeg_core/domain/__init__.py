@@ -16,6 +16,7 @@ from eeg_core.domain.ingestion import (
     ValidationSeverity,
 )
 from eeg_core.domain.recording import RecordingMetadata, recording_metadata_from_dict
+from eeg_core.domain.validation import validate_ingestion_dataset
 
 __all__ = [
     "Dataset",
@@ -35,4 +36,5 @@ __all__ = [
     "ValidationIssue",
     "ValidationReport",
     "ValidationSeverity",
+    "validate_ingestion_dataset",
 ]

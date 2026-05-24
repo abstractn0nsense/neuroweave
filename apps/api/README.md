@@ -43,6 +43,7 @@ POST /datasets/{dataset_id}/files/eeg
 POST /datasets/{dataset_id}/files/events
 POST /datasets/{dataset_id}/events/mapping
 GET /datasets/{dataset_id}/events
+GET /datasets/{dataset_id}/validation
 ```
 
 These endpoints write through `eeg_io.registry.JsonRegistryRepository` to the local JSON registry under `data/raw/uploads/`.

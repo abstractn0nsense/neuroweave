@@ -55,11 +55,11 @@ Completed:
 4. Dataset creation and lookup API endpoints.
 5. EEG upload endpoint with metadata extraction.
 6. Event or behavior log upload with CSV/TSV storage and preview.
+7. Event column mapping and normalized event generation.
+8. Dataset validation API for EEG duration, event timing, missing fields, and readiness state.
 
 Next:
 
-7. Event column mapping and normalized event generation.
-8. Dataset validation API for EEG duration, event timing, missing fields, and readiness state.
 9. UI ingest flow after the API can complete `EEG + event log + validation`.
 
 ## Event And Behavior Logs
@@ -180,6 +180,8 @@ data/
         {dataset_id}/
           event_log.json
 ```
+
+Validation is computed from the dataset metadata, `recording.json`, and `event_log.json`. It updates the dataset status to `valid` when there are no blocking errors and to `invalid` when EEG files, mapped events, or event timing checks fail.
 
 ## Completion Criteria
 
