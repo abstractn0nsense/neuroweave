@@ -26,6 +26,7 @@ from eeg_core.domain import (  # noqa: E402
     UploadedFileKind,
 )
 from eeg_io.datasets import find_eeg_file_by_id, list_eeg_files  # noqa: E402
+from eeg_io.event_logs import EventLogPreviewError, preview_event_log  # noqa: E402
 from eeg_io.registry import JsonRegistryRepository  # noqa: E402
 from eeg_io.readers import EegMetadataReadError, read_eeg_metadata  # noqa: E402
 
@@ -109,6 +110,19 @@ class EegUploadResponse(BaseModel):
     dataset: DatasetResponse
     uploaded_file: UploadedFileResponse
     recording: RecordingResponse
+
+
+class EventLogPreviewResponse(BaseModel):
+    columns: list[str]
+    delimiter: str
+    preview_rows: list[dict[str, str | None]]
+    row_count: int
+
+
+class EventUploadResponse(BaseModel):
+    dataset: DatasetResponse
+    uploaded_file: UploadedFileResponse
+    preview: EventLogPreviewResponse
 
 
 class EventColumnMappingPayload(BaseModel):
@@ -386,6 +400,56 @@ def upload_dataset_eeg_file(
         dataset=_dataset_response(updated_dataset),
         uploaded_file=_uploaded_file_response(uploaded_file),
         recording=_recording_response(recording),
+    )
+
+
+@app.post(
+    "/datasets/{dataset_id}/files/events",
+    response_model=EventUploadResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def upload_dataset_events_file(
+    dataset_id: str,
+    file: UploadFile = File(...),
+) -> EventUploadResponse:
+    dataset = registry_repository.get_dataset(dataset_id)
+    if dataset is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    stored_path = _store_upload_file(
+        file=file,
+        destination_directory=registry_repository.events_directory(dataset_id),
+    )
+
+    try:
+        preview = preview_event_log(stored_path)
+    except EventLogPreviewError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    uploaded_file = IngestionUploadedFile(
+        file_id=_new_id("file"),
+        dataset_id=dataset_id,
+        kind=UploadedFileKind.EVENTS,
+        original_filename=file.filename or stored_path.name,
+        stored_path=str(stored_path),
+        content_type=file.content_type,
+        size_bytes=stored_path.stat().st_size,
+        checksum_sha256=_sha256_file(stored_path),
+    )
+    registry_repository.save_uploaded_file(uploaded_file)
+    registry_repository.save_events_preview(dataset_id, preview)
+
+    updated_dataset = replace(
+        dataset,
+        status=DatasetStatus.NEEDS_MAPPING,
+        event_log_id=uploaded_file.file_id,
+    )
+    registry_repository.update_dataset(updated_dataset)
+
+    return EventUploadResponse(
+        dataset=_dataset_response(updated_dataset),
+        uploaded_file=_uploaded_file_response(uploaded_file),
+        preview=EventLogPreviewResponse(**preview),
     )
 
 

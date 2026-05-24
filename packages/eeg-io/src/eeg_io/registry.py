@@ -206,6 +206,17 @@ class JsonRegistryRepository:
             return None
         return _recording_from_json(_read_json_object(path))
 
+    def save_events_preview(self, dataset_id: str, preview: JsonObject) -> JsonObject:
+        self.save_dataset_files_directory(dataset_id)
+        _write_json(self.events_preview_path(dataset_id), preview)
+        return preview
+
+    def get_events_preview(self, dataset_id: str) -> JsonObject | None:
+        path = self.events_preview_path(dataset_id)
+        if not path.exists():
+            return None
+        return _read_json_object(path)
+
     def save_dataset_files_directory(self, dataset_id: str) -> None:
         self.dataset_directory(dataset_id).mkdir(parents=True, exist_ok=True)
         self.eeg_directory(dataset_id).mkdir(parents=True, exist_ok=True)
@@ -216,6 +227,9 @@ class JsonRegistryRepository:
 
     def recording_path(self, dataset_id: str) -> Path:
         return self.dataset_directory(dataset_id) / "recording.json"
+
+    def events_preview_path(self, dataset_id: str) -> Path:
+        return self.dataset_directory(dataset_id) / "events_preview.json"
 
 
 def _project_from_json(data: JsonObject) -> Project:

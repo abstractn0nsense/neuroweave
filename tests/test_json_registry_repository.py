@@ -136,3 +136,19 @@ def test_registry_persists_uploaded_files_and_recording(tmp_path):
     assert repository.get_recording(dataset.dataset_id) == recording
     assert repository.uploaded_files_path(dataset.dataset_id).is_file()
     assert repository.recording_path(dataset.dataset_id).is_file()
+
+
+def test_registry_persists_event_preview(tmp_path):
+    repository = JsonRegistryRepository(tmp_path / "uploads")
+    dataset_id = "dataset-001"
+    preview = {
+        "columns": ["onset", "trial_type"],
+        "delimiter": "\t",
+        "preview_rows": [{"onset": "0.5", "trial_type": "target"}],
+        "row_count": 1,
+    }
+
+    repository.save_events_preview(dataset_id, preview)
+
+    assert repository.get_events_preview(dataset_id) == preview
+    assert repository.events_preview_path(dataset_id).is_file()

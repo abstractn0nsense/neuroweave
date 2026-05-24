@@ -42,6 +42,25 @@ GET /datasets/{dataset_id}/events
 GET /datasets/{dataset_id}/metadata
 ```
 
+## Implementation Roadmap
+
+Phase 1 should complete the API ingestion path before building the UI, so the frontend is not coupled to unstable event mapping and validation shapes.
+
+Completed:
+
+1. Domain models for project, experiment, participant, session, dataset, uploaded files, recording, event logs, and validation.
+2. JSON registry storage under `data/raw/uploads`.
+3. Project and experiment API endpoints.
+4. Dataset creation and lookup API endpoints.
+5. EEG upload endpoint with metadata extraction.
+
+Next:
+
+6. Event or behavior log upload with CSV/TSV storage and preview.
+7. Event column mapping and normalized event generation.
+8. Dataset validation API for EEG duration, event timing, missing fields, and readiness state.
+9. UI ingest flow after the API can complete `EEG + event log + validation`.
+
 ## Event And Behavior Logs
 
 EEG experiments usually need event timing and behavioral data from PsychoPy, E-Prime, Presentation, Psychtoolbox, or a BIDS-style `events.tsv`.
@@ -137,11 +156,25 @@ data/
             {original_filename}
 ```
 
+Event uploads additionally create:
+
+```text
+data/
+  raw/
+    uploads/
+      datasets/
+        {dataset_id}/
+          events_preview.json
+          events/
+            {original_filename}
+```
+
 ## Completion Criteria
 
 - A dataset can be created through the API.
 - Dataset creation verifies the selected project and experiment before storing participant/session metadata.
 - EEG file upload stores the original file and extracts metadata.
-- Event log upload stores the original file and returns a normalized event preview.
+- Event log upload stores the original file and returns a CSV/TSV header and row preview.
+- Event column mapping turns the preview into normalized events.
 - Validation reports `valid`, `warnings`, and `errors`.
 - The web UI shows dataset readiness before preprocessing.
