@@ -57,10 +57,11 @@ Completed:
 6. Event or behavior log upload with CSV/TSV storage and preview.
 7. Event column mapping and normalized event generation.
 8. Dataset validation API for EEG duration, event timing, missing fields, and readiness state.
+9. UI ingest flow after the API can complete `EEG + event log + validation`.
 
 Next:
 
-9. UI ingest flow after the API can complete `EEG + event log + validation`.
+10. Preprocessing handoff: create a validated-dataset entrypoint for filtering, epoching, and downstream analysis jobs.
 
 ## Event And Behavior Logs
 
@@ -192,3 +193,4 @@ Validation is computed from the dataset metadata, `recording.json`, and `event_l
 - Event column mapping turns the preview into normalized events.
 - Validation reports `valid`, `warnings`, and `errors`.
 - The web UI shows dataset readiness before preprocessing.
+- The web UI supports project/experiment selection before participant/session dataset creation.

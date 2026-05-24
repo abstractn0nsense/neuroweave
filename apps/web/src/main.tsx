@@ -31,8 +31,135 @@ type DatasetMetadata = {
   channel_names: string[];
 };
 
+type Project = {
+  project_id: string;
+  name: string;
+  description: string | null;
+  metadata: Record<string, MetadataValue>;
+};
+
+type ProjectsResponse = {
+  projects: Project[];
+};
+
+type Experiment = {
+  experiment_id: string;
+  project_id: string;
+  name: string;
+  task_name: string | null;
+  default_event_mapping: EventColumnMapping;
+  metadata: Record<string, MetadataValue>;
+};
+
+type ExperimentsResponse = {
+  experiments: Experiment[];
+};
+
+type Dataset = {
+  dataset_id: string;
+  project_id: string;
+  experiment_id: string;
+  participant_id: string;
+  session_id: string;
+  status: string;
+  recording_id: string | null;
+  event_log_id: string | null;
+  metadata: Record<string, MetadataValue>;
+};
+
+type DatasetsResponse = {
+  datasets: Dataset[];
+};
+
+type EventColumnMapping = {
+  onset_seconds: string | null;
+  duration_seconds: string | null;
+  trial_type: string | null;
+  stimulus: string | null;
+  response: string | null;
+  correct: string | null;
+  reaction_time_seconds: string | null;
+};
+
+type EventPreview = {
+  columns: string[];
+  delimiter: string;
+  preview_rows: Record<string, string | null>[];
+  row_count: number;
+};
+
+type EventUploadResponse = {
+  dataset: Dataset;
+  preview: EventPreview;
+};
+
+type NormalizedEvent = {
+  onset_seconds: number;
+  source_row: number;
+  duration_seconds: number | null;
+  trial_type: string | null;
+  stimulus: string | null;
+  response: string | null;
+  correct: boolean | null;
+  reaction_time_seconds: number | null;
+};
+
+type EventLogResponse = {
+  event_log_id: string;
+  dataset_id: string;
+  file_id: string;
+  mapping: EventColumnMapping;
+  row_count: number;
+  events: NormalizedEvent[];
+};
+
+type ValidationIssue = {
+  severity: "error" | "warning";
+  code: string;
+  message: string;
+  field: string | null;
+};
+
+type ValidationReport = {
+  dataset_id: string;
+  status: string;
+  valid: boolean;
+  errors: ValidationIssue[];
+  warnings: ValidationIssue[];
+  issues: ValidationIssue[];
+};
+
+type MetadataValue = string | number | boolean | null;
+
+type NoticeState = {
+  tone: "ok" | "error" | "neutral";
+  message: string;
+} | null;
+
+type MappingKey = keyof EventColumnMapping;
+
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
+
+const MAPPING_FIELDS: { key: MappingKey; label: string; required?: boolean }[] = [
+  { key: "onset_seconds", label: "Onset", required: true },
+  { key: "duration_seconds", label: "Duration" },
+  { key: "trial_type", label: "Trial Type" },
+  { key: "stimulus", label: "Stimulus" },
+  { key: "response", label: "Response" },
+  { key: "correct", label: "Correct" },
+  { key: "reaction_time_seconds", label: "RT" },
+];
+
+const EMPTY_MAPPING: Record<MappingKey, string> = {
+  onset_seconds: "",
+  duration_seconds: "",
+  trial_type: "",
+  stimulus: "",
+  response: "",
+  correct: "",
+  reaction_time_seconds: "",
+};
 
 function App() {
   const [health, setHealth] = useState<LoadState<HealthResponse>>({
@@ -45,21 +172,119 @@ function App() {
     data: null,
     error: null,
   });
+  const [projects, setProjects] = useState<LoadState<Project[]>>({
+    status: "idle",
+    data: null,
+    error: null,
+  });
+  const [experiments, setExperiments] = useState<LoadState<Experiment[]>>({
+    status: "idle",
+    data: null,
+    error: null,
+  });
+  const [datasets, setDatasets] = useState<LoadState<Dataset[]>>({
+    status: "idle",
+    data: null,
+    error: null,
+  });
+  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [selectedExperimentId, setSelectedExperimentId] = useState("");
+  const [activeDatasetId, setActiveDatasetId] = useState("");
   const [selectedSampleId, setSelectedSampleId] = useState<string | null>(null);
   const [metadata, setMetadata] = useState<LoadState<DatasetMetadata>>({
     status: "idle",
     data: null,
     error: null,
   });
+  const [projectForm, setProjectForm] = useState({
+    name: "Memory EEG",
+    description: "",
+  });
+  const [experimentForm, setExperimentForm] = useState({
+    name: "Oddball task",
+    task_name: "",
+  });
+  const [datasetForm, setDatasetForm] = useState({
+    participant_label: "sub-001",
+    participant_group: "",
+    session_label: "ses-001",
+  });
+  const [eegFile, setEegFile] = useState<File | null>(null);
+  const [eventFile, setEventFile] = useState<File | null>(null);
+  const [eventPreview, setEventPreview] = useState<EventPreview | null>(null);
+  const [mapping, setMapping] = useState<Record<MappingKey, string>>(EMPTY_MAPPING);
+  const [eventLog, setEventLog] = useState<EventLogResponse | null>(null);
+  const [validation, setValidation] = useState<ValidationReport | null>(null);
+  const [notice, setNotice] = useState<NoticeState>(null);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
 
+  const selectedProject = useMemo(
+    () =>
+      projects.data?.find((project) => project.project_id === selectedProjectId) ??
+      null,
+    [projects.data, selectedProjectId],
+  );
+  const selectedExperiment = useMemo(
+    () =>
+      experiments.data?.find(
+        (experiment) => experiment.experiment_id === selectedExperimentId,
+      ) ?? null,
+    [experiments.data, selectedExperimentId],
+  );
+  const activeDataset = useMemo(
+    () =>
+      datasets.data?.find((dataset) => dataset.dataset_id === activeDatasetId) ??
+      null,
+    [datasets.data, activeDatasetId],
+  );
   const selectedSample = useMemo(
     () => samples.data?.find((sample) => sample.id === selectedSampleId) ?? null,
     [samples.data, selectedSampleId],
   );
 
   useEffect(() => {
-    void refresh();
+    void refreshWorkspace();
   }, []);
+
+  useEffect(() => {
+    if (!selectedProjectId) {
+      setExperiments({ status: "success", data: [], error: null });
+      setSelectedExperimentId("");
+      return;
+    }
+
+    let isCurrent = true;
+    setExperiments({ status: "loading", data: null, error: null });
+    fetchJson<ExperimentsResponse>(
+      `/projects/${encodeURIComponent(selectedProjectId)}/experiments`,
+    )
+      .then((data) => {
+        if (!isCurrent) {
+          return;
+        }
+        setExperiments({ status: "success", data: data.experiments, error: null });
+        setSelectedExperimentId((current) =>
+          data.experiments.some(
+            (experiment) => experiment.experiment_id === current,
+          )
+            ? current
+            : data.experiments[0]?.experiment_id ?? "",
+        );
+      })
+      .catch((error: unknown) => {
+        if (isCurrent) {
+          setExperiments({
+            status: "error",
+            data: null,
+            error: getErrorMessage(error),
+          });
+        }
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [selectedProjectId]);
 
   useEffect(() => {
     if (!selectedSampleId) {
@@ -71,7 +296,7 @@ function App() {
     setMetadata({ status: "loading", data: null, error: null });
 
     fetchJson<DatasetMetadata>(
-      `${API_BASE_URL}/datasets/samples/${selectedSampleId}/metadata`,
+      `/datasets/samples/${encodeURIComponent(selectedSampleId)}/metadata`,
     )
       .then((data) => {
         if (isCurrent) {
@@ -93,15 +318,20 @@ function App() {
     };
   }, [selectedSampleId]);
 
-  async function refresh() {
+  async function refreshWorkspace() {
+    setNotice(null);
     setHealth({ status: "loading", data: null, error: null });
     setSamples({ status: "loading", data: null, error: null });
-    setSelectedSampleId(null);
+    setProjects({ status: "loading", data: null, error: null });
+    setDatasets({ status: "loading", data: null, error: null });
 
-    const [healthResult, samplesResult] = await Promise.allSettled([
-      fetchJson<HealthResponse>(`${API_BASE_URL}/health`),
-      fetchJson<SampleDatasetsResponse>(`${API_BASE_URL}/datasets/samples`),
-    ]);
+    const [healthResult, samplesResult, projectsResult, datasetsResult] =
+      await Promise.allSettled([
+        fetchJson<HealthResponse>("/health"),
+        fetchJson<SampleDatasetsResponse>("/datasets/samples"),
+        fetchJson<ProjectsResponse>("/projects"),
+        fetchJson<DatasetsResponse>("/datasets"),
+      ]);
 
     if (healthResult.status === "fulfilled") {
       setHealth({ status: "success", data: healthResult.value, error: null });
@@ -119,7 +349,11 @@ function App() {
         data: samplesResult.value.samples,
         error: null,
       });
-      setSelectedSampleId(samplesResult.value.samples[0]?.id ?? null);
+      setSelectedSampleId((current) =>
+        current ??
+        samplesResult.value.samples[0]?.id ??
+        null,
+      );
     } else {
       setSamples({
         status: "error",
@@ -127,7 +361,258 @@ function App() {
         error: getErrorMessage(samplesResult.reason),
       });
     }
+
+    if (projectsResult.status === "fulfilled") {
+      const projectData = projectsResult.value.projects;
+      setProjects({ status: "success", data: projectData, error: null });
+      setSelectedProjectId((current) =>
+        projectData.some((project) => project.project_id === current)
+          ? current
+          : projectData[0]?.project_id ?? "",
+      );
+    } else {
+      setProjects({
+        status: "error",
+        data: null,
+        error: getErrorMessage(projectsResult.reason),
+      });
+    }
+
+    if (datasetsResult.status === "fulfilled") {
+      const datasetData = datasetsResult.value.datasets;
+      setDatasets({ status: "success", data: datasetData, error: null });
+      setActiveDatasetId((current) =>
+        datasetData.some((dataset) => dataset.dataset_id === current)
+          ? current
+          : datasetData[0]?.dataset_id ?? "",
+      );
+    } else {
+      setDatasets({
+        status: "error",
+        data: null,
+        error: getErrorMessage(datasetsResult.reason),
+      });
+    }
   }
+
+  async function createProject(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!projectForm.name.trim()) {
+      setNotice({ tone: "error", message: "Project name is required." });
+      return;
+    }
+
+    await runAction("project", async () => {
+      const project = await postJson<Project>("/projects", {
+        name: projectForm.name.trim(),
+        description: projectForm.description.trim() || null,
+      });
+      setProjectForm({ name: "", description: "" });
+      setSelectedProjectId(project.project_id);
+      await refreshProjects();
+      setNotice({ tone: "ok", message: "Project created." });
+    });
+  }
+
+  async function createExperiment(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedProjectId) {
+      setNotice({ tone: "error", message: "Select a project first." });
+      return;
+    }
+    if (!experimentForm.name.trim()) {
+      setNotice({ tone: "error", message: "Experiment name is required." });
+      return;
+    }
+
+    await runAction("experiment", async () => {
+      const experiment = await postJson<Experiment>(
+        `/projects/${encodeURIComponent(selectedProjectId)}/experiments`,
+        {
+          name: experimentForm.name.trim(),
+          task_name: experimentForm.task_name.trim() || null,
+        },
+      );
+      setExperimentForm({ name: "", task_name: "" });
+      setSelectedExperimentId(experiment.experiment_id);
+      await refreshExperiments(selectedProjectId);
+      setNotice({ tone: "ok", message: "Experiment created." });
+    });
+  }
+
+  async function createDataset(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedProjectId || !selectedExperimentId) {
+      setNotice({ tone: "error", message: "Select project and experiment first." });
+      return;
+    }
+    if (!datasetForm.participant_label.trim() || !datasetForm.session_label.trim()) {
+      setNotice({
+        tone: "error",
+        message: "Participant and session labels are required.",
+      });
+      return;
+    }
+
+    await runAction("dataset", async () => {
+      const dataset = await postJson<Dataset>("/datasets", {
+        project_id: selectedProjectId,
+        experiment_id: selectedExperimentId,
+        participant_label: datasetForm.participant_label.trim(),
+        participant_group: datasetForm.participant_group.trim() || null,
+        session_label: datasetForm.session_label.trim(),
+      });
+      setActiveDatasetId(dataset.dataset_id);
+      setEventPreview(null);
+      setEventLog(null);
+      setValidation(null);
+      await refreshDatasets();
+      setNotice({ tone: "ok", message: "Dataset created." });
+    });
+  }
+
+  async function uploadEegFile() {
+    if (!activeDatasetId || !eegFile) {
+      setNotice({ tone: "error", message: "Select a dataset and EEG file." });
+      return;
+    }
+
+    await runAction("eeg-upload", async () => {
+      const formData = new FormData();
+      formData.append("file", eegFile);
+      const response = await requestJson<{ dataset: Dataset }>(
+        `/datasets/${encodeURIComponent(activeDatasetId)}/files/eeg`,
+        {
+          method: "POST",
+          body: formData,
+        },
+      );
+      setEegFile(null);
+      updateDatasetInState(response.dataset);
+      setValidation(null);
+      setNotice({ tone: "ok", message: "EEG file uploaded." });
+    });
+  }
+
+  async function uploadEventFile() {
+    if (!activeDatasetId || !eventFile) {
+      setNotice({ tone: "error", message: "Select a dataset and event file." });
+      return;
+    }
+
+    await runAction("event-upload", async () => {
+      const formData = new FormData();
+      formData.append("file", eventFile);
+      const response = await requestJson<EventUploadResponse>(
+        `/datasets/${encodeURIComponent(activeDatasetId)}/files/events`,
+        {
+          method: "POST",
+          body: formData,
+        },
+      );
+      setEventFile(null);
+      setEventPreview(response.preview);
+      setEventLog(null);
+      setValidation(null);
+      setMapping(
+        getInitialMapping(
+          response.preview.columns,
+          selectedExperiment?.default_event_mapping ?? null,
+        ),
+      );
+      updateDatasetInState(response.dataset);
+      setNotice({ tone: "ok", message: "Event log uploaded." });
+    });
+  }
+
+  async function submitEventMapping() {
+    if (!activeDatasetId) {
+      setNotice({ tone: "error", message: "Select a dataset first." });
+      return;
+    }
+    if (!mapping.onset_seconds) {
+      setNotice({ tone: "error", message: "Map an onset column first." });
+      return;
+    }
+
+    await runAction("event-mapping", async () => {
+      const eventLogResponse = await postJson<EventLogResponse>(
+        `/datasets/${encodeURIComponent(activeDatasetId)}/events/mapping`,
+        {
+          mapping: normalizeMappingPayload(mapping),
+        },
+      );
+      setEventLog(eventLogResponse);
+      setValidation(null);
+      setNotice({ tone: "ok", message: "Event mapping saved." });
+    });
+  }
+
+  async function validateDataset() {
+    if (!activeDatasetId) {
+      setNotice({ tone: "error", message: "Select a dataset first." });
+      return;
+    }
+
+    await runAction("validation", async () => {
+      const report = await fetchJson<ValidationReport>(
+        `/datasets/${encodeURIComponent(activeDatasetId)}/validation`,
+      );
+      setValidation(report);
+      updateDatasetInState({
+        ...(activeDataset as Dataset),
+        status: report.status,
+      });
+      await refreshDatasets();
+      setNotice({
+        tone: report.valid ? "ok" : "error",
+        message: report.valid ? "Dataset is valid." : "Dataset has blocking errors.",
+      });
+    });
+  }
+
+  async function runAction(action: string, callback: () => Promise<void>) {
+    setBusyAction(action);
+    setNotice(null);
+    try {
+      await callback();
+    } catch (error: unknown) {
+      setNotice({ tone: "error", message: getErrorMessage(error) });
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function refreshProjects() {
+    const response = await fetchJson<ProjectsResponse>("/projects");
+    setProjects({ status: "success", data: response.projects, error: null });
+  }
+
+  async function refreshExperiments(projectId: string) {
+    const response = await fetchJson<ExperimentsResponse>(
+      `/projects/${encodeURIComponent(projectId)}/experiments`,
+    );
+    setExperiments({ status: "success", data: response.experiments, error: null });
+  }
+
+  async function refreshDatasets() {
+    const response = await fetchJson<DatasetsResponse>("/datasets");
+    setDatasets({ status: "success", data: response.datasets, error: null });
+  }
+
+  function updateDatasetInState(dataset: Dataset) {
+    setDatasets((current) => {
+      const data = current.data ?? [];
+      const nextData = data.some((item) => item.dataset_id === dataset.dataset_id)
+        ? data.map((item) =>
+            item.dataset_id === dataset.dataset_id ? dataset : item,
+          )
+        : [dataset, ...data];
+      return { status: "success", data: nextData, error: null };
+    });
+  }
+
+  const activeDatasetCount = datasets.data?.length ?? 0;
 
   return (
     <main className="shell">
@@ -135,9 +620,9 @@ function App() {
         <header className="workspace-header">
           <div>
             <p className="eyebrow">NeuroWeave</p>
-            <h1 id="workspace-title">EEG sample workspace</h1>
+            <h1 id="workspace-title">EEG ingestion workspace</h1>
           </div>
-          <button className="primary-button" type="button" onClick={refresh}>
+          <button className="primary-button" type="button" onClick={refreshWorkspace}>
             Refresh
           </button>
         </header>
@@ -149,41 +634,590 @@ function App() {
             tone={health.status === "success" ? "ok" : health.status}
           />
           <StatusTile
-            label="Samples"
-            value={getSampleCountLabel(samples)}
-            tone={samples.status === "success" ? "ok" : samples.status}
+            label="Projects"
+            value={getProjectCountLabel(projects)}
+            tone={projects.status === "success" ? "ok" : projects.status}
           />
           <StatusTile
-            label="API URL"
-            value={API_BASE_URL}
-            tone="neutral"
+            label="Datasets"
+            value={`${activeDatasetCount} registered`}
+            tone={datasets.status === "success" ? "ok" : datasets.status}
           />
+          <StatusTile label="API URL" value={API_BASE_URL} tone="neutral" />
         </div>
 
-        <div className="content-grid">
-          <section className="panel" aria-labelledby="sample-list-title">
-            <div className="panel-header">
-              <h2 id="sample-list-title">Sample Datasets</h2>
-            </div>
-            <SampleList
-              samples={samples}
-              selectedSampleId={selectedSampleId}
-              onSelect={setSelectedSampleId}
-            />
-          </section>
+        {notice ? (
+          <div className={`notice notice-${notice.tone}`}>{notice.message}</div>
+        ) : null}
 
-          <section className="panel" aria-labelledby="metadata-title">
+        <div className="ingest-grid">
+          <aside className="panel setup-panel" aria-labelledby="setup-title">
             <div className="panel-header">
-              <h2 id="metadata-title">Metadata</h2>
-              {selectedSample ? (
-                <span className="file-pill">{selectedSample.filename}</span>
-              ) : null}
+              <h2 id="setup-title">Study Setup</h2>
             </div>
-            <MetadataView metadata={metadata} selectedSample={selectedSample} />
+            <StudySetup
+              busyAction={busyAction}
+              experimentForm={experimentForm}
+              experiments={experiments}
+              onCreateExperiment={createExperiment}
+              onCreateProject={createProject}
+              onExperimentFormChange={setExperimentForm}
+              onProjectFormChange={setProjectForm}
+              onSelectExperiment={setSelectedExperimentId}
+              onSelectProject={setSelectedProjectId}
+              projectForm={projectForm}
+              projects={projects}
+              selectedExperimentId={selectedExperimentId}
+              selectedProjectId={selectedProjectId}
+            />
+          </aside>
+
+          <section className="workflow-stack">
+            <section className="panel" aria-labelledby="datasets-title">
+              <div className="panel-header">
+                <div>
+                  <h2 id="datasets-title">Datasets</h2>
+                  {selectedProject ? (
+                    <p className="subtle">
+                      {selectedProject.name}
+                      {selectedExperiment ? ` / ${selectedExperiment.name}` : ""}
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+              <DatasetSection
+                activeDatasetId={activeDatasetId}
+                busyAction={busyAction}
+                datasetForm={datasetForm}
+                datasets={datasets}
+                onCreateDataset={createDataset}
+                onDatasetFormChange={setDatasetForm}
+                onSelectDataset={(datasetId) => {
+                  setActiveDatasetId(datasetId);
+                  setEventPreview(null);
+                  setEventLog(null);
+                  setValidation(null);
+                }}
+                selectedExperimentId={selectedExperimentId}
+                selectedProjectId={selectedProjectId}
+              />
+            </section>
+
+            <section className="panel" aria-labelledby="intake-title">
+              <div className="panel-header">
+                <div>
+                  <h2 id="intake-title">Dataset Intake</h2>
+                  <p className="subtle">
+                    {activeDataset
+                      ? `${activeDataset.dataset_id} / ${activeDataset.status}`
+                      : "Create or select a dataset"}
+                  </p>
+                </div>
+                {activeDataset ? (
+                  <span className={`status-badge badge-${activeDataset.status}`}>
+                    {activeDataset.status}
+                  </span>
+                ) : null}
+              </div>
+              <IntakeSection
+                activeDataset={activeDataset}
+                busyAction={busyAction}
+                eegFile={eegFile}
+                eventFile={eventFile}
+                eventLog={eventLog}
+                eventPreview={eventPreview}
+                mapping={mapping}
+                onEegFileChange={setEegFile}
+                onEventFileChange={setEventFile}
+                onMappingChange={setMapping}
+                onSubmitEventMapping={submitEventMapping}
+                onUploadEeg={uploadEegFile}
+                onUploadEvent={uploadEventFile}
+                onValidate={validateDataset}
+                validation={validation}
+              />
+            </section>
+
+            <section className="panel" aria-labelledby="sample-list-title">
+              <div className="panel-header">
+                <h2 id="sample-list-title">Sample Metadata</h2>
+                {selectedSample ? (
+                  <span className="file-pill">{selectedSample.filename}</span>
+                ) : null}
+              </div>
+              <div className="sample-grid">
+                <SampleList
+                  onSelect={setSelectedSampleId}
+                  samples={samples}
+                  selectedSampleId={selectedSampleId}
+                />
+                <MetadataView metadata={metadata} selectedSample={selectedSample} />
+              </div>
+            </section>
           </section>
         </div>
       </section>
     </main>
+  );
+}
+
+function StudySetup({
+  busyAction,
+  experimentForm,
+  experiments,
+  onCreateExperiment,
+  onCreateProject,
+  onExperimentFormChange,
+  onProjectFormChange,
+  onSelectExperiment,
+  onSelectProject,
+  projectForm,
+  projects,
+  selectedExperimentId,
+  selectedProjectId,
+}: {
+  busyAction: string | null;
+  experimentForm: { name: string; task_name: string };
+  experiments: LoadState<Experiment[]>;
+  onCreateExperiment: (event: React.FormEvent<HTMLFormElement>) => void;
+  onCreateProject: (event: React.FormEvent<HTMLFormElement>) => void;
+  onExperimentFormChange: (form: { name: string; task_name: string }) => void;
+  onProjectFormChange: (form: { name: string; description: string }) => void;
+  onSelectExperiment: (experimentId: string) => void;
+  onSelectProject: (projectId: string) => void;
+  projectForm: { name: string; description: string };
+  projects: LoadState<Project[]>;
+  selectedExperimentId: string;
+  selectedProjectId: string;
+}) {
+  return (
+    <div className="setup-stack">
+      <form className="form-stack" onSubmit={onCreateProject}>
+        <h3>Project</h3>
+        <label>
+          <span>Name</span>
+          <input
+            onChange={(event) =>
+              onProjectFormChange({ ...projectForm, name: event.target.value })
+            }
+            placeholder="Memory EEG"
+            type="text"
+            value={projectForm.name}
+          />
+        </label>
+        <label>
+          <span>Description</span>
+          <textarea
+            onChange={(event) =>
+              onProjectFormChange({
+                ...projectForm,
+                description: event.target.value,
+              })
+            }
+            placeholder="Optional"
+            rows={2}
+            value={projectForm.description}
+          />
+        </label>
+        <button
+          className="secondary-button"
+          disabled={busyAction === "project"}
+          type="submit"
+        >
+          Create Project
+        </button>
+      </form>
+
+      <label>
+        <span>Selected Project</span>
+        <select
+          onChange={(event) => onSelectProject(event.target.value)}
+          value={selectedProjectId}
+        >
+          <option value="">Select project</option>
+          {(projects.data ?? []).map((project) => (
+            <option key={project.project_id} value={project.project_id}>
+              {project.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <LoadMessage state={projects} empty="No projects yet." />
+
+      <form className="form-stack divided" onSubmit={onCreateExperiment}>
+        <h3>Experiment</h3>
+        <label>
+          <span>Name</span>
+          <input
+            onChange={(event) =>
+              onExperimentFormChange({
+                ...experimentForm,
+                name: event.target.value,
+              })
+            }
+            placeholder="Oddball task"
+            type="text"
+            value={experimentForm.name}
+          />
+        </label>
+        <label>
+          <span>Task Name</span>
+          <input
+            onChange={(event) =>
+              onExperimentFormChange({
+                ...experimentForm,
+                task_name: event.target.value,
+              })
+            }
+            placeholder="Optional"
+            type="text"
+            value={experimentForm.task_name}
+          />
+        </label>
+        <button
+          className="secondary-button"
+          disabled={busyAction === "experiment" || !selectedProjectId}
+          type="submit"
+        >
+          Create Experiment
+        </button>
+      </form>
+
+      <label>
+        <span>Selected Experiment</span>
+        <select
+          disabled={!selectedProjectId}
+          onChange={(event) => onSelectExperiment(event.target.value)}
+          value={selectedExperimentId}
+        >
+          <option value="">Select experiment</option>
+          {(experiments.data ?? []).map((experiment) => (
+            <option key={experiment.experiment_id} value={experiment.experiment_id}>
+              {experiment.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <LoadMessage state={experiments} empty="No experiments for this project." />
+    </div>
+  );
+}
+
+function DatasetSection({
+  activeDatasetId,
+  busyAction,
+  datasetForm,
+  datasets,
+  onCreateDataset,
+  onDatasetFormChange,
+  onSelectDataset,
+  selectedExperimentId,
+  selectedProjectId,
+}: {
+  activeDatasetId: string;
+  busyAction: string | null;
+  datasetForm: {
+    participant_label: string;
+    participant_group: string;
+    session_label: string;
+  };
+  datasets: LoadState<Dataset[]>;
+  onCreateDataset: (event: React.FormEvent<HTMLFormElement>) => void;
+  onDatasetFormChange: (form: {
+    participant_label: string;
+    participant_group: string;
+    session_label: string;
+  }) => void;
+  onSelectDataset: (datasetId: string) => void;
+  selectedExperimentId: string;
+  selectedProjectId: string;
+}) {
+  const disabled = !selectedProjectId || !selectedExperimentId;
+  const datasetData = datasets.data ?? [];
+
+  return (
+    <div className="dataset-layout">
+      <form className="dataset-form" onSubmit={onCreateDataset}>
+        <label>
+          <span>Participant</span>
+          <input
+            disabled={disabled}
+            onChange={(event) =>
+              onDatasetFormChange({
+                ...datasetForm,
+                participant_label: event.target.value,
+              })
+            }
+            placeholder="sub-001"
+            type="text"
+            value={datasetForm.participant_label}
+          />
+        </label>
+        <label>
+          <span>Group</span>
+          <input
+            disabled={disabled}
+            onChange={(event) =>
+              onDatasetFormChange({
+                ...datasetForm,
+                participant_group: event.target.value,
+              })
+            }
+            placeholder="Optional"
+            type="text"
+            value={datasetForm.participant_group}
+          />
+        </label>
+        <label>
+          <span>Session</span>
+          <input
+            disabled={disabled}
+            onChange={(event) =>
+              onDatasetFormChange({
+                ...datasetForm,
+                session_label: event.target.value,
+              })
+            }
+            placeholder="ses-001"
+            type="text"
+            value={datasetForm.session_label}
+          />
+        </label>
+        <button
+          className="primary-button"
+          disabled={disabled || busyAction === "dataset"}
+          type="submit"
+        >
+          Create Dataset
+        </button>
+      </form>
+
+      <div className="dataset-list" aria-live="polite">
+        {datasets.status === "loading" || datasets.status === "idle" ? (
+          <p className="muted">Loading datasets...</p>
+        ) : null}
+        {datasets.status === "error" ? (
+          <p className="error-text">{datasets.error}</p>
+        ) : null}
+        {datasets.status === "success" && datasetData.length === 0 ? (
+          <p className="muted">No registered datasets yet.</p>
+        ) : null}
+        {datasetData.map((dataset) => (
+          <button
+            className="dataset-row"
+            data-active={dataset.dataset_id === activeDatasetId}
+            key={dataset.dataset_id}
+            onClick={() => onSelectDataset(dataset.dataset_id)}
+            type="button"
+          >
+            <span>
+              <strong>{dataset.metadata.participant_label ?? dataset.dataset_id}</strong>
+              <small>
+                {dataset.metadata.session_label ?? dataset.session_id} /{" "}
+                {dataset.dataset_id}
+              </small>
+            </span>
+            <em>{dataset.status}</em>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function IntakeSection({
+  activeDataset,
+  busyAction,
+  eegFile,
+  eventFile,
+  eventLog,
+  eventPreview,
+  mapping,
+  onEegFileChange,
+  onEventFileChange,
+  onMappingChange,
+  onSubmitEventMapping,
+  onUploadEeg,
+  onUploadEvent,
+  onValidate,
+  validation,
+}: {
+  activeDataset: Dataset | null;
+  busyAction: string | null;
+  eegFile: File | null;
+  eventFile: File | null;
+  eventLog: EventLogResponse | null;
+  eventPreview: EventPreview | null;
+  mapping: Record<MappingKey, string>;
+  onEegFileChange: (file: File | null) => void;
+  onEventFileChange: (file: File | null) => void;
+  onMappingChange: (mapping: Record<MappingKey, string>) => void;
+  onSubmitEventMapping: () => void;
+  onUploadEeg: () => void;
+  onUploadEvent: () => void;
+  onValidate: () => void;
+  validation: ValidationReport | null;
+}) {
+  const disabled = !activeDataset;
+
+  return (
+    <div className="intake-stack">
+      <div className="upload-grid">
+        <div className="upload-group">
+          <h3>EEG Recording</h3>
+          <input
+            disabled={disabled}
+            onChange={(event) => onEegFileChange(event.target.files?.[0] ?? null)}
+            type="file"
+          />
+          <button
+            className="secondary-button"
+            disabled={disabled || !eegFile || busyAction === "eeg-upload"}
+            onClick={onUploadEeg}
+            type="button"
+          >
+            Upload EEG
+          </button>
+        </div>
+        <div className="upload-group">
+          <h3>Event Log</h3>
+          <input
+            accept=".csv,.tsv,text/csv,text/tab-separated-values"
+            disabled={disabled}
+            onChange={(event) => onEventFileChange(event.target.files?.[0] ?? null)}
+            type="file"
+          />
+          <button
+            className="secondary-button"
+            disabled={disabled || !eventFile || busyAction === "event-upload"}
+            onClick={onUploadEvent}
+            type="button"
+          >
+            Upload Events
+          </button>
+        </div>
+      </div>
+
+      {eventPreview ? (
+        <div className="mapping-layout">
+          <div>
+            <h3>Column Mapping</h3>
+            <div className="mapping-grid">
+              {MAPPING_FIELDS.map((field) => (
+                <label key={field.key}>
+                  <span>
+                    {field.label}
+                    {field.required ? " *" : ""}
+                  </span>
+                  <select
+                    onChange={(event) =>
+                      onMappingChange({
+                        ...mapping,
+                        [field.key]: event.target.value,
+                      })
+                    }
+                    value={mapping[field.key]}
+                  >
+                    <option value="">Unmapped</option>
+                    {eventPreview.columns.map((column) => (
+                      <option key={column} value={column}>
+                        {column}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ))}
+            </div>
+            <button
+              className="primary-button"
+              disabled={!mapping.onset_seconds || busyAction === "event-mapping"}
+              onClick={onSubmitEventMapping}
+              type="button"
+            >
+              Save Mapping
+            </button>
+          </div>
+
+          <EventPreviewTable preview={eventPreview} />
+        </div>
+      ) : (
+        <p className="muted">Upload a CSV or TSV event log to preview columns.</p>
+      )}
+
+      <div className="validation-bar">
+        <button
+          className="primary-button"
+          disabled={disabled || busyAction === "validation"}
+          onClick={onValidate}
+          type="button"
+        >
+          Validate Dataset
+        </button>
+        {eventLog ? (
+          <span className="muted">{eventLog.events.length} normalized events</span>
+        ) : (
+          <span className="muted">No mapped event log yet</span>
+        )}
+      </div>
+
+      {validation ? <ValidationPanel report={validation} /> : null}
+    </div>
+  );
+}
+
+function EventPreviewTable({ preview }: { preview: EventPreview }) {
+  const columns = preview.columns.slice(0, 6);
+
+  return (
+    <div className="preview-table-wrap">
+      <div className="preview-summary">
+        <strong>{preview.row_count}</strong>
+        <span>rows / {preview.delimiter === "\t" ? "TSV" : "CSV"}</span>
+      </div>
+      <table className="preview-table">
+        <thead>
+          <tr>
+            {columns.map((column) => (
+              <th key={column}>{column}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {preview.preview_rows.slice(0, 5).map((row, index) => (
+            <tr key={`${index}-${columns.join("-")}`}>
+              {columns.map((column) => (
+                <td key={column}>{row[column] ?? ""}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ValidationPanel({ report }: { report: ValidationReport }) {
+  return (
+    <div className={`validation-panel ${report.valid ? "valid" : "invalid"}`}>
+      <div className="validation-heading">
+        <strong>{report.valid ? "Valid" : "Invalid"}</strong>
+        <span>
+          {report.errors.length} errors / {report.warnings.length} warnings
+        </span>
+      </div>
+      {report.issues.length === 0 ? (
+        <p className="muted">Dataset is ready for preprocessing.</p>
+      ) : (
+        <ul className="issue-list">
+          {report.issues.map((issue) => (
+            <li key={`${issue.severity}-${issue.code}-${issue.field ?? ""}`}>
+              <strong>{issue.code}</strong>
+              <span>{issue.message}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -308,14 +1342,129 @@ function MetadataView({
   );
 }
 
-async function fetchJson<T>(url: string): Promise<T> {
-  const response = await fetch(url);
+function LoadMessage<T>({
+  empty,
+  state,
+}: {
+  empty: string;
+  state: LoadState<T[]>;
+}) {
+  if (state.status === "loading" || state.status === "idle") {
+    return <p className="muted">Loading...</p>;
+  }
+  if (state.status === "error") {
+    return <p className="error-text">{state.error}</p>;
+  }
+  if ((state.data ?? []).length === 0) {
+    return <p className="muted">{empty}</p>;
+  }
+  return null;
+}
+
+async function fetchJson<T>(path: string): Promise<T> {
+  return requestJson<T>(path);
+}
+
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  return requestJson<T>(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, init);
 
   if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
+    const detail = await readErrorDetail(response);
+    throw new Error(detail || `${response.status} ${response.statusText}`);
   }
 
   return response.json() as Promise<T>;
+}
+
+async function readErrorDetail(response: Response): Promise<string> {
+  try {
+    const payload = (await response.json()) as { detail?: unknown };
+    if (typeof payload.detail === "string") {
+      return payload.detail;
+    }
+    if (Array.isArray(payload.detail)) {
+      return payload.detail
+        .map((item) =>
+          typeof item === "object" && item !== null && "msg" in item
+            ? String((item as { msg: unknown }).msg)
+            : String(item),
+        )
+        .join(", ");
+    }
+  } catch {
+    return "";
+  }
+  return "";
+}
+
+function getInitialMapping(
+  columns: string[],
+  defaultMapping: EventColumnMapping | null,
+): Record<MappingKey, string> {
+  const guessed = guessMapping(columns);
+  if (!defaultMapping) {
+    return guessed;
+  }
+
+  return MAPPING_FIELDS.reduce<Record<MappingKey, string>>((next, field) => {
+    const defaultColumn = defaultMapping[field.key];
+    next[field.key] =
+      defaultColumn && columns.includes(defaultColumn)
+        ? defaultColumn
+        : guessed[field.key];
+    return next;
+  }, { ...EMPTY_MAPPING });
+}
+
+function guessMapping(columns: string[]): Record<MappingKey, string> {
+  return {
+    onset_seconds: findColumn(columns, ["onset", "stim_onset", "time", "timestamp"]),
+    duration_seconds: findColumn(columns, ["duration", "stim_duration"]),
+    trial_type: findColumn(columns, ["trial_type", "condition", "trial"]),
+    stimulus: findColumn(columns, ["stimulus", "stimulus_file", "stim"]),
+    response: findColumn(columns, ["response", "key_resp.keys", "key"]),
+    correct: findColumn(columns, ["correct", "key_resp.corr", "accuracy"]),
+    reaction_time_seconds: findColumn(columns, ["rt", "key_resp.rt", "reaction_time"]),
+  };
+}
+
+function findColumn(columns: string[], candidates: string[]): string {
+  const normalized = new Map(
+    columns.map((column) => [column.trim().toLowerCase(), column]),
+  );
+  for (const candidate of candidates) {
+    const match = normalized.get(candidate.toLowerCase());
+    if (match) {
+      return match;
+    }
+  }
+  return "";
+}
+
+function normalizeMappingPayload(mapping: Record<MappingKey, string>): EventColumnMapping {
+  return MAPPING_FIELDS.reduce<EventColumnMapping>(
+    (payload, field) => ({
+      ...payload,
+      [field.key]: mapping[field.key] || null,
+    }),
+    {
+      onset_seconds: null,
+      duration_seconds: null,
+      trial_type: null,
+      stimulus: null,
+      response: null,
+      correct: null,
+      reaction_time_seconds: null,
+    },
+  );
 }
 
 function getErrorMessage(error: unknown): string {
@@ -334,12 +1483,12 @@ function getHealthLabel(health: LoadState<HealthResponse>): string {
   return "Checking";
 }
 
-function getSampleCountLabel(samples: LoadState<SampleDataset[]>): string {
-  if (samples.status === "success") {
-    return `${samples.data.length} found`;
+function getProjectCountLabel(projects: LoadState<Project[]>): string {
+  if (projects.status === "success") {
+    return `${projects.data.length} registered`;
   }
 
-  if (samples.status === "error") {
+  if (projects.status === "error") {
     return "Unavailable";
   }
 
