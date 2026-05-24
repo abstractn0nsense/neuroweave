@@ -160,3 +160,14 @@ Implemented cancellation:
 - background execution converts `cancelling` runs to `cancelled` at the next completion checkpoint
 - cancellation warnings are persisted on the run
 - the web UI shows Cancel buttons for `pending` and `running` runs
+
+## Phase 2.9: Merge Readiness And Final Review
+
+Implemented readiness work:
+
+- local Python test suite passes
+- local web build passes
+- GitHub CI passes on the Phase 2 PR branch
+- the Phase 2 PR is mergeable against `main`
+- final review notes are recorded in `docs/phase-2-final-review.md`
+- the PR is ready to move out of draft once the final review commit is uploaded
