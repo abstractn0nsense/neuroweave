@@ -243,6 +243,8 @@ Add a browser smoke only if frontend files were changed during the stability wor
 Purpose: define durable API, storage, and artifact contracts before adding MNE
 execution.
 
+Status: implemented for domain models and JSON run persistence.
+
 Implementation steps:
 
 1. Add domain models in `packages/eeg-core/src/eeg_core/domain/ingestion.py`.
@@ -278,6 +280,8 @@ Implementation steps:
    - Keep run metadata in `data/runs/{run_id}/run.json`, matching
      preprocessing.
    - Keep binary epoch output in `data/epochs/{dataset_id}/{run_id}/`.
+   - Use `run_kind` to keep preprocessing and epoch listings separate even though
+     the state files share the same run root.
 
 4. Use stable artifact names from the start.
    - `epochs.fif`

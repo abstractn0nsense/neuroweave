@@ -43,6 +43,15 @@ class PreprocessingRunStatus(StrEnum):
     FAILED = "failed"
 
 
+class EpochRunStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    CANCELLING = "cancelling"
+    CANCELLED = "cancelled"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 @dataclass(frozen=True)
 class EventColumnMapping:
     onset_seconds: str | None = None
@@ -194,6 +203,17 @@ class PreprocessingConfig:
 
 
 @dataclass(frozen=True)
+class EpochConfig:
+    preprocessing_run_id: str
+    condition_field: str
+    tmin_seconds: float
+    tmax_seconds: float
+    baseline_start_seconds: float | None = None
+    baseline_end_seconds: float | None = None
+    reject_eeg_uv: float | None = None
+
+
+@dataclass(frozen=True)
 class PreprocessingRun:
     run_id: str
     dataset_id: str
@@ -201,6 +221,23 @@ class PreprocessingRun:
     run_kind: RunKind = RunKind.PREPROCESSING
     schema_version: int = 1
     status: PreprocessingRunStatus = PreprocessingRunStatus.PENDING
+    started_at_utc: str | None = None
+    finished_at_utc: str | None = None
+    cancel_requested_at_utc: str | None = None
+    output_path: str | None = None
+    output_metadata: Metadata = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class EpochRun:
+    run_id: str
+    dataset_id: str
+    config: EpochConfig
+    run_kind: RunKind = RunKind.EPOCH
+    schema_version: int = 1
+    status: EpochRunStatus = EpochRunStatus.PENDING
     started_at_utc: str | None = None
     finished_at_utc: str | None = None
     cancel_requested_at_utc: str | None = None

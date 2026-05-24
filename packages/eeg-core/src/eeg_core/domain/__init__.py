@@ -1,6 +1,9 @@
 from eeg_core.domain.ingestion import (
     Dataset,
     DatasetStatus,
+    EpochConfig,
+    EpochRun,
+    EpochRunStatus,
     EventColumnMapping,
     EventLog,
     Experiment,
@@ -25,6 +28,9 @@ from eeg_core.domain.validation import validate_ingestion_dataset
 __all__ = [
     "Dataset",
     "DatasetStatus",
+    "EpochConfig",
+    "EpochRun",
+    "EpochRunStatus",
     "EventColumnMapping",
     "EventLog",
     "Experiment",

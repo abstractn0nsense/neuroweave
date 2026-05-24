@@ -3,6 +3,9 @@ from dataclasses import asdict
 from eeg_core.domain import (
     Dataset,
     DatasetStatus,
+    EpochConfig,
+    EpochRun,
+    EpochRunStatus,
     EventColumnMapping,
     Experiment,
     NormalizedEvent,
@@ -58,6 +61,31 @@ def test_domain_models_are_plain_serializable_dataclasses():
     assert asdict(dataset)["status"] == DatasetStatus.NEEDS_FILES
     assert asdict(event)["onset_seconds"] == 1.5
     assert asdict(event)["correct"] is True
+
+
+def test_epoch_run_contract_defaults_to_pending_epoch_run():
+    run = EpochRun(
+        run_id="epoch-001",
+        dataset_id="dataset-001",
+        config=EpochConfig(
+            preprocessing_run_id="preprocess-001",
+            condition_field="trial_type",
+            tmin_seconds=-0.2,
+            tmax_seconds=0.8,
+            baseline_start_seconds=-0.2,
+            baseline_end_seconds=0.0,
+            reject_eeg_uv=150.0,
+        ),
+        output_path="data/epochs/dataset-001/epoch-001/epochs.fif",
+    )
+
+    payload = asdict(run)
+
+    assert run.status == EpochRunStatus.PENDING
+    assert payload["run_kind"] == "epoch"
+    assert payload["schema_version"] == 1
+    assert payload["config"]["preprocessing_run_id"] == "preprocess-001"
+    assert payload["config"]["condition_field"] == "trial_type"
 
 
 def test_validation_report_exposes_errors_and_warnings():

@@ -4,6 +4,9 @@ import json
 from eeg_core.domain import (
     Dataset,
     DatasetStatus,
+    EpochConfig,
+    EpochRun,
+    EpochRunStatus,
     EventColumnMapping,
     EventLog,
     Experiment,
@@ -271,6 +274,79 @@ def test_run_repository_persists_preprocessing_runs(tmp_path):
     )
     assert stored["run_kind"] == RunKind.PREPROCESSING
     assert stored["schema_version"] == 1
+
+
+def test_run_repository_persists_epoch_runs(tmp_path):
+    repository = JsonRunRepository(tmp_path / "runs")
+    run = EpochRun(
+        run_id="epoch-001",
+        dataset_id="dataset-001",
+        config=EpochConfig(
+            preprocessing_run_id="preprocess-001",
+            condition_field="trial_type",
+            tmin_seconds=-0.2,
+            tmax_seconds=0.8,
+            baseline_start_seconds=-0.2,
+            baseline_end_seconds=0.0,
+            reject_eeg_uv=150.0,
+        ),
+        status=EpochRunStatus.COMPLETED,
+        started_at_utc="2026-05-25T00:00:00+00:00",
+        finished_at_utc="2026-05-25T00:01:00+00:00",
+        cancel_requested_at_utc="2026-05-25T00:00:30+00:00",
+        output_path="data/epochs/dataset-001/epoch-001/epochs.fif",
+        output_metadata={
+            "artifact_root": "data/epochs/dataset-001/epoch-001",
+            "condition_count": 2,
+        },
+        warnings=["some events were skipped"],
+    )
+
+    repository.save_epoch_run(run)
+
+    assert repository.get_epoch_run("epoch-001") == run
+    assert repository.list_epoch_runs(dataset_id="dataset-001") == [run]
+    assert repository.list_preprocessing_runs(dataset_id="dataset-001") == []
+    assert repository.epoch_run_path("epoch-001").is_file()
+
+    stored = json.loads(
+        repository.epoch_run_path("epoch-001").read_text(encoding="utf-8")
+    )
+    assert stored["run_kind"] == RunKind.EPOCH
+    assert stored["schema_version"] == 1
+    assert stored["config"]["preprocessing_run_id"] == "preprocess-001"
+    assert stored["config"]["condition_field"] == "trial_type"
+
+
+def test_run_repository_lists_epoch_runs_by_dataset(tmp_path):
+    repository = JsonRunRepository(tmp_path / "runs")
+    first = EpochRun(
+        run_id="epoch-001",
+        dataset_id="dataset-001",
+        config=EpochConfig(
+            preprocessing_run_id="preprocess-001",
+            condition_field="trial_type",
+            tmin_seconds=-0.2,
+            tmax_seconds=0.8,
+        ),
+    )
+    second = EpochRun(
+        run_id="epoch-002",
+        dataset_id="dataset-002",
+        config=EpochConfig(
+            preprocessing_run_id="preprocess-002",
+            condition_field="stimulus",
+            tmin_seconds=-0.1,
+            tmax_seconds=0.5,
+        ),
+    )
+
+    repository.save_epoch_run(second)
+    repository.save_epoch_run(first)
+
+    assert repository.list_epoch_runs(dataset_id="dataset-001") == [first]
+    assert repository.list_epoch_runs(dataset_id="dataset-002") == [second]
+    assert repository.list_epoch_runs() == [first, second]
 
 
 def test_run_repository_loads_legacy_preprocessing_runs_without_schema_marker(
