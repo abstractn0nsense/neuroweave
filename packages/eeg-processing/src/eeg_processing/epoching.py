@@ -209,16 +209,25 @@ def epoch_preprocessed_eeg(
         event_id=conversion.event_id,
         drop_log=epochs.drop_log,
     )
-    drop_reason_counts = _drop_reason_counts(epochs.drop_log)
-    dropped_epoch_count = sum(1 for reasons in epochs.drop_log if reasons)
     retained_epoch_count = len(epochs)
     samples_per_epoch = int(epochs.get_data(copy=False).shape[-1])
-    condition_counts = {
-        "candidate": conversion.condition_counts,
-        "retained": retained_counts,
-        "dropped": dropped_counts,
-    }
+    dropped_epoch_count = sum(dropped_counts.values())
+    retained_epoch_count = sum(retained_counts.values())
+    condition_counts = _condition_counts_summary(
+        condition_field=config.condition_field,
+        event_id=conversion.event_id,
+        candidate_counts=conversion.condition_counts,
+        retained_counts=retained_counts,
+        dropped_counts=dropped_counts,
+    )
+    drop_reason_summary = _drop_reason_summary(epochs.drop_log)
+    timing_summary = _timing_summary(
+        config=config,
+        sampling_rate_hz=sampling_rate,
+        samples_per_epoch=samples_per_epoch,
+    )
     summary = {
+        "schema_version": 1,
         "input": {
             "preprocessing_run_id": preprocessing_run_id,
             "path": str(input_path),
@@ -235,6 +244,7 @@ def epoch_preprocessed_eeg(
             "skipped_summary": {
                 "missing_condition": conversion.skipped.missing_condition,
                 "negative_onset": conversion.skipped.negative_onset,
+                "details": conversion.skipped.details,
             },
         },
         "epochs": {
@@ -243,14 +253,9 @@ def epoch_preprocessed_eeg(
             "dropped": dropped_epoch_count,
             "samples_per_epoch": samples_per_epoch,
         },
-        "timing": {
-            "tmin_seconds": config.tmin_seconds,
-            "tmax_seconds": config.tmax_seconds,
-            "duration_seconds": config.tmax_seconds - config.tmin_seconds,
-            "baseline": _baseline_summary(config),
-        },
+        "timing": timing_summary,
         "conditions": condition_counts,
-        "drop_reasons": drop_reason_counts,
+        "drop_reasons": drop_reason_summary,
         "warnings": warnings,
     }
     return {
@@ -272,11 +277,15 @@ def epoch_preprocessed_eeg(
         "diagnostics": {
             "epoch_summary": summary,
             "condition_counts": condition_counts,
-            "drop_log": _drop_log_entries(
-                events=conversion.events,
-                event_id=conversion.event_id,
-                drop_log=epochs.drop_log,
-            ),
+            "drop_log": {
+                "schema_version": 1,
+                "summary": drop_reason_summary,
+                "entries": _drop_log_entries(
+                    events=conversion.events,
+                    event_id=conversion.event_id,
+                    drop_log=epochs.drop_log,
+                ),
+            },
         },
     }
 
@@ -312,6 +321,50 @@ def _baseline_summary(config: EpochConfig) -> dict[str, float | None]:
     }
 
 
+def _timing_summary(
+    config: EpochConfig,
+    sampling_rate_hz: float,
+    samples_per_epoch: int,
+) -> dict[str, Any]:
+    return {
+        "tmin_seconds": config.tmin_seconds,
+        "tmax_seconds": config.tmax_seconds,
+        "epoch_duration_seconds": config.tmax_seconds - config.tmin_seconds,
+        "baseline": _baseline_summary(config),
+        "sampling_rate_hz": sampling_rate_hz,
+        "samples_per_epoch": samples_per_epoch,
+    }
+
+
+def _condition_counts_summary(
+    condition_field: str,
+    event_id: dict[str, int],
+    candidate_counts: dict[str, int],
+    retained_counts: dict[str, int],
+    dropped_counts: dict[str, int],
+) -> dict[str, Any]:
+    labels = sorted(event_id)
+    return {
+        "schema_version": 1,
+        "condition_field": condition_field,
+        "event_id": event_id,
+        "totals": {
+            "candidate_event_count": sum(candidate_counts.values()),
+            "retained_epoch_count": sum(retained_counts.values()),
+            "dropped_epoch_count": sum(dropped_counts.values()),
+        },
+        "conditions": {
+            label: {
+                "event_id": event_id[label],
+                "candidate_event_count": candidate_counts.get(label, 0),
+                "retained_epoch_count": retained_counts.get(label, 0),
+                "dropped_epoch_count": dropped_counts.get(label, 0),
+            }
+            for label in labels
+        },
+    }
+
+
 def _retained_condition_counts(
     retained_events: list[list[int]],
     event_id: dict[str, int],
@@ -341,12 +394,22 @@ def _dropped_condition_counts(
     return counts
 
 
-def _drop_reason_counts(drop_log: tuple[tuple[str, ...], ...]) -> dict[str, int]:
-    counts: dict[str, int] = {}
+def _drop_reason_summary(drop_log: tuple[tuple[str, ...], ...]) -> dict[str, Any]:
+    reason_counts: dict[str, int] = {}
+    retained_epoch_count = 0
+    dropped_epoch_count = 0
     for reasons in drop_log:
+        if not reasons:
+            retained_epoch_count += 1
+            continue
+        dropped_epoch_count += 1
         for reason in reasons:
-            counts[str(reason)] = counts.get(str(reason), 0) + 1
-    return counts
+            reason_counts[str(reason)] = reason_counts.get(str(reason), 0) + 1
+    return {
+        "retained_epoch_count": retained_epoch_count,
+        "dropped_epoch_count": dropped_epoch_count,
+        "reasons": dict(sorted(reason_counts.items())),
+    }
 
 
 def _drop_log_entries(

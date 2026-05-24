@@ -4,6 +4,7 @@ import json
 import shutil
 
 from fastapi.testclient import TestClient
+import mne
 
 from apps.api import main as api_main
 from eeg_core.domain import (
@@ -22,6 +23,7 @@ from eeg_core.domain import (
     RecordingMetadata,
 )
 from eeg_io.registry import JsonRegistryRepository, JsonRunRepository
+from eeg_processing import epoch_preprocessed_eeg
 
 
 def _client(tmp_path, monkeypatch) -> TestClient:
@@ -195,9 +197,41 @@ def test_epoch_worker_completes_run_and_writes_artifacts(tmp_path, monkeypatch):
     assert summary["dataset_id"] == "dataset-001"
     assert summary["events"]["event_id"] == {"standard": 1, "target": 2}
     assert summary["epochs"]["retained"] == 3
-    assert condition_counts["candidate"] == {"standard": 1, "target": 2}
-    assert condition_counts["retained"] == {"standard": 1, "target": 2}
-    assert drop_log["entries"] == []
+    assert condition_counts["schema_version"] == 1
+    assert condition_counts["totals"] == {
+        "candidate_event_count": 3,
+        "retained_epoch_count": 3,
+        "dropped_epoch_count": 0,
+    }
+    assert condition_counts["conditions"]["standard"] == {
+        "event_id": 1,
+        "candidate_event_count": 1,
+        "retained_epoch_count": 1,
+        "dropped_epoch_count": 0,
+    }
+    assert condition_counts["conditions"]["target"] == {
+        "event_id": 2,
+        "candidate_event_count": 2,
+        "retained_epoch_count": 2,
+        "dropped_epoch_count": 0,
+    }
+    assert summary["timing"] == {
+        "tmin_seconds": -0.1,
+        "tmax_seconds": 0.3,
+        "epoch_duration_seconds": 0.4,
+        "baseline": {"start_seconds": None, "end_seconds": None},
+        "sampling_rate_hz": 256.0,
+        "samples_per_epoch": 104,
+    }
+    assert drop_log == {
+        "schema_version": 1,
+        "summary": {
+            "retained_epoch_count": 3,
+            "dropped_epoch_count": 0,
+            "reasons": {},
+        },
+        "entries": [],
+    }
     assert artifact_manifest["artifact_count"] == 4
     assert {
         artifact["logical_name"] for artifact in artifact_manifest["artifacts"]
@@ -223,6 +257,67 @@ def test_epoch_worker_persists_failed_execution(tmp_path, monkeypatch):
     assert payload["warnings"] == ["captured epoch warning"]
     assert payload["errors"] == ["synthetic epoching failure"]
     assert not Path(payload["output_path"]).exists()
+    assert "epoch_summary_path" not in payload["output_metadata"]
+    assert "condition_counts_path" not in payload["output_metadata"]
+    assert "drop_log_path" not in payload["output_metadata"]
+
+
+def test_epoch_diagnostics_summarize_drop_reasons(tmp_path, monkeypatch):
+    _client(tmp_path, monkeypatch)
+    _seed_epochable_dataset(tmp_path)
+    preprocessing_run = api_main.run_repository.get_preprocessing_run("preprocess-001")
+    event_log = api_main.registry_repository.get_event_log("dataset-001")
+    assert preprocessing_run is not None
+    assert event_log is not None
+    raw_path = Path(str(preprocessing_run.output_path))
+    raw = mne.io.read_raw_fif(raw_path, preload=True, verbose=False)
+    data = raw.get_data()
+    sample = int(2.0 * raw.info["sfreq"])
+    data[:, sample] = 1000e-6
+    spiky_raw = mne.io.RawArray(data, raw.info.copy(), verbose=False)
+    spiky_raw.save(raw_path, overwrite=True, verbose=False)
+
+    metadata = epoch_preprocessed_eeg(
+        input_path=raw_path,
+        output_path=tmp_path / "epochs" / "epochs.fif",
+        event_log=event_log,
+        config=EpochConfig(**_epoch_payload(reject_eeg_uv=500.0)),
+        preprocessing_run_id=preprocessing_run.run_id,
+    )
+    condition_counts = metadata["diagnostics"]["condition_counts"]
+    drop_log = metadata["diagnostics"]["drop_log"]
+    summary = metadata["diagnostics"]["epoch_summary"]
+
+    assert metadata["epoch_count"] == 2
+    assert metadata["dropped_epoch_count"] == 1
+    assert condition_counts["totals"] == {
+        "candidate_event_count": 3,
+        "retained_epoch_count": 2,
+        "dropped_epoch_count": 1,
+    }
+    assert condition_counts["conditions"]["standard"] == {
+        "event_id": 1,
+        "candidate_event_count": 1,
+        "retained_epoch_count": 0,
+        "dropped_epoch_count": 1,
+    }
+    assert condition_counts["conditions"]["target"] == {
+        "event_id": 2,
+        "candidate_event_count": 2,
+        "retained_epoch_count": 2,
+        "dropped_epoch_count": 0,
+    }
+    assert drop_log["summary"]["retained_epoch_count"] == 2
+    assert drop_log["summary"]["dropped_epoch_count"] == 1
+    assert sum(drop_log["summary"]["reasons"].values()) >= 1
+    assert len(drop_log["entries"]) == 1
+    assert drop_log["entries"][0]["condition"] == "standard"
+    assert drop_log["entries"][0]["event_code"] == 1
+    assert drop_log["entries"][0]["event_index"] == 1
+    assert drop_log["entries"][0]["sample"] == 512
+    assert drop_log["entries"][0]["reasons"]
+    assert summary["drop_reasons"] == drop_log["summary"]
+    assert summary["conditions"] == condition_counts
 
 
 def test_epoch_worker_recovers_pending_runs(tmp_path, monkeypatch):

@@ -647,6 +647,10 @@ Contract notes:
 Purpose: make epoch results understandable and queryable without forcing the UI to
 open FIF files.
 
+Status: implemented with versioned epoch summary, UI-oriented condition count
+diagnostics, deterministic drop reason summaries, timing/baseline summaries, and
+tests for retained/dropped condition counts.
+
 Implementation steps:
 
 1. Define a stable diagnostic JSON shape.

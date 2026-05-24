@@ -65,7 +65,7 @@ Completed preprocessing runs also write diagnostics beside `raw_preprocessed.fif
 
 Phase 3 analysis output roots are configurable with `NEUROWEAVE_EPOCHS_DIR` and `NEUROWEAVE_ERP_DIR`. When unset, epoch artifacts will default to `data/epochs/{dataset_id}/{run_id}/` and ERP artifacts will default to `data/erp/{dataset_id}/{run_id}/`.
 
-`POST /datasets/{dataset_id}/epoch-runs` creates a validation-backed `pending` epoch run from a completed preprocessing run, then queues MNE epoch execution in the local epoch worker. Completed epoch runs write `epochs.fif`, `epoch_summary.json`, `condition_counts.json`, `drop_log.json`, and `artifact_manifest.json` under `data/epochs/{dataset_id}/{run_id}/`.
+`POST /datasets/{dataset_id}/epoch-runs` creates a validation-backed `pending` epoch run from a completed preprocessing run, then queues MNE epoch execution in the local epoch worker. Completed epoch runs write `epochs.fif`, `epoch_summary.json`, `condition_counts.json`, `drop_log.json`, and `artifact_manifest.json` under `data/epochs/{dataset_id}/{run_id}/`. Epoch diagnostics include versioned summary metadata, UI-oriented condition counts, timing/baseline details, and deterministic drop reason summaries; failed runs remain queryable without diagnostics paths.
 
 Preprocessing runs also persist captured MNE/Python warnings in `warnings`. Failed runs persist `errors`, retain input provenance, and remain available through the run lookup endpoints.
 
