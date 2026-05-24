@@ -1,4 +1,5 @@
 from pathlib import Path
+from time import sleep
 
 from fastapi.testclient import TestClient
 
@@ -93,6 +94,21 @@ def _save_preprocessing_run(
     return run
 
 
+def _wait_for_run_status(
+    client: TestClient,
+    run_id: str,
+    expected_status: str,
+) -> dict:
+    for _ in range(100):
+        response = client.get(f"/preprocessing-runs/{run_id}")
+        assert response.status_code == 200
+        payload = response.json()
+        if payload["status"] == expected_status:
+            return payload
+        sleep(0.05)
+    raise AssertionError(f"Run {run_id} did not reach {expected_status}")
+
+
 def test_create_preprocessing_run_requires_valid_dataset(tmp_path, monkeypatch):
     client = _client_with_dataset(tmp_path, monkeypatch)
 
@@ -124,12 +140,12 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert queued_payload["config"]["resample_hz"] == 50.0
     assert queued_payload["output_metadata"]["input_file_id"]
 
-    completed_response = client.get(
-        f"/preprocessing-runs/{queued_payload['run_id']}"
+    payload = _wait_for_run_status(
+        client,
+        queued_payload["run_id"],
+        "completed",
     )
-    payload = completed_response.json()
 
-    assert completed_response.status_code == 200
     assert payload["status"] == "completed"
     assert payload["started_at_utc"] is not None
     assert payload["finished_at_utc"] is not None
@@ -180,6 +196,11 @@ def test_create_preprocessing_run_persists_failed_run_details(
         "/datasets/dataset-001/preprocessing-runs",
         json={"reference": "average"},
     )
+    failed_payload = _wait_for_run_status(
+        client,
+        response.json()["run_id"],
+        "failed",
+    )
     list_response = client.get("/datasets/dataset-001/preprocessing-runs")
 
     assert response.status_code == 201
@@ -187,9 +208,10 @@ def test_create_preprocessing_run_persists_failed_run_details(
     assert list_response.status_code == 200
     runs = list_response.json()["runs"]
     assert len(runs) == 1
-    assert runs[0]["status"] == "failed"
-    assert runs[0]["warnings"] == ["captured warning before failure"]
-    assert runs[0]["errors"] == ["synthetic preprocessing failure"]
+    assert runs[0] == failed_payload
+    assert failed_payload["status"] == "failed"
+    assert failed_payload["warnings"] == ["captured warning before failure"]
+    assert failed_payload["errors"] == ["synthetic preprocessing failure"]
     assert runs[0]["output_metadata"]["input_file_id"]
 
 
@@ -224,6 +246,42 @@ def test_cancel_running_preprocessing_run_requests_cancellation(
     assert payload["warnings"] == [
         "Cancellation requested; preprocessing will stop at the next checkpoint."
     ]
+
+
+def test_preprocessing_worker_recovers_pending_runs(tmp_path, monkeypatch):
+    client = _client_with_dataset(tmp_path, monkeypatch)
+    _upload_eeg(client)
+    _upload_and_map_events(client)
+
+    recording = api_main.registry_repository.get_recording("dataset-001")
+    assert recording is not None
+    uploaded_file = next(
+        uploaded_file
+        for uploaded_file in api_main.registry_repository.list_uploaded_files(
+            "dataset-001"
+        )
+        if uploaded_file.file_id == recording.file_id
+    )
+    run_id = "preprocess-recovered"
+    output_path = tmp_path / "processed" / "dataset-001" / run_id / "raw_preprocessed.fif"
+    run = PreprocessingRun(
+        run_id=run_id,
+        dataset_id="dataset-001",
+        config=PreprocessingConfig(resample_hz=50.0, reference="average"),
+        status=PreprocessingRunStatus.PENDING,
+        output_path=str(output_path),
+        output_metadata=api_main._preprocessing_input_provenance(
+            uploaded_file=uploaded_file,
+            recording=recording,
+        ),
+    )
+    api_main.run_repository.save_preprocessing_run(run)
+
+    api_main.preprocessing_worker.recover()
+    payload = _wait_for_run_status(client, run_id, "completed")
+
+    assert payload["output_metadata"]["output_sampling_rate_hz"] == 50.0
+    assert Path(payload["output_path"]).is_file()
 
 
 def test_create_preprocessing_run_rejects_invalid_filter_order(

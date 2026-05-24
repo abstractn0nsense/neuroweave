@@ -60,7 +60,7 @@ Completed preprocessing runs store provenance in `output_metadata`, including in
 
 Preprocessing runs also persist captured MNE/Python warnings in `warnings`. Failed runs persist `errors`, retain input provenance, and remain available through the run lookup endpoints.
 
-`POST /datasets/{dataset_id}/preprocessing-runs` creates a `pending` run and returns immediately after scheduling background execution. Use `GET /preprocessing-runs/{run_id}` or `GET /datasets/{dataset_id}/preprocessing-runs` to poll for `running`, `completed`, or `failed` status.
+`POST /datasets/{dataset_id}/preprocessing-runs` creates a `pending` run and returns immediately after enqueueing it in the local preprocessing worker. Use `GET /preprocessing-runs/{run_id}` or `GET /datasets/{dataset_id}/preprocessing-runs` to poll for `running`, `completed`, or `failed` status. On API startup, the worker recovers `pending` and stale `running` runs from `data/runs`.
 
 `POST /preprocessing-runs/{run_id}/cancel` cancels pending runs immediately. Running runs are marked `cancelling` and become `cancelled` at the next background checkpoint.
 

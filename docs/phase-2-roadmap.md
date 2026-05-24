@@ -97,15 +97,9 @@ Implemented UI shape:
 Current scope:
 
 - The first processing backend is MNE-based and writes FIF output.
-- Runs are created as `pending`, then executed by FastAPI background tasks.
+- Runs are created as `pending`, then executed by the local preprocessing worker queue.
 - The UI polls pending/running runs until they reach `completed` or `failed`.
 - Failed runs are persisted with warning and error details.
-
-Next likely hardening:
-
-1. Move background tasks into a durable worker process for very large EEG files.
-2. Add cancellation and progress state.
-3. Add richer artifact summaries.
 
 ## Phase 2.4: Preprocessing Config Hardening
 
@@ -171,3 +165,25 @@ Implemented readiness work:
 - the Phase 2 PR is mergeable against `main`
 - final review notes are recorded in `docs/phase-2-final-review.md`
 - the PR is ready to move out of draft once the final review commit is uploaded
+
+## Phase 2.0 Hardening Track
+
+The remaining Phase 2 hardening items are tracked as `Phase 2.0.n` work. These items improve reliability without changing the core Phase 2 preprocessing API shape.
+
+### Phase 2.0.1: Durable Local Worker Queue
+
+Implemented worker queue:
+
+- FastAPI `BackgroundTasks` is no longer used for preprocessing execution
+- `LocalPreprocessingWorker` owns a local run queue and daemon worker thread
+- `POST /datasets/{id}/preprocessing-runs` saves a `pending` run and enqueues only the run ID
+- the worker loads run metadata from `JsonRunRepository` before execution
+- API startup starts the worker and recovers `pending` or stale `running` runs from `data/runs`
+- recovered runs keep the same run ID, config snapshot, provenance, and output path
+
+Remaining `Phase 2.0.n` items:
+
+- `Phase 2.0.2`: stronger cancellation checkpoints and cancellable subprocess execution
+- `Phase 2.0.3`: JSON file locking, then SQLite-backed registries
+- `Phase 2.0.4`: preprocessing summaries, filter reports, artifact summaries, and optional HTML diagnostics
+- `Phase 2.0.5`: browser E2E smoke test for upload, validation, preprocessing, and completed-run display

@@ -12,7 +12,7 @@ Implemented:
 - preprocessing config validation
 - run provenance
 - warning and error capture
-- background run execution
+- local worker queue execution
 - best-effort run cancellation
 - UI controls for preprocessing configuration, run status, polling, and cancellation
 
@@ -38,8 +38,8 @@ GitHub verification:
 
 Phase 2 is suitable to merge as an MVP, but these limitations should be handled before treating NeuroWeave as a robust long-running research production tool.
 
-1. Background execution is process-local.
-   - FastAPI `BackgroundTasks` is fine for local MVP jobs, but it is not durable if the API process exits.
+1. Worker execution is still process-local.
+   - Phase 2.0.1 removed FastAPI `BackgroundTasks` and recovers pending/stale running runs on API startup, but the worker still runs inside the API process.
 
 2. Running cancellation is best-effort.
    - MNE processing is not interrupted mid-call. A running job is marked `cancelling` and becomes `cancelled` at the next checkpoint.
@@ -53,29 +53,29 @@ Phase 2 is suitable to merge as an MVP, but these limitations should be handled 
 5. UI coverage is build-level only.
    - TypeScript build catches regressions, but there is no browser E2E test for the full upload-to-preprocessing workflow.
 
-## Resolution Pipeline
+## Phase 2.0.n Resolution Pipeline
 
 Recommended next hardening path:
 
-1. Add a durable job runner.
-   - Introduce a small local worker process or queue abstraction.
-   - Keep the API run endpoints stable.
-   - Move MNE execution out of FastAPI `BackgroundTasks`.
+1. Phase 2.0.1: Durable local worker queue.
+   - Status: implemented.
+   - FastAPI `BackgroundTasks` was replaced with a local queue and worker thread.
+   - API startup recovers `pending` and stale `running` runs from JSON run metadata.
 
-2. Improve cancellation.
+2. Phase 2.0.2: Improve cancellation.
    - Add explicit processing checkpoints around read, filter, notch, reference, resample, and save steps.
    - Store `cancel_requested_at_utc`.
    - For long-term use, run jobs in cancellable worker subprocesses.
 
-3. Strengthen persistence.
+3. Phase 2.0.3: Strengthen persistence.
    - Add file locking for JSON writes as a short-term fix.
    - Move run/dataset registries to SQLite when multi-run concurrency becomes common.
 
-4. Add diagnostic outputs.
+4. Phase 2.0.4: Add diagnostic outputs.
    - Store preprocessing summaries alongside `raw_preprocessed.fif`.
    - Add filter settings, before/after sampling metadata, warning summaries, and optional HTML diagnostics.
 
-5. Add browser E2E smoke coverage.
+5. Phase 2.0.5: Add browser E2E smoke coverage.
    - Use a small fixture flow: create project, create experiment, create dataset, upload EEG/events, validate, start preprocessing, observe completed run.
    - Run it locally before release and later in CI if runtime cost is acceptable.
 

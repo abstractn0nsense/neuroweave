@@ -1,12 +1,15 @@
 from pathlib import Path
+from queue import Queue
+from threading import Lock, Thread
 from dataclasses import replace
 from datetime import UTC, datetime
+from contextlib import asynccontextmanager
 import hashlib
 import shutil
 import sys
 from uuid import uuid4
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile, status
+from fastapi import FastAPI, File, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -56,6 +59,54 @@ RUNS_DIR = REPO_ROOT / "data" / "runs"
 PROCESSED_DIR = REPO_ROOT / "data" / "processed"
 registry_repository = JsonRegistryRepository(UPLOADS_DIR)
 run_repository = JsonRunRepository(RUNS_DIR)
+
+
+class LocalPreprocessingWorker:
+    def __init__(self) -> None:
+        self._queue: Queue[str] = Queue()
+        self._queued_run_ids: set[str] = set()
+        self._lock = Lock()
+        self._thread: Thread | None = None
+
+    def start(self) -> None:
+        with self._lock:
+            if self._thread and self._thread.is_alive():
+                return
+            self._thread = Thread(
+                target=self._run_loop,
+                name="neuroweave-preprocessing-worker",
+                daemon=True,
+            )
+            self._thread.start()
+
+    def enqueue(self, run_id: str) -> None:
+        self.start()
+        with self._lock:
+            if run_id in self._queued_run_ids:
+                return
+            self._queued_run_ids.add(run_id)
+            self._queue.put(run_id)
+
+    def recover(self) -> None:
+        for run in run_repository.list_preprocessing_runs():
+            if run.status in {
+                PreprocessingRunStatus.PENDING,
+                PreprocessingRunStatus.RUNNING,
+            }:
+                self.enqueue(run.run_id)
+
+    def _run_loop(self) -> None:
+        while True:
+            run_id = self._queue.get()
+            try:
+                _execute_preprocessing_run(run_id)
+            finally:
+                with self._lock:
+                    self._queued_run_ids.discard(run_id)
+                self._queue.task_done()
+
+
+preprocessing_worker = LocalPreprocessingWorker()
 
 
 class HealthResponse(BaseModel):
@@ -263,7 +314,14 @@ class ExperimentsResponse(BaseModel):
     experiments: list[ExperimentResponse]
 
 
-app = FastAPI(title="NeuroWeave API", version="0.1.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    preprocessing_worker.start()
+    preprocessing_worker.recover()
+    yield
+
+
+app = FastAPI(title="NeuroWeave API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -609,7 +667,6 @@ def get_dataset_validation(dataset_id: str) -> ValidationReportResponse:
 def create_preprocessing_run(
     dataset_id: str,
     config_payload: PreprocessingConfigPayload,
-    background_tasks: BackgroundTasks,
 ) -> PreprocessingRunResponse:
     dataset = registry_repository.get_dataset(dataset_id)
     if dataset is None:
@@ -652,13 +709,7 @@ def create_preprocessing_run(
         ),
     )
     run_repository.save_preprocessing_run(run)
-    background_tasks.add_task(
-        _execute_preprocessing_run,
-        run_id=run_id,
-        input_path=str(uploaded_file.stored_path),
-        output_path=str(output_path),
-        config=config,
-    )
+    preprocessing_worker.enqueue(run_id)
     return _preprocessing_run_response(run)
 
 
@@ -911,16 +962,36 @@ def _validate_dataset(dataset: IngestionDataset) -> ValidationReport:
     )
 
 
-def _execute_preprocessing_run(
-    run_id: str,
-    input_path: str,
-    output_path: str,
-    config: PreprocessingConfig,
-) -> None:
+def _execute_preprocessing_run(run_id: str) -> None:
     run = run_repository.get_preprocessing_run(run_id)
     if run is None:
         return
     if run.status == PreprocessingRunStatus.CANCELLED:
+        return
+    if run.status in {
+        PreprocessingRunStatus.COMPLETED,
+        PreprocessingRunStatus.FAILED,
+    }:
+        return
+    if run.status == PreprocessingRunStatus.CANCELLING:
+        cancelled_run = replace(
+            run,
+            status=PreprocessingRunStatus.CANCELLED,
+            finished_at_utc=_utc_now_iso(),
+        )
+        run_repository.save_preprocessing_run(cancelled_run)
+        return
+
+    input_path = run.output_metadata.get("input_path")
+    output_path = run.output_path
+    if not isinstance(input_path, str) or not output_path:
+        failed_run = replace(
+            run,
+            status=PreprocessingRunStatus.FAILED,
+            finished_at_utc=_utc_now_iso(),
+            errors=["Preprocessing run is missing input or output paths."],
+        )
+        run_repository.save_preprocessing_run(failed_run)
         return
 
     running_run = replace(
@@ -935,7 +1006,7 @@ def _execute_preprocessing_run(
         metadata = preprocess_raw_eeg(
             input_path=Path(input_path),
             output_path=output_file_path,
-            config=config,
+            config=run.config,
         )
         completed_run = replace(
             running_run,
