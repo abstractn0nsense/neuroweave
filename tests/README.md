@@ -2,7 +2,7 @@
 
 Repository-level test support lives here.
 
-Use `tests/fixtures/eeg` for shared EEG fixtures. Package-local tests can be added near the source code when the implementation stack is chosen.
+Use `tests/fixtures/eeg` for shared EEG fixtures and `tests/fixtures/events` for shared event or behavior logs. Package-local tests can be added near the source code when the implementation stack is chosen.
 
 EEG fixtures committed here should stay small and deterministic. Runtime uploads, generated outputs, and caches belong under the ignored `data/` directory instead.
 

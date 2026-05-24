@@ -29,6 +29,7 @@ Phase 1 ingestion checks:
 - event CSV/TSV upload and preview
 - event column mapping
 - dataset validation status, errors, and warnings
+- preprocessing handoff remains disabled until validation succeeds
 
 Expected responsibilities:
 

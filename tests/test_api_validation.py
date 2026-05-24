@@ -69,14 +69,8 @@ def test_validate_dataset_marks_complete_dataset_valid(tmp_path, monkeypatch):
     repository = JsonRegistryRepository(tmp_path / "uploads")
     client = _client_with_dataset(repository, monkeypatch)
     _upload_eeg(client)
-    _upload_and_map_events(
-        client,
-        (
-            b"onset,duration,trial_type,stimulus,response,correct,rt\n"
-            b"1.0,0.2,target,A,left,1,0.45\n"
-            b"2.0,0.2,standard,B,right,0,0.51\n"
-        ),
-    )
+    fixture_path = Path("tests/fixtures/events/psychopy_minimal.csv")
+    _upload_and_map_events(client, fixture_path.read_bytes())
 
     response = client.get("/datasets/dataset-001/validation")
     dataset_response = client.get("/datasets/dataset-001")

@@ -571,6 +571,21 @@ function App() {
     });
   }
 
+  function beginPreprocessingHandoff() {
+    if (!activeDataset || (validation?.valid !== true && activeDataset.status !== "valid")) {
+      setNotice({
+        tone: "error",
+        message: "Validate a dataset before starting preprocessing.",
+      });
+      return;
+    }
+
+    setNotice({
+      tone: "ok",
+      message: `${activeDataset.dataset_id} is cleared for the Phase 2 preprocessing handoff.`,
+    });
+  }
+
   async function runAction(action: string, callback: () => Promise<void>) {
     setBusyAction(action);
     setNotice(null);
@@ -727,6 +742,7 @@ function App() {
                 eventLog={eventLog}
                 eventPreview={eventPreview}
                 mapping={mapping}
+                onBeginPreprocessing={beginPreprocessingHandoff}
                 onEegFileChange={setEegFile}
                 onEventFileChange={setEventFile}
                 onMappingChange={setMapping}
@@ -1033,6 +1049,7 @@ function IntakeSection({
   eventLog,
   eventPreview,
   mapping,
+  onBeginPreprocessing,
   onEegFileChange,
   onEventFileChange,
   onMappingChange,
@@ -1049,6 +1066,7 @@ function IntakeSection({
   eventLog: EventLogResponse | null;
   eventPreview: EventPreview | null;
   mapping: Record<MappingKey, string>;
+  onBeginPreprocessing: () => void;
   onEegFileChange: (file: File | null) => void;
   onEventFileChange: (file: File | null) => void;
   onMappingChange: (mapping: Record<MappingKey, string>) => void;
@@ -1059,6 +1077,7 @@ function IntakeSection({
   validation: ValidationReport | null;
 }) {
   const disabled = !activeDataset;
+  const canContinue = validation?.valid === true || activeDataset?.status === "valid";
 
   return (
     <div className="intake-stack">
@@ -1161,6 +1180,25 @@ function IntakeSection({
       </div>
 
       {validation ? <ValidationPanel report={validation} /> : null}
+
+      <div className="handoff-panel">
+        <div>
+          <h3>Preprocessing Handoff</h3>
+          <p className="muted">
+            {canContinue
+              ? "This dataset passed validation and can enter the next phase."
+              : "A dataset must pass validation before preprocessing can start."}
+          </p>
+        </div>
+        <button
+          className="primary-button"
+          disabled={!canContinue}
+          onClick={onBeginPreprocessing}
+          type="button"
+        >
+          Continue
+        </button>
+      </div>
     </div>
   );
 }

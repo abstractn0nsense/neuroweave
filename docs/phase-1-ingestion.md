@@ -58,10 +58,11 @@ Completed:
 7. Event column mapping and normalized event generation.
 8. Dataset validation API for EEG duration, event timing, missing fields, and readiness state.
 9. UI ingest flow after the API can complete `EEG + event log + validation`.
+10. Phase 1 polish: shared event CSV fixture, UI preprocessing gate, manual browser smoke check, and GitHub Actions CI.
 
 Next:
 
-10. Preprocessing handoff: create a validated-dataset entrypoint for filtering, epoching, and downstream analysis jobs.
+11. Preprocessing handoff: create a validated-dataset entrypoint for filtering, epoching, and downstream analysis jobs.
 
 ## Event And Behavior Logs
 
