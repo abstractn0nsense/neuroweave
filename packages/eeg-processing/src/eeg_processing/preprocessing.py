@@ -15,6 +15,8 @@ def preprocess_raw_eeg(
 ) -> dict[str, Any]:
     raw = _read_raw(input_path)
     warnings: list[str] = []
+    input_sampling_rate = float(raw.info["sfreq"])
+    input_duration = raw.n_times / input_sampling_rate if input_sampling_rate else 0
 
     try:
         if config.high_pass_hz is not None or config.low_pass_hz is not None:
@@ -62,6 +64,9 @@ def preprocess_raw_eeg(
         "sampling_rate_hz": sampling_rate,
         "duration_seconds": raw.n_times / sampling_rate if sampling_rate else 0,
         "file_format": "fif",
+        "input_sampling_rate_hz": input_sampling_rate,
+        "input_duration_seconds": input_duration,
+        "mne_version": _mne_version(),
         "warnings": warnings,
     }
 
@@ -84,3 +89,9 @@ def _read_raw(path: Path):
         return reader(path, preload=True, verbose=False)
     except Exception as exc:
         raise PreprocessingError(f"Could not read EEG data: {exc}") from exc
+
+
+def _mne_version() -> str:
+    import mne
+
+    return str(mne.__version__)

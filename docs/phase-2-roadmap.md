@@ -116,3 +116,14 @@ Implemented validation:
 - custom reference values must name existing EEG channels
 - UI blocks obvious numeric and high/low ordering mistakes before sending the request
 - API returns `422` with explicit validation messages for invalid preprocessing settings
+
+## Phase 2.5: Run Provenance
+
+Implemented provenance:
+
+- run config is persisted as the `PreprocessingRun.config` snapshot
+- input file ID, original filename, stored path, size, and checksum are stored
+- input file format, channel count, sampling rate, duration, and channel names are stored
+- output path, size, checksum, file format, channel count, sampling rate, and duration are stored
+- MNE version is stored with the completed run metadata
+- UI run summaries read the output metadata keys while remaining compatible with older run metadata

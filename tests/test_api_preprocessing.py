@@ -101,8 +101,21 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert payload["config"]["resample_hz"] == 50.0
     assert payload["finished_at_utc"] is not None
     assert payload["errors"] == []
-    assert payload["output_metadata"]["sampling_rate_hz"] == 50.0
     assert Path(payload["output_path"]).is_file()
+    metadata = payload["output_metadata"]
+    assert metadata["input_file_id"]
+    assert metadata["input_original_filename"] == "sample_resting_raw.fif"
+    assert metadata["input_path"].endswith("sample_resting_raw.fif")
+    assert metadata["input_size_bytes"] > 0
+    assert metadata["input_checksum_sha256"]
+    assert metadata["input_sampling_rate_hz"] > 0
+    assert metadata["input_duration_seconds"] > 0
+    assert metadata["output_path"] == payload["output_path"]
+    assert metadata["output_size_bytes"] > 0
+    assert metadata["output_checksum_sha256"]
+    assert metadata["output_sampling_rate_hz"] == 50.0
+    assert metadata["output_duration_seconds"] > 0
+    assert metadata["mne_version"]
 
     get_response = client.get(f"/preprocessing-runs/{payload['run_id']}")
     list_response = client.get("/datasets/dataset-001/preprocessing-runs")

@@ -1789,9 +1789,12 @@ function parseOptionalNumber(value: string): number | null {
 }
 
 function formatRunMetadata(metadata: Record<string, MetadataValue>): string {
-  const samplingRate = metadata.sampling_rate_hz;
-  const duration = metadata.duration_seconds;
-  const channels = metadata.channel_count;
+  const samplingRate =
+    metadata.output_sampling_rate_hz ?? metadata.sampling_rate_hz;
+  const duration =
+    metadata.output_duration_seconds ?? metadata.duration_seconds;
+  const channels =
+    metadata.output_channel_count ?? metadata.channel_count;
   const parts = [
     typeof samplingRate === "number" ? `${samplingRate.toFixed(1)} Hz` : null,
     typeof channels === "number" ? `${channels} ch` : null,

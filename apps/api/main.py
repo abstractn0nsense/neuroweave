@@ -647,6 +647,10 @@ def create_preprocessing_run(
         status=PreprocessingRunStatus.RUNNING,
         started_at_utc=started_at,
         output_path=str(output_path),
+        output_metadata=_preprocessing_input_provenance(
+            uploaded_file=uploaded_file,
+            recording=recording,
+        ),
     )
     run_repository.save_preprocessing_run(run)
 
@@ -660,12 +664,11 @@ def create_preprocessing_run(
             run,
             status=PreprocessingRunStatus.COMPLETED,
             finished_at_utc=_utc_now_iso(),
-            output_metadata={
-                "channel_count": metadata["channel_count"],
-                "sampling_rate_hz": metadata["sampling_rate_hz"],
-                "duration_seconds": metadata["duration_seconds"],
-                "file_format": metadata["file_format"],
-            },
+            output_metadata=_preprocessing_completed_provenance(
+                run=run,
+                output_path=output_path,
+                processing_metadata=metadata,
+            ),
             warnings=[str(warning) for warning in metadata.get("warnings", [])],
         )
         run_repository.save_preprocessing_run(completed_run)
@@ -839,6 +842,42 @@ def _preprocessing_run_response(run: PreprocessingRun) -> PreprocessingRunRespon
         warnings=run.warnings,
         errors=run.errors,
     )
+
+
+def _preprocessing_input_provenance(
+    uploaded_file: IngestionUploadedFile,
+    recording: Recording,
+) -> dict[str, str | int | float | bool | None]:
+    return {
+        "input_file_id": uploaded_file.file_id,
+        "input_original_filename": uploaded_file.original_filename,
+        "input_path": uploaded_file.stored_path,
+        "input_size_bytes": uploaded_file.size_bytes,
+        "input_checksum_sha256": uploaded_file.checksum_sha256,
+        "input_file_format": recording.metadata.file_format,
+        "input_channel_count": recording.metadata.channel_count,
+        "input_sampling_rate_hz": recording.metadata.sampling_rate_hz,
+        "input_duration_seconds": recording.metadata.duration_seconds,
+        "input_channel_names": ",".join(recording.metadata.channel_names),
+    }
+
+
+def _preprocessing_completed_provenance(
+    run: PreprocessingRun,
+    output_path: Path,
+    processing_metadata: dict,
+) -> dict[str, str | int | float | bool | None]:
+    return {
+        **run.output_metadata,
+        "output_path": str(output_path),
+        "output_size_bytes": output_path.stat().st_size,
+        "output_checksum_sha256": _sha256_file(output_path),
+        "output_file_format": processing_metadata["file_format"],
+        "output_channel_count": processing_metadata["channel_count"],
+        "output_sampling_rate_hz": processing_metadata["sampling_rate_hz"],
+        "output_duration_seconds": processing_metadata["duration_seconds"],
+        "mne_version": processing_metadata["mne_version"],
+    }
 
 
 def _validation_issue_response(issue: ValidationIssue) -> ValidationIssueResponse:
