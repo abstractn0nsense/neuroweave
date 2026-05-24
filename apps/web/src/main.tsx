@@ -157,6 +157,36 @@ type PreprocessingRunsResponse = {
   runs: PreprocessingRun[];
 };
 
+type EpochConfig = {
+  preprocessing_run_id: string;
+  condition_field: string;
+  tmin_seconds: number;
+  tmax_seconds: number;
+  baseline_start_seconds: number | null;
+  baseline_end_seconds: number | null;
+  reject_eeg_uv: number | null;
+};
+
+type EpochRun = {
+  run_id: string;
+  dataset_id: string;
+  run_kind: string;
+  schema_version: number;
+  config: EpochConfig;
+  status: string;
+  started_at_utc: string | null;
+  finished_at_utc: string | null;
+  cancel_requested_at_utc: string | null;
+  output_path: string | null;
+  output_metadata: Record<string, MetadataValue>;
+  warnings: string[];
+  errors: string[];
+};
+
+type EpochRunsResponse = {
+  runs: EpochRun[];
+};
+
 type MetadataValue = string | number | boolean | null;
 
 type NoticeState = {
@@ -197,6 +227,19 @@ const DEFAULT_PREPROCESSING_CONFIG = {
   notch_hz: "",
   resample_hz: "",
   reference: "average",
+};
+
+const CONDITION_FIELDS = ["trial_type", "stimulus", "response", "correct"] as const;
+
+const DEFAULT_EPOCH_CONFIG = {
+  preprocessing_run_id: "",
+  condition_field: "trial_type",
+  tmin_seconds: "-0.2",
+  tmax_seconds: "0.8",
+  baseline_enabled: true,
+  baseline_start_seconds: "-0.2",
+  baseline_end_seconds: "0",
+  reject_eeg_uv: "",
 };
 
 function App() {
@@ -264,6 +307,12 @@ function App() {
     data: null,
     error: null,
   });
+  const [epochConfig, setEpochConfig] = useState(DEFAULT_EPOCH_CONFIG);
+  const [epochRuns, setEpochRuns] = useState<LoadState<EpochRun[]>>({
+    status: "idle",
+    data: null,
+    error: null,
+  });
   const [notice, setNotice] = useState<NoticeState>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
@@ -289,6 +338,13 @@ function App() {
   const selectedSample = useMemo(
     () => samples.data?.find((sample) => sample.id === selectedSampleId) ?? null,
     [samples.data, selectedSampleId],
+  );
+  const completedPreprocessingRuns = useMemo(
+    () =>
+      (preprocessingRuns.data ?? []).filter(
+        (run) => run.status === "completed" && Boolean(run.output_path),
+      ),
+    [preprocessingRuns.data],
   );
 
   useEffect(() => {
@@ -375,11 +431,30 @@ function App() {
   useEffect(() => {
     if (!activeDatasetId) {
       setPreprocessingRuns({ status: "idle", data: null, error: null });
+      setEpochRuns({ status: "idle", data: null, error: null });
       return;
     }
 
     void refreshPreprocessingRuns(activeDatasetId);
+    void refreshEpochRuns(activeDatasetId);
   }, [activeDatasetId]);
+
+  useEffect(() => {
+    setEpochConfig((current) => {
+      if (
+        current.preprocessing_run_id &&
+        completedPreprocessingRuns.some(
+          (run) => run.run_id === current.preprocessing_run_id,
+        )
+      ) {
+        return current;
+      }
+      return {
+        ...current,
+        preprocessing_run_id: completedPreprocessingRuns[0]?.run_id ?? "",
+      };
+    });
+  }, [completedPreprocessingRuns]);
 
   useEffect(() => {
     const hasActiveRun =
@@ -396,6 +471,22 @@ function App() {
 
     return () => window.clearInterval(intervalId);
   }, [activeDatasetId, preprocessingRuns.data]);
+
+  useEffect(() => {
+    const hasActiveRun =
+      epochRuns.data?.some((run) =>
+        ["pending", "running", "cancelling"].includes(run.status),
+      ) ?? false;
+    if (!activeDatasetId || !hasActiveRun) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void refreshEpochRuns(activeDatasetId, { silent: true });
+    }, 2000);
+
+    return () => window.clearInterval(intervalId);
+  }, [activeDatasetId, epochRuns.data]);
 
   async function refreshWorkspace() {
     setNotice(null);
@@ -546,6 +637,8 @@ function App() {
       setEventLog(null);
       setValidation(null);
       setPreprocessingRuns({ status: "success", data: [], error: null });
+      setEpochRuns({ status: "success", data: [], error: null });
+      setEpochConfig(DEFAULT_EPOCH_CONFIG);
       await refreshDatasets();
       setNotice({ tone: "ok", message: "Dataset created." });
     });
@@ -683,6 +776,35 @@ function App() {
     });
   }
 
+  async function beginEpochRun() {
+    if (!activeDataset) {
+      setNotice({ tone: "error", message: "Select a dataset first." });
+      return;
+    }
+
+    const configError = getEpochConfigError(epochConfig);
+    if (configError) {
+      setNotice({ tone: "error", message: configError });
+      return;
+    }
+
+    await runAction("epoch", async () => {
+      const run = await postJson<EpochRun>(
+        `/datasets/${encodeURIComponent(activeDataset.dataset_id)}/epoch-runs`,
+        normalizeEpochConfig(epochConfig),
+      );
+      setEpochRuns((current) => ({
+        status: "success",
+        data: [run, ...(current.data ?? [])],
+        error: null,
+      }));
+      setNotice({
+        tone: "neutral",
+        message: `Epoch run ${run.run_id} queued.`,
+      });
+    });
+  }
+
   async function cancelPreprocessingRun(runId: string) {
     await runAction(`cancel-${runId}`, async () => {
       const run = await requestJson<PreprocessingRun>(
@@ -750,6 +872,31 @@ function App() {
       });
     } catch (error: unknown) {
       setPreprocessingRuns({
+        status: "error",
+        data: null,
+        error: getErrorMessage(error),
+      });
+    }
+  }
+
+  async function refreshEpochRuns(
+    datasetId: string,
+    options: { silent?: boolean } = {},
+  ) {
+    if (!options.silent) {
+      setEpochRuns({ status: "loading", data: null, error: null });
+    }
+    try {
+      const response = await fetchJson<EpochRunsResponse>(
+        `/datasets/${encodeURIComponent(datasetId)}/epoch-runs`,
+      );
+      setEpochRuns({
+        status: "success",
+        data: response.runs,
+        error: null,
+      });
+    } catch (error: unknown) {
+      setEpochRuns({
         status: "error",
         data: null,
         error: getErrorMessage(error),
@@ -880,6 +1027,7 @@ function App() {
                   setEventPreview(null);
                   setEventLog(null);
                   setValidation(null);
+                  setEpochConfig(DEFAULT_EPOCH_CONFIG);
                 }}
                 selectedExperimentId={selectedExperimentId}
                 selectedProjectId={selectedProjectId}
@@ -949,6 +1097,28 @@ function App() {
                   preprocessingConfig={preprocessingConfig}
                   preprocessingRuns={preprocessingRuns}
                   validation={validation}
+                />
+              </section>
+
+              <section className="panel" aria-labelledby="epoch-title">
+                <div className="panel-header">
+                  <div>
+                    <h2 id="epoch-title">Epoch Controls</h2>
+                    <p className="subtle">
+                      {activeDataset
+                        ? "Create epochs from completed preprocessing output"
+                        : "Create or select a dataset"}
+                    </p>
+                  </div>
+                </div>
+                <EpochSection
+                  activeDataset={activeDataset}
+                  busyAction={busyAction}
+                  completedPreprocessingRuns={completedPreprocessingRuns}
+                  epochConfig={epochConfig}
+                  epochRuns={epochRuns}
+                  onEpochConfigChange={setEpochConfig}
+                  onStartEpochRun={beginEpochRun}
                 />
               </section>
 
@@ -1686,6 +1856,271 @@ function PreprocessingRunList({
   );
 }
 
+function EpochSection({
+  activeDataset,
+  busyAction,
+  completedPreprocessingRuns,
+  epochConfig,
+  epochRuns,
+  onEpochConfigChange,
+  onStartEpochRun,
+}: {
+  activeDataset: Dataset | null;
+  busyAction: string | null;
+  completedPreprocessingRuns: PreprocessingRun[];
+  epochConfig: typeof DEFAULT_EPOCH_CONFIG;
+  epochRuns: LoadState<EpochRun[]>;
+  onEpochConfigChange: (config: typeof DEFAULT_EPOCH_CONFIG) => void;
+  onStartEpochRun: () => void;
+}) {
+  const disabled = !activeDataset || completedPreprocessingRuns.length === 0;
+  const configError = getEpochConfigError(epochConfig);
+
+  return (
+    <div className="intake-stack">
+      <section className="tool-section" aria-labelledby="epoch-config-title">
+        <div className="tool-section-header">
+          <span>05</span>
+          <h3 id="epoch-config-title">Epoch Run</h3>
+          <small>{disabled ? "blocked" : "ready"}</small>
+        </div>
+        {completedPreprocessingRuns.length === 0 ? (
+          <p className="muted">No completed preprocessing runs yet.</p>
+        ) : null}
+        {configError ? <p className="error-text">{configError}</p> : null}
+        <div className="epoch-grid">
+          <label className="wide-field">
+            <span>Preprocessing Run</span>
+            <select
+              data-testid="epoch-preprocessing-run-select"
+              disabled={disabled}
+              onChange={(event) =>
+                onEpochConfigChange({
+                  ...epochConfig,
+                  preprocessing_run_id: event.target.value,
+                })
+              }
+              value={epochConfig.preprocessing_run_id}
+            >
+              <option value="">Select completed run</option>
+              {completedPreprocessingRuns.map((run) => (
+                <option key={run.run_id} value={run.run_id}>
+                  {run.run_id}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Condition Field</span>
+            <select
+              data-testid="epoch-condition-field-select"
+              disabled={disabled}
+              onChange={(event) =>
+                onEpochConfigChange({
+                  ...epochConfig,
+                  condition_field: event.target.value,
+                })
+              }
+              value={epochConfig.condition_field}
+            >
+              {CONDITION_FIELDS.map((field) => (
+                <option key={field} value={field}>
+                  {field}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>tmin s</span>
+            <input
+              data-testid="epoch-tmin-input"
+              disabled={disabled}
+              onChange={(event) =>
+                onEpochConfigChange({
+                  ...epochConfig,
+                  tmin_seconds: event.target.value,
+                })
+              }
+              step="0.01"
+              type="number"
+              value={epochConfig.tmin_seconds}
+            />
+          </label>
+          <label>
+            <span>tmax s</span>
+            <input
+              data-testid="epoch-tmax-input"
+              disabled={disabled}
+              onChange={(event) =>
+                onEpochConfigChange({
+                  ...epochConfig,
+                  tmax_seconds: event.target.value,
+                })
+              }
+              step="0.01"
+              type="number"
+              value={epochConfig.tmax_seconds}
+            />
+          </label>
+          <label>
+            <span>Baseline Start</span>
+            <input
+              disabled={disabled || !epochConfig.baseline_enabled}
+              onChange={(event) =>
+                onEpochConfigChange({
+                  ...epochConfig,
+                  baseline_start_seconds: event.target.value,
+                })
+              }
+              step="0.01"
+              type="number"
+              value={epochConfig.baseline_start_seconds}
+            />
+          </label>
+          <label>
+            <span>Baseline End</span>
+            <input
+              disabled={disabled || !epochConfig.baseline_enabled}
+              onChange={(event) =>
+                onEpochConfigChange({
+                  ...epochConfig,
+                  baseline_end_seconds: event.target.value,
+                })
+              }
+              step="0.01"
+              type="number"
+              value={epochConfig.baseline_end_seconds}
+            />
+          </label>
+          <label>
+            <span>Reject EEG uV</span>
+            <input
+              data-testid="epoch-reject-input"
+              disabled={disabled}
+              min="0.1"
+              onChange={(event) =>
+                onEpochConfigChange({
+                  ...epochConfig,
+                  reject_eeg_uv: event.target.value,
+                })
+              }
+              placeholder="Optional"
+              step="0.1"
+              type="number"
+              value={epochConfig.reject_eeg_uv}
+            />
+          </label>
+          <label className="checkbox-field">
+            <input
+              checked={epochConfig.baseline_enabled}
+              disabled={disabled}
+              onChange={(event) =>
+                onEpochConfigChange({
+                  ...epochConfig,
+                  baseline_enabled: event.target.checked,
+                })
+              }
+              type="checkbox"
+            />
+            <span>Baseline</span>
+          </label>
+        </div>
+        <button
+          className="primary-button"
+          data-testid="start-epoch-button"
+          disabled={disabled || Boolean(configError) || busyAction === "epoch"}
+          onClick={onStartEpochRun}
+          type="button"
+        >
+          Start Epoching
+        </button>
+      </section>
+      <EpochRunList runs={epochRuns} />
+    </div>
+  );
+}
+
+function EpochRunList({ runs }: { runs: LoadState<EpochRun[]> }) {
+  if (runs.status === "loading" || runs.status === "idle") {
+    return <p className="muted">Loading epoch runs...</p>;
+  }
+
+  if (runs.status === "error") {
+    return <p className="error-text">{runs.error}</p>;
+  }
+
+  const runData = runs.data ?? [];
+  if (runData.length === 0) {
+    return <p className="muted">No epoch runs yet.</p>;
+  }
+
+  return (
+    <div className="run-list" data-testid="epoch-runs">
+      {runData.map((run) => (
+        <div className="run-row" key={run.run_id}>
+          <div>
+            <strong>{run.run_id}</strong>
+            <small>{run.output_path ?? "No output file"}</small>
+          </div>
+          <div className="run-meta">
+            <span>{run.status}</span>
+            <span>{formatEpochMetadata(run.output_metadata)}</span>
+            <span>{run.config.condition_field}</span>
+          </div>
+          <ConditionCountSummary metadata={run.output_metadata} />
+          {run.warnings.length > 0 ? (
+            <p className="muted">{run.warnings.join(" ")}</p>
+          ) : null}
+          {run.errors.length > 0 ? (
+            <p className="error-text">{run.errors.join(" ")}</p>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ConditionCountSummary({
+  metadata,
+}: {
+  metadata: Record<string, MetadataValue>;
+}) {
+  const conditionCount = metadata.condition_count;
+  const epochCount = metadata.epoch_count;
+  const droppedCount = metadata.dropped_epoch_count;
+  const usedEventCount = metadata.event_count_used;
+
+  if (
+    typeof conditionCount !== "number" &&
+    typeof epochCount !== "number" &&
+    typeof droppedCount !== "number" &&
+    typeof usedEventCount !== "number"
+  ) {
+    return null;
+  }
+
+  return (
+    <dl className="run-summary-grid">
+      <div>
+        <dt>Conditions</dt>
+        <dd>{typeof conditionCount === "number" ? conditionCount : "-"}</dd>
+      </div>
+      <div>
+        <dt>Used Events</dt>
+        <dd>{typeof usedEventCount === "number" ? usedEventCount : "-"}</dd>
+      </div>
+      <div>
+        <dt>Epochs</dt>
+        <dd>{typeof epochCount === "number" ? epochCount : "-"}</dd>
+      </div>
+      <div>
+        <dt>Dropped</dt>
+        <dd>{typeof droppedCount === "number" ? droppedCount : "-"}</dd>
+      </div>
+    </dl>
+  );
+}
+
 function EventPreviewTable({ preview }: { preview: EventPreview }) {
   const columns = preview.columns.slice(0, 6);
 
@@ -2000,6 +2435,22 @@ function normalizePreprocessingConfig(
   };
 }
 
+function normalizeEpochConfig(config: typeof DEFAULT_EPOCH_CONFIG): EpochConfig {
+  return {
+    preprocessing_run_id: config.preprocessing_run_id,
+    condition_field: config.condition_field,
+    tmin_seconds: Number(config.tmin_seconds),
+    tmax_seconds: Number(config.tmax_seconds),
+    baseline_start_seconds: config.baseline_enabled
+      ? parseOptionalNumber(config.baseline_start_seconds)
+      : null,
+    baseline_end_seconds: config.baseline_enabled
+      ? parseOptionalNumber(config.baseline_end_seconds)
+      : null,
+    reject_eeg_uv: parseOptionalNumber(config.reject_eeg_uv),
+  };
+}
+
 function getPreprocessingConfigError(
   config: typeof DEFAULT_PREPROCESSING_CONFIG,
 ): string | null {
@@ -2038,6 +2489,63 @@ function getPreprocessingConfigError(
   return null;
 }
 
+function getEpochConfigError(config: typeof DEFAULT_EPOCH_CONFIG): string | null {
+  if (!config.preprocessing_run_id) {
+    return "Select a completed preprocessing run.";
+  }
+  if (
+    !CONDITION_FIELDS.includes(
+      config.condition_field as (typeof CONDITION_FIELDS)[number],
+    )
+  ) {
+    return "Select a supported condition field.";
+  }
+
+  const tmin = parseOptionalNumber(config.tmin_seconds);
+  const tmax = parseOptionalNumber(config.tmax_seconds);
+  const baselineStart = config.baseline_enabled
+    ? parseOptionalNumber(config.baseline_start_seconds)
+    : null;
+  const baselineEnd = config.baseline_enabled
+    ? parseOptionalNumber(config.baseline_end_seconds)
+    : null;
+  const reject = parseOptionalNumber(config.reject_eeg_uv);
+
+  if (tmin === null || !Number.isFinite(tmin)) {
+    return "tmin must be a number.";
+  }
+  if (tmax === null || !Number.isFinite(tmax)) {
+    return "tmax must be a number.";
+  }
+  if (tmin >= tmax) {
+    return "tmin must be lower than tmax.";
+  }
+  if (tmax <= 0) {
+    return "tmax must be greater than 0.";
+  }
+
+  if (config.baseline_enabled) {
+    if (baselineStart === null || baselineEnd === null) {
+      return "Baseline start and end are required when baseline is enabled.";
+    }
+    if (!Number.isFinite(baselineStart) || !Number.isFinite(baselineEnd)) {
+      return "Baseline values must be numbers.";
+    }
+    if (baselineStart > baselineEnd) {
+      return "Baseline start must be lower than or equal to baseline end.";
+    }
+    if (baselineStart < tmin || baselineEnd > tmax) {
+      return "Baseline must be inside the epoch window.";
+    }
+  }
+
+  if (reject !== null && (!Number.isFinite(reject) || reject <= 0)) {
+    return "Reject EEG must be greater than 0 uV.";
+  }
+
+  return null;
+}
+
 function parseOptionalNumber(value: string): number | null {
   if (!value.trim()) {
     return null;
@@ -2056,6 +2564,18 @@ function formatRunMetadata(metadata: Record<string, MetadataValue>): string {
     typeof samplingRate === "number" ? `${samplingRate.toFixed(1)} Hz` : null,
     typeof channels === "number" ? `${channels} ch` : null,
     typeof duration === "number" ? `${duration.toFixed(1)} s` : null,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" / ") : "Metadata pending";
+}
+
+function formatEpochMetadata(metadata: Record<string, MetadataValue>): string {
+  const conditionCount = metadata.condition_count;
+  const epochCount = metadata.epoch_count;
+  const droppedCount = metadata.dropped_epoch_count;
+  const parts = [
+    typeof conditionCount === "number" ? `${conditionCount} cond` : null,
+    typeof epochCount === "number" ? `${epochCount} epochs` : null,
+    typeof droppedCount === "number" ? `${droppedCount} dropped` : null,
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(" / ") : "Metadata pending";
 }

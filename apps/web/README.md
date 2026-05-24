@@ -40,6 +40,11 @@ npm run e2e:phase2
 
 The smoke starts the API and web dev servers, uploads fixture EEG/events through the UI, validates the dataset, starts preprocessing, and waits for a completed run.
 
+Phase 3 epoch controls use completed preprocessing runs as inputs. The workbench
+lets users choose the condition field, epoch window, baseline, and optional EEG
+rejection threshold, then polls epoch status and displays compact
+condition/epoch/drop counts.
+
 Expected responsibilities:
 
 - upload or select EEG datasets

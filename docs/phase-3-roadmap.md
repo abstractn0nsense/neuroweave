@@ -706,6 +706,10 @@ Contract notes:
 Purpose: let the user create and monitor epoch runs without coupling the UI to
 temporary backend details.
 
+Status: implemented in the research workbench with completed preprocessing run
+selection, epoch config controls, run polling, and compact condition/epoch count
+display.
+
 Implementation steps:
 
 1. Extend frontend types.
