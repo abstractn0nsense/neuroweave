@@ -101,6 +101,7 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert payload["config"]["resample_hz"] == 50.0
     assert payload["finished_at_utc"] is not None
     assert payload["errors"] == []
+    assert any("does not conform to MNE naming conventions" in warning for warning in payload["warnings"])
     assert Path(payload["output_path"]).is_file()
     metadata = payload["output_metadata"]
     assert metadata["input_file_id"]
@@ -124,6 +125,39 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert get_response.json() == payload
     assert list_response.status_code == 200
     assert list_response.json()["runs"] == [payload]
+
+
+def test_create_preprocessing_run_persists_failed_run_details(
+    tmp_path,
+    monkeypatch,
+):
+    client = _client_with_dataset(tmp_path, monkeypatch)
+    _upload_eeg(client)
+    _upload_and_map_events(client)
+
+    def fail_preprocessing(*args, **kwargs):
+        raise api_main.PreprocessingError(
+            "synthetic preprocessing failure",
+            processing_warnings=["captured warning before failure"],
+        )
+
+    monkeypatch.setattr(api_main, "preprocess_raw_eeg", fail_preprocessing)
+
+    response = client.post(
+        "/datasets/dataset-001/preprocessing-runs",
+        json={"reference": "average"},
+    )
+    list_response = client.get("/datasets/dataset-001/preprocessing-runs")
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "synthetic preprocessing failure"
+    assert list_response.status_code == 200
+    runs = list_response.json()["runs"]
+    assert len(runs) == 1
+    assert runs[0]["status"] == "failed"
+    assert runs[0]["warnings"] == ["captured warning before failure"]
+    assert runs[0]["errors"] == ["synthetic preprocessing failure"]
+    assert runs[0]["output_metadata"]["input_file_id"]
 
 
 def test_create_preprocessing_run_rejects_invalid_filter_order(

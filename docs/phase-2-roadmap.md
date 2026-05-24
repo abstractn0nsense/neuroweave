@@ -127,3 +127,13 @@ Implemented provenance:
 - output path, size, checksum, file format, channel count, sampling rate, and duration are stored
 - MNE version is stored with the completed run metadata
 - UI run summaries read the output metadata keys while remaining compatible with older run metadata
+
+## Phase 2.6: Warning And Error Capture
+
+Implemented capture:
+
+- MNE/Python warnings emitted while reading, preprocessing, and saving raw data are captured
+- captured warnings are persisted on completed preprocessing runs
+- failed preprocessing runs persist any warnings collected before failure
+- failed preprocessing runs remain queryable through dataset run listing
+- UI run rows already separate warning text from error text

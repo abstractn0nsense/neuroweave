@@ -57,6 +57,8 @@ Preprocessing config validation rejects invalid filter ordering, cutoff frequenc
 
 Completed preprocessing runs store provenance in `output_metadata`, including input file identity, paths, checksums, size, input/output signal metadata, output checksum, and MNE version. The run `config` field is the persisted preprocessing configuration snapshot.
 
+Preprocessing runs also persist captured MNE/Python warnings in `warnings`. Failed runs persist `errors`, retain input provenance, and remain available through the run lookup endpoints.
+
 Expected responsibilities:
 
 - expose dataset, workflow, job, and result endpoints

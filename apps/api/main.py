@@ -678,6 +678,7 @@ def create_preprocessing_run(
             run,
             status=PreprocessingRunStatus.FAILED,
             finished_at_utc=_utc_now_iso(),
+            warnings=exc.processing_warnings,
             errors=[str(exc)],
         )
         run_repository.save_preprocessing_run(failed_run)
