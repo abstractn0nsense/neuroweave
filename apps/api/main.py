@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from contextlib import asynccontextmanager
 import hashlib
 import json
+import os
 import shutil
 import sys
 from uuid import uuid4
@@ -55,10 +56,26 @@ from eeg_io.registry import JsonRegistryRepository, JsonRunRepository  # noqa: E
 from eeg_io.readers import EegMetadataReadError, read_eeg_metadata  # noqa: E402
 
 
-SAMPLE_DATASET_DIR = REPO_ROOT / "data" / "raw" / "samples"
-UPLOADS_DIR = REPO_ROOT / "data" / "raw" / "uploads"
-RUNS_DIR = REPO_ROOT / "data" / "runs"
-PROCESSED_DIR = REPO_ROOT / "data" / "processed"
+def _path_from_env(name: str, default: Path) -> Path:
+    value = os.environ.get(name)
+    if not value:
+        return default
+    return Path(value).expanduser().resolve()
+
+
+SAMPLE_DATASET_DIR = _path_from_env(
+    "NEUROWEAVE_SAMPLE_DATASET_DIR",
+    REPO_ROOT / "data" / "raw" / "samples",
+)
+UPLOADS_DIR = _path_from_env(
+    "NEUROWEAVE_UPLOADS_DIR",
+    REPO_ROOT / "data" / "raw" / "uploads",
+)
+RUNS_DIR = _path_from_env("NEUROWEAVE_RUNS_DIR", REPO_ROOT / "data" / "runs")
+PROCESSED_DIR = _path_from_env(
+    "NEUROWEAVE_PROCESSED_DIR",
+    REPO_ROOT / "data" / "processed",
+)
 registry_repository = JsonRegistryRepository(UPLOADS_DIR)
 run_repository = JsonRunRepository(RUNS_DIR)
 
@@ -328,7 +345,12 @@ app = FastAPI(title="NeuroWeave API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

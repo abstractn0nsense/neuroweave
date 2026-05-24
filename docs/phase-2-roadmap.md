@@ -225,6 +225,15 @@ Implemented diagnostic outputs:
 - diagnostic JSON includes before/after sampling metadata, config snapshots, and captured warnings
 - artifact rejection is explicitly reported as disabled until a later analysis phase implements it
 
-Remaining `Phase 2.0.n` items:
+### Phase 2.0.6: Browser E2E Smoke
 
-- `Phase 2.0.6`: browser E2E smoke test for upload, validation, preprocessing, and completed-run display
+Implemented browser smoke coverage:
+
+- Playwright opens the web app against a real local API server
+- the smoke creates a project, experiment, and dataset through the UI
+- the smoke uploads fixture EEG and event files through browser file inputs
+- the smoke saves event mapping, validates the dataset, starts preprocessing, and waits for a completed run row
+- E2E data is isolated under `data/cache/phase2-e2e`
+- CI installs Chromium and runs `npm run e2e:phase2`
+
+Phase 2.0.n is now complete.

@@ -19,6 +19,8 @@ build/
 coverage/
 data/
 *.tsbuildinfo
+test-results/
+playwright-report/
 
 # Logs
 *.log

@@ -949,6 +949,7 @@ function StudySetup({
         <label>
           <span>Name</span>
           <input
+            data-testid="project-name-input"
             onChange={(event) =>
               onProjectFormChange({ ...projectForm, name: event.target.value })
             }
@@ -973,6 +974,7 @@ function StudySetup({
         </label>
         <button
           className="secondary-button"
+          data-testid="create-project-button"
           disabled={busyAction === "project"}
           type="submit"
         >
@@ -983,6 +985,7 @@ function StudySetup({
       <label>
         <span>Selected Project</span>
         <select
+          data-testid="selected-project-select"
           onChange={(event) => onSelectProject(event.target.value)}
           value={selectedProjectId}
         >
@@ -1001,6 +1004,7 @@ function StudySetup({
         <label>
           <span>Name</span>
           <input
+            data-testid="experiment-name-input"
             onChange={(event) =>
               onExperimentFormChange({
                 ...experimentForm,
@@ -1028,6 +1032,7 @@ function StudySetup({
         </label>
         <button
           className="secondary-button"
+          data-testid="create-experiment-button"
           disabled={busyAction === "experiment" || !selectedProjectId}
           type="submit"
         >
@@ -1038,6 +1043,7 @@ function StudySetup({
       <label>
         <span>Selected Experiment</span>
         <select
+          data-testid="selected-experiment-select"
           disabled={!selectedProjectId}
           onChange={(event) => onSelectExperiment(event.target.value)}
           value={selectedExperimentId}
@@ -1093,6 +1099,7 @@ function DatasetSection({
         <label>
           <span>Participant</span>
           <input
+            data-testid="dataset-participant-input"
             disabled={disabled}
             onChange={(event) =>
               onDatasetFormChange({
@@ -1108,6 +1115,7 @@ function DatasetSection({
         <label>
           <span>Group</span>
           <input
+            data-testid="dataset-session-input"
             disabled={disabled}
             onChange={(event) =>
               onDatasetFormChange({
@@ -1137,6 +1145,7 @@ function DatasetSection({
         </label>
         <button
           className="primary-button"
+          data-testid="create-dataset-button"
           disabled={disabled || busyAction === "dataset"}
           type="submit"
         >
@@ -1232,12 +1241,14 @@ function IntakeSection({
         <div className="upload-group">
           <h3>EEG Recording</h3>
           <input
+            data-testid="eeg-file-input"
             disabled={disabled}
             onChange={(event) => onEegFileChange(event.target.files?.[0] ?? null)}
             type="file"
           />
           <button
             className="secondary-button"
+            data-testid="upload-eeg-button"
             disabled={disabled || !eegFile || busyAction === "eeg-upload"}
             onClick={onUploadEeg}
             type="button"
@@ -1249,12 +1260,14 @@ function IntakeSection({
           <h3>Event Log</h3>
           <input
             accept=".csv,.tsv,text/csv,text/tab-separated-values"
+            data-testid="event-file-input"
             disabled={disabled}
             onChange={(event) => onEventFileChange(event.target.files?.[0] ?? null)}
             type="file"
           />
           <button
             className="secondary-button"
+            data-testid="upload-events-button"
             disabled={disabled || !eventFile || busyAction === "event-upload"}
             onClick={onUploadEvent}
             type="button"
@@ -1276,6 +1289,7 @@ function IntakeSection({
                     {field.required ? " *" : ""}
                   </span>
                   <select
+                    data-testid={`mapping-${field.key}-select`}
                     onChange={(event) =>
                       onMappingChange({
                         ...mapping,
@@ -1296,6 +1310,7 @@ function IntakeSection({
             </div>
             <button
               className="primary-button"
+              data-testid="save-mapping-button"
               disabled={!mapping.onset_seconds || busyAction === "event-mapping"}
               onClick={onSubmitEventMapping}
               type="button"
@@ -1313,6 +1328,7 @@ function IntakeSection({
       <div className="validation-bar">
         <button
           className="primary-button"
+          data-testid="validate-dataset-button"
           disabled={disabled || busyAction === "validation"}
           onClick={onValidate}
           type="button"
@@ -1391,6 +1407,7 @@ function IntakeSection({
           <label>
             <span>Resample Hz</span>
             <input
+              data-testid="resample-hz-input"
               disabled={!canContinue}
               min="0.1"
               onChange={(event) =>
@@ -1408,6 +1425,7 @@ function IntakeSection({
           <label>
             <span>Reference</span>
             <select
+              data-testid="reference-select"
               disabled={!canContinue}
               onChange={(event) =>
                 onPreprocessingConfigChange({
@@ -1424,6 +1442,7 @@ function IntakeSection({
         </div>
         <button
           className="primary-button"
+          data-testid="start-preprocessing-button"
           disabled={!canContinue || Boolean(configError) || busyAction === "preprocessing"}
           onClick={onBeginPreprocessing}
           type="button"
@@ -1460,7 +1479,7 @@ function PreprocessingRunList({
   }
 
   return (
-    <div className="run-list">
+    <div className="run-list" data-testid="preprocessing-runs">
       {runData.map((run) => (
         <div className="run-row" key={run.run_id}>
           <div>

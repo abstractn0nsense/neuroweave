@@ -53,8 +53,9 @@ Phase 2 is suitable to merge as an MVP, but these limitations should be handled 
    - Completed runs now write preprocessing summaries, filter reports, and artifact summaries.
    - Diagnostic plots and richer artifact detection remain future analysis work.
 
-5. UI coverage is build-level only.
-   - TypeScript build catches regressions, but there is no browser E2E test for the full upload-to-preprocessing workflow.
+5. UI coverage is smoke-level only.
+   - TypeScript build and a browser E2E smoke cover the main upload-to-preprocessing workflow.
+   - Broader browser coverage for edge cases should be added as workflows expand.
 
 ## Phase 2.0.n Resolution Pipeline
 
@@ -89,8 +90,10 @@ Recommended next hardening path:
    - Optional HTML diagnostics remain future polish.
 
 6. Phase 2.0.6: Add browser E2E smoke coverage.
-   - Use a small fixture flow: create project, create experiment, create dataset, upload EEG/events, validate, start preprocessing, observe completed run.
-   - Run it locally before release and later in CI if runtime cost is acceptable.
+   - Status: implemented.
+   - The smoke creates project, experiment, and dataset records through the web UI.
+   - It uploads fixture EEG/events, saves event mapping, validates, starts preprocessing, and observes a completed run.
+   - CI installs Chromium and runs the smoke with isolated E2E data directories.
 
 ## Recommendation
 
