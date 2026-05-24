@@ -165,9 +165,11 @@ type NoticeState = {
 } | null;
 
 type MappingKey = keyof EventColumnMapping;
+type ThemeMode = "dark" | "light";
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
+const THEME_STORAGE_KEY = "neuroweave-theme";
 
 const MAPPING_FIELDS: { key: MappingKey; label: string; required?: boolean }[] = [
   { key: "onset_seconds", label: "Onset", required: true },
@@ -198,6 +200,7 @@ const DEFAULT_PREPROCESSING_CONFIG = {
 };
 
 function App() {
+  const [theme, setTheme] = useState<ThemeMode>(getInitialTheme);
   const [health, setHealth] = useState<LoadState<HealthResponse>>({
     status: "idle",
     data: null,
@@ -287,6 +290,11 @@ function App() {
     () => samples.data?.find((sample) => sample.id === selectedSampleId) ?? null,
     [samples.data, selectedSampleId],
   );
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+  }, [theme]);
 
   useEffect(() => {
     void refreshWorkspace();
@@ -769,11 +777,36 @@ function App() {
         <header className="workspace-header">
           <div>
             <p className="eyebrow">NeuroWeave</p>
-            <h1 id="workspace-title">EEG ingestion workspace</h1>
+            <h1 id="workspace-title">EEG research workbench</h1>
+            <p className="subtle">
+              {activeDataset
+                ? `${activeDataset.dataset_id} / ${activeDataset.status}`
+                : "No active dataset"}
+            </p>
           </div>
-          <button className="primary-button" type="button" onClick={refreshWorkspace}>
-            Refresh
-          </button>
+          <div className="workspace-actions">
+            <div className="theme-toggle" aria-label="Theme">
+              <button
+                aria-pressed={theme === "dark"}
+                className="theme-toggle-button"
+                onClick={() => setTheme("dark")}
+                type="button"
+              >
+                Dark
+              </button>
+              <button
+                aria-pressed={theme === "light"}
+                className="theme-toggle-button"
+                onClick={() => setTheme("light")}
+                type="button"
+              >
+                Light
+              </button>
+            </div>
+            <button className="primary-button" type="button" onClick={refreshWorkspace}>
+              Refresh
+            </button>
+          </div>
         </header>
 
         <div className="status-strip">
@@ -1913,6 +1946,17 @@ function getProjectCountLabel(projects: LoadState<Project[]>): string {
   }
 
   return "Loading";
+}
+
+function getInitialTheme(): ThemeMode {
+  const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+  if (storedTheme === "dark" || storedTheme === "light") {
+    return storedTheme;
+  }
+
+  return window.matchMedia("(prefers-color-scheme: light)").matches
+    ? "light"
+    : "dark";
 }
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
