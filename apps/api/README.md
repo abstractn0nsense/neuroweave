@@ -29,6 +29,17 @@ GET /datasets/samples/{id}/metadata
 
 The API reads app-visible sample EEG files from `data/raw/samples/`. Supported Phase 0 formats are FIF, EDF, BDF, BrainVision VHDR, and EEGLAB SET.
 
+Phase 1 project and experiment endpoints:
+
+```text
+POST /projects
+GET /projects
+POST /projects/{project_id}/experiments
+GET /projects/{project_id}/experiments
+```
+
+These endpoints write through `eeg_io.registry.JsonRegistryRepository` to the local JSON registry under `data/raw/uploads/`.
+
 Expected responsibilities:
 
 - expose dataset, workflow, job, and result endpoints
