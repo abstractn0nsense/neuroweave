@@ -193,7 +193,19 @@ Implemented cancellation hardening:
 
 Remaining `Phase 2.0.n` items:
 
-- `Phase 2.0.3`: cancellable subprocess execution for hard mid-MNE interruption
+### Phase 2.0.3: Cancellable Subprocess Execution
+
+Implemented subprocess execution:
+
+- each preprocessing run executes MNE work in a spawned child process
+- the local worker thread monitors the child process while polling run cancellation state
+- `cancelling` or `cancelled` status terminates the child process
+- if the child process does not exit promptly, it is killed
+- subprocess results are returned through a process queue and persisted by the API worker
+- failed subprocesses persist warnings and errors on the run
+
+Remaining `Phase 2.0.n` items:
+
 - `Phase 2.0.4`: JSON file locking, then SQLite-backed registries
 - `Phase 2.0.5`: preprocessing summaries, filter reports, artifact summaries, and optional HTML diagnostics
 - `Phase 2.0.6`: browser E2E smoke test for upload, validation, preprocessing, and completed-run display

@@ -185,13 +185,17 @@ def test_create_preprocessing_run_persists_failed_run_details(
     _upload_eeg(client)
     _upload_and_map_events(client)
 
-    def fail_preprocessing(*args, **kwargs):
+    def fail_preprocessing_subprocess(*args, **kwargs):
         raise api_main.PreprocessingError(
             "synthetic preprocessing failure",
             processing_warnings=["captured warning before failure"],
         )
 
-    monkeypatch.setattr(api_main, "preprocess_raw_eeg", fail_preprocessing)
+    monkeypatch.setattr(
+        api_main,
+        "_run_preprocessing_subprocess",
+        fail_preprocessing_subprocess,
+    )
 
     response = client.post(
         "/datasets/dataset-001/preprocessing-runs",
@@ -259,7 +263,7 @@ def test_preprocessing_run_cancel_checkpoint_marks_cancelled(
     _upload_eeg(client)
     _upload_and_map_events(client)
 
-    def cancel_during_preprocessing(*, should_cancel, **kwargs):
+    def cancel_during_preprocessing_subprocess(run_id, **kwargs):
         run = api_main.run_repository.list_preprocessing_runs()[0]
         api_main.run_repository.save_preprocessing_run(
             replace(
@@ -269,13 +273,17 @@ def test_preprocessing_run_cancel_checkpoint_marks_cancelled(
                 warnings=["Cancellation requested; preprocessing will stop at the next checkpoint."],
             )
         )
-        assert should_cancel()
+        assert api_main._is_cancellation_requested(run_id)
         raise api_main.PreprocessingError(
             "Preprocessing cancelled.",
-            processing_warnings=["Cancellation observed at preprocessing checkpoint."],
+            processing_warnings=["Cancellation terminated preprocessing subprocess."],
         )
 
-    monkeypatch.setattr(api_main, "preprocess_raw_eeg", cancel_during_preprocessing)
+    monkeypatch.setattr(
+        api_main,
+        "_run_preprocessing_subprocess",
+        cancel_during_preprocessing_subprocess,
+    )
 
     response = client.post(
         "/datasets/dataset-001/preprocessing-runs",
@@ -286,7 +294,7 @@ def test_preprocessing_run_cancel_checkpoint_marks_cancelled(
     assert payload["status"] == "cancelled"
     assert payload["cancel_requested_at_utc"] == "2026-05-24T00:00:00+00:00"
     assert payload["errors"] == ["Preprocessing cancelled."]
-    assert "Cancellation observed at preprocessing checkpoint." in payload["warnings"]
+    assert "Cancellation terminated preprocessing subprocess." in payload["warnings"]
 
 
 def test_preprocessing_worker_recovers_pending_runs(tmp_path, monkeypatch):

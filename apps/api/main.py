@@ -1,5 +1,6 @@
 from pathlib import Path
-from queue import Queue
+from multiprocessing import get_context
+from queue import Empty, Queue
 from threading import Lock, Thread
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -41,7 +42,7 @@ from eeg_core.domain import (  # noqa: E402
     ValidationSeverity,
     validate_ingestion_dataset,
 )
-from eeg_processing import PreprocessingError, preprocess_raw_eeg  # noqa: E402
+from eeg_processing import PreprocessingError, run_preprocessing_job  # noqa: E402
 from eeg_io.datasets import find_eeg_file_by_id, list_eeg_files  # noqa: E402
 from eeg_io.event_logs import (  # noqa: E402
     EventLogNormalizationError,
@@ -1007,14 +1008,14 @@ def _execute_preprocessing_run(run_id: str) -> None:
     )
     run_repository.save_preprocessing_run(running_run)
 
-    output_file_path = Path(output_path)
     try:
-        metadata = preprocess_raw_eeg(
-            input_path=Path(input_path),
-            output_path=output_file_path,
+        metadata = _run_preprocessing_subprocess(
+            run_id=run_id,
+            input_path=input_path,
+            output_path=output_path,
             config=run.config,
-            should_cancel=lambda: _is_cancellation_requested(run_id),
         )
+        output_file_path = Path(output_path)
         completed_run = replace(
             running_run,
             status=PreprocessingRunStatus.COMPLETED,
@@ -1063,6 +1064,60 @@ def _execute_preprocessing_run(run_id: str) -> None:
             errors=[str(exc)],
         )
         run_repository.save_preprocessing_run(failed_run)
+
+
+def _run_preprocessing_subprocess(
+    run_id: str,
+    input_path: str,
+    output_path: str,
+    config: PreprocessingConfig,
+) -> dict:
+    context = get_context("spawn")
+    result_queue = context.Queue()
+    process = context.Process(
+        target=run_preprocessing_job,
+        args=(input_path, output_path, config, result_queue),
+    )
+    process.start()
+
+    while process.is_alive():
+        process.join(timeout=0.1)
+        if _is_cancellation_requested(run_id):
+            process.terminate()
+            process.join(timeout=5)
+            if process.is_alive():
+                process.kill()
+                process.join()
+            raise PreprocessingError(
+                "Preprocessing cancelled.",
+                processing_warnings=[
+                    "Cancellation terminated preprocessing subprocess."
+                ],
+            )
+
+    try:
+        result = result_queue.get_nowait()
+    except Empty as exc:
+        if process.exitcode == 0:
+            raise PreprocessingError(
+                "Preprocessing subprocess exited without a result."
+            ) from exc
+        raise PreprocessingError(
+            f"Preprocessing subprocess exited with code {process.exitcode}."
+        ) from exc
+
+    if result.get("status") == "completed":
+        metadata = result.get("metadata")
+        if isinstance(metadata, dict):
+            return metadata
+        raise PreprocessingError("Preprocessing subprocess returned invalid metadata.")
+
+    raise PreprocessingError(
+        str(result.get("error") or "Preprocessing subprocess failed."),
+        processing_warnings=[
+            str(warning) for warning in result.get("warnings", [])
+        ],
+    )
 
 
 def _is_cancellation_requested(run_id: str) -> bool:

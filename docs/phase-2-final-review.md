@@ -66,11 +66,12 @@ Recommended next hardening path:
    - Status: implemented for cooperative checkpoints.
    - Explicit checkpoints now run around read, filter, notch, reference, resample, and save steps.
    - `cancel_requested_at_utc` is persisted with run metadata.
-   - For hard mid-MNE interruption, run jobs in cancellable worker subprocesses in a later hardening step.
+   - For hard mid-MNE interruption, Phase 2.0.3 adds cancellable subprocess execution.
 
 3. Phase 2.0.3: Add cancellable subprocess execution.
-   - Execute each preprocessing run in a child process.
-   - Terminate the child process on cancellation when a long MNE call does not reach checkpoints quickly enough.
+   - Status: implemented.
+   - Each preprocessing run executes MNE work in a spawned child process.
+   - The local worker terminates or kills the child process when cancellation is requested.
 
 4. Phase 2.0.4: Strengthen persistence.
    - Add file locking for JSON writes as a short-term fix.
