@@ -29,6 +29,8 @@ from eeg_core.domain import (  # noqa: E402
     Dataset as IngestionDataset,
     DatasetStatus,
     EpochConfig,
+    EpochRun,
+    EpochRunStatus,
     EventColumnMapping,
     EventLog,
     Experiment,
@@ -314,6 +316,36 @@ class PreprocessingRunResponse(BaseModel):
 
 class PreprocessingRunsResponse(BaseModel):
     runs: list[PreprocessingRunResponse]
+
+
+class EpochConfigPayload(BaseModel):
+    preprocessing_run_id: str
+    condition_field: str
+    tmin_seconds: float
+    tmax_seconds: float
+    baseline_start_seconds: float | None = None
+    baseline_end_seconds: float | None = None
+    reject_eeg_uv: float | None = None
+
+
+class EpochRunResponse(BaseModel):
+    run_id: str
+    dataset_id: str
+    run_kind: str
+    schema_version: int
+    config: EpochConfigPayload
+    status: str
+    started_at_utc: str | None
+    finished_at_utc: str | None
+    cancel_requested_at_utc: str | None
+    output_path: str | None
+    output_metadata: dict[str, str | int | float | bool | None]
+    warnings: list[str]
+    errors: list[str]
+
+
+class EpochRunsResponse(BaseModel):
+    runs: list[EpochRunResponse]
 
 
 class CreateProjectRequest(BaseModel):
@@ -826,6 +858,87 @@ def list_dataset_preprocessing_runs(dataset_id: str) -> PreprocessingRunsRespons
     )
 
 
+@app.post(
+    "/datasets/{dataset_id}/epoch-runs",
+    response_model=EpochRunResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_epoch_run(
+    dataset_id: str,
+    config_payload: EpochConfigPayload,
+) -> EpochRunResponse:
+    dataset = registry_repository.get_dataset(dataset_id)
+    if dataset is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    preprocessing_run = run_repository.get_preprocessing_run(
+        config_payload.preprocessing_run_id
+    )
+    if preprocessing_run is None:
+        raise HTTPException(status_code=404, detail="Preprocessing run not found")
+
+    event_log = registry_repository.get_event_log(dataset_id)
+    recording = registry_repository.get_recording(dataset_id)
+    config = EpochConfig(**config_payload.model_dump())
+    config_errors, config_warnings = _validate_epoch_config(
+        config=config,
+        dataset=dataset,
+        preprocessing_run=preprocessing_run,
+        event_log=event_log,
+        recording=recording,
+    )
+    if config_errors:
+        raise HTTPException(status_code=422, detail=config_errors)
+
+    run_id = _new_id("epoch")
+    output_path = _epoch_output_path(dataset_id, run_id)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    run = EpochRun(
+        run_id=run_id,
+        dataset_id=dataset_id,
+        config=config,
+        status=EpochRunStatus.PENDING,
+        output_path=str(output_path),
+        output_metadata=_epoch_input_provenance(
+            preprocessing_run=preprocessing_run,
+            event_log=event_log,
+            recording=recording,
+        ),
+        warnings=config_warnings,
+    )
+    run_repository.save_epoch_run(run)
+    return _epoch_run_response(run)
+
+
+@app.get(
+    "/epoch-runs/{run_id}",
+    response_model=EpochRunResponse,
+)
+def get_epoch_run(run_id: str) -> EpochRunResponse:
+    run = run_repository.get_epoch_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Epoch run not found")
+
+    return _epoch_run_response(run)
+
+
+@app.get(
+    "/datasets/{dataset_id}/epoch-runs",
+    response_model=EpochRunsResponse,
+)
+def list_dataset_epoch_runs(dataset_id: str) -> EpochRunsResponse:
+    if registry_repository.get_dataset(dataset_id) is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    return EpochRunsResponse(
+        runs=[
+            _epoch_run_response(run)
+            for run in run_repository.list_epoch_runs(dataset_id=dataset_id)
+        ]
+    )
+
+
 @app.get("/datasets/{dataset_id}", response_model=DatasetResponse)
 def get_dataset(dataset_id: str) -> DatasetResponse:
     dataset = registry_repository.get_dataset(dataset_id)
@@ -959,6 +1072,49 @@ def _preprocessing_run_response(run: PreprocessingRun) -> PreprocessingRunRespon
         warnings=run.warnings,
         errors=run.errors,
     )
+
+
+def _epoch_run_response(run: EpochRun) -> EpochRunResponse:
+    return EpochRunResponse(
+        run_id=run.run_id,
+        dataset_id=run.dataset_id,
+        run_kind=run.run_kind.value,
+        schema_version=run.schema_version,
+        config=EpochConfigPayload(**run.config.__dict__),
+        status=run.status.value,
+        started_at_utc=run.started_at_utc,
+        finished_at_utc=run.finished_at_utc,
+        cancel_requested_at_utc=run.cancel_requested_at_utc,
+        output_path=run.output_path,
+        output_metadata=run.output_metadata,
+        warnings=run.warnings,
+        errors=run.errors,
+    )
+
+
+def _epoch_input_provenance(
+    preprocessing_run: PreprocessingRun,
+    event_log: EventLog | None,
+    recording: Recording | None,
+) -> dict[str, str | int | float | bool | None]:
+    return {
+        "input_preprocessing_run_id": preprocessing_run.run_id,
+        "input_preprocessed_path": preprocessing_run.output_path,
+        "input_sampling_rate_hz": _epoch_output_sampling_rate_hz(
+            preprocessing_run=preprocessing_run,
+            recording=recording,
+        ),
+        "input_duration_seconds": _epoch_output_duration_seconds(
+            preprocessing_run=preprocessing_run,
+            recording=recording,
+        ),
+        "event_log_id": event_log.event_log_id if event_log is not None else None,
+        "event_count": len(event_log.events) if event_log is not None else 0,
+        "recording_id": recording.recording_id if recording is not None else None,
+        "input_channel_count": recording.metadata.channel_count
+        if recording is not None
+        else None,
+    }
 
 
 def _preprocessing_input_provenance(

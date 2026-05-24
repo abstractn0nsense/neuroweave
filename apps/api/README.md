@@ -48,6 +48,9 @@ POST /datasets/{dataset_id}/preprocessing-runs
 GET /datasets/{dataset_id}/preprocessing-runs
 GET /preprocessing-runs/{run_id}
 POST /preprocessing-runs/{run_id}/cancel
+POST /datasets/{dataset_id}/epoch-runs
+GET /datasets/{dataset_id}/epoch-runs
+GET /epoch-runs/{run_id}
 ```
 
 These endpoints write through `eeg_io.registry.JsonRegistryRepository` to the local JSON registry under `data/raw/uploads/`.
@@ -61,6 +64,8 @@ Completed preprocessing runs store provenance in `output_metadata`, including in
 Completed preprocessing runs also write diagnostics beside `raw_preprocessed.fif`: `preprocessing_summary.json`, `filter_report.json`, and `artifact_summary.json`. Their paths and key artifact counts are recorded in `output_metadata`. Completed runs also write `artifact_manifest.json` with file paths, sizes, checksums, and artifact types for the primary FIF and diagnostics.
 
 Phase 3 analysis output roots are configurable with `NEUROWEAVE_EPOCHS_DIR` and `NEUROWEAVE_ERP_DIR`. When unset, epoch artifacts will default to `data/epochs/{dataset_id}/{run_id}/` and ERP artifacts will default to `data/erp/{dataset_id}/{run_id}/`.
+
+`POST /datasets/{dataset_id}/epoch-runs` creates a validation-backed `pending` epoch run from a completed preprocessing run. It creates the epoch artifact directory and records the planned `epochs.fif` output path, but MNE epoch execution and diagnostics writing begin in Phase 3.4.
 
 Preprocessing runs also persist captured MNE/Python warnings in `warnings`. Failed runs persist `errors`, retain input provenance, and remain available through the run lookup endpoints.
 

@@ -438,6 +438,9 @@ Contract notes:
 Purpose: expose epoching as a first-class run type while reusing the Phase 2 worker
 shape.
 
+Status: implemented for validation-backed pending run creation, lookup, and
+dataset-scoped listing. Execution remains intentionally deferred to Phase 3.4.
+
 Implementation steps:
 
 1. Add Pydantic models in `apps/api/main.py`.
