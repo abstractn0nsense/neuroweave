@@ -674,6 +674,40 @@ def get_preprocessing_run(run_id: str) -> PreprocessingRunResponse:
     return _preprocessing_run_response(run)
 
 
+@app.post(
+    "/preprocessing-runs/{run_id}/cancel",
+    response_model=PreprocessingRunResponse,
+)
+def cancel_preprocessing_run(run_id: str) -> PreprocessingRunResponse:
+    run = run_repository.get_preprocessing_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Preprocessing run not found")
+
+    if run.status == PreprocessingRunStatus.PENDING:
+        cancelled_run = replace(
+            run,
+            status=PreprocessingRunStatus.CANCELLED,
+            finished_at_utc=_utc_now_iso(),
+            warnings=[*run.warnings, "Run cancelled before preprocessing started."],
+        )
+        run_repository.save_preprocessing_run(cancelled_run)
+        return _preprocessing_run_response(cancelled_run)
+
+    if run.status == PreprocessingRunStatus.RUNNING:
+        cancelling_run = replace(
+            run,
+            status=PreprocessingRunStatus.CANCELLING,
+            warnings=[
+                *run.warnings,
+                "Cancellation requested; preprocessing will stop at the next checkpoint.",
+            ],
+        )
+        run_repository.save_preprocessing_run(cancelling_run)
+        return _preprocessing_run_response(cancelling_run)
+
+    return _preprocessing_run_response(run)
+
+
 @app.get(
     "/datasets/{dataset_id}/preprocessing-runs",
     response_model=PreprocessingRunsResponse,
@@ -886,6 +920,8 @@ def _execute_preprocessing_run(
     run = run_repository.get_preprocessing_run(run_id)
     if run is None:
         return
+    if run.status == PreprocessingRunStatus.CANCELLED:
+        return
 
     running_run = replace(
         run,
@@ -912,13 +948,36 @@ def _execute_preprocessing_run(
             ),
             warnings=[str(warning) for warning in metadata.get("warnings", [])],
         )
-        run_repository.save_preprocessing_run(completed_run)
+        current_run = run_repository.get_preprocessing_run(run_id)
+        if current_run and current_run.status == PreprocessingRunStatus.CANCELLING:
+            cancelled_run = replace(
+                completed_run,
+                status=PreprocessingRunStatus.CANCELLED,
+                finished_at_utc=_utc_now_iso(),
+                warnings=_dedupe_strings(
+                    [
+                        *current_run.warnings,
+                        *completed_run.warnings,
+                        "Run cancelled after preprocessing completed; output was retained.",
+                    ]
+                ),
+            )
+            run_repository.save_preprocessing_run(cancelled_run)
+        else:
+            run_repository.save_preprocessing_run(completed_run)
     except PreprocessingError as exc:
+        current_run = run_repository.get_preprocessing_run(run_id)
+        current_warnings = current_run.warnings if current_run else []
+        next_status = (
+            PreprocessingRunStatus.CANCELLED
+            if current_run and current_run.status == PreprocessingRunStatus.CANCELLING
+            else PreprocessingRunStatus.FAILED
+        )
         failed_run = replace(
             running_run,
-            status=PreprocessingRunStatus.FAILED,
+            status=next_status,
             finished_at_utc=_utc_now_iso(),
-            warnings=exc.processing_warnings,
+            warnings=_dedupe_strings([*current_warnings, *exc.processing_warnings]),
             errors=[str(exc)],
         )
         run_repository.save_preprocessing_run(failed_run)
@@ -1009,6 +1068,16 @@ def _new_id(prefix: str) -> str:
 
 def _utc_now_iso() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            deduped.append(value)
+    return deduped
 
 
 def _store_upload_file(file: UploadFile, destination_directory: Path) -> Path:

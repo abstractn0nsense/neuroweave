@@ -31,6 +31,8 @@ class ValidationSeverity(StrEnum):
 class PreprocessingRunStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
+    CANCELLING = "cancelling"
+    CANCELLED = "cancelled"
     COMPLETED = "completed"
     FAILED = "failed"
 

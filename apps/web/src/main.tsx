@@ -373,7 +373,7 @@ function App() {
   useEffect(() => {
     const hasActiveRun =
       preprocessingRuns.data?.some((run) =>
-        ["pending", "running"].includes(run.status),
+        ["pending", "running", "cancelling"].includes(run.status),
       ) ?? false;
     if (!activeDatasetId || !hasActiveRun) {
       return;
@@ -672,6 +672,26 @@ function App() {
     });
   }
 
+  async function cancelPreprocessingRun(runId: string) {
+    await runAction(`cancel-${runId}`, async () => {
+      const run = await requestJson<PreprocessingRun>(
+        `/preprocessing-runs/${encodeURIComponent(runId)}/cancel`,
+        { method: "POST" },
+      );
+      setPreprocessingRuns((current) => ({
+        status: "success",
+        data: (current.data ?? []).map((item) =>
+          item.run_id === run.run_id ? run : item,
+        ),
+        error: null,
+      }));
+      setNotice({
+        tone: run.status === "cancelled" ? "ok" : "neutral",
+        message: `Preprocessing run ${run.run_id} ${run.status}.`,
+      });
+    });
+  }
+
   async function runAction(action: string, callback: () => Promise<void>) {
     setBusyAction(action);
     setNotice(null);
@@ -858,6 +878,7 @@ function App() {
                 onEventFileChange={setEventFile}
                 onMappingChange={setMapping}
                 onPreprocessingConfigChange={setPreprocessingConfig}
+                onCancelPreprocessingRun={cancelPreprocessingRun}
                 onSubmitEventMapping={submitEventMapping}
                 onUploadEeg={uploadEegFile}
                 onUploadEvent={uploadEventFile}
@@ -1168,6 +1189,7 @@ function IntakeSection({
   onEventFileChange,
   onMappingChange,
   onPreprocessingConfigChange,
+  onCancelPreprocessingRun,
   onSubmitEventMapping,
   onUploadEeg,
   onUploadEvent,
@@ -1190,6 +1212,7 @@ function IntakeSection({
   onPreprocessingConfigChange: (
     config: typeof DEFAULT_PREPROCESSING_CONFIG,
   ) => void;
+  onCancelPreprocessingRun: (runId: string) => void;
   onSubmitEventMapping: () => void;
   onUploadEeg: () => void;
   onUploadEvent: () => void;
@@ -1406,13 +1429,22 @@ function IntakeSection({
         >
           Start Preprocessing
         </button>
-        <PreprocessingRunList runs={preprocessingRuns} />
+        <PreprocessingRunList
+          onCancel={onCancelPreprocessingRun}
+          runs={preprocessingRuns}
+        />
       </div>
     </div>
   );
 }
 
-function PreprocessingRunList({ runs }: { runs: LoadState<PreprocessingRun[]> }) {
+function PreprocessingRunList({
+  onCancel,
+  runs,
+}: {
+  onCancel: (runId: string) => void;
+  runs: LoadState<PreprocessingRun[]>;
+}) {
   if (runs.status === "loading" || runs.status === "idle") {
     return <p className="muted">Loading preprocessing runs...</p>;
   }
@@ -1437,6 +1469,15 @@ function PreprocessingRunList({ runs }: { runs: LoadState<PreprocessingRun[]> })
           <div className="run-meta">
             <span>{run.status}</span>
             <span>{formatRunMetadata(run.output_metadata)}</span>
+            {["pending", "running"].includes(run.status) ? (
+              <button
+                className="secondary-button compact-button"
+                onClick={() => onCancel(run.run_id)}
+                type="button"
+              >
+                Cancel
+              </button>
+            ) : null}
           </div>
           {run.warnings.length > 0 ? (
             <p className="muted">{run.warnings.join(" ")}</p>

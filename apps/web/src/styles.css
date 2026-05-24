@@ -77,6 +77,11 @@ textarea:disabled {
   color: #1f6f8b;
 }
 
+.compact-button {
+  min-height: 28px;
+  padding: 0 10px;
+}
+
 .status-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

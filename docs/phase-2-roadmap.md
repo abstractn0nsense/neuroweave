@@ -148,3 +148,15 @@ Implemented execution model:
 - successful runs persist output metadata, provenance, and captured warnings
 - failed runs persist errors, captured warnings, and input provenance
 - the web UI polls preprocessing runs while any selected-dataset run is `pending` or `running`
+
+## Phase 2.8: Cancel Preprocessing Runs
+
+Implemented cancellation:
+
+- `POST /preprocessing-runs/{run_id}/cancel`
+- pending runs are marked `cancelled` immediately
+- running runs are marked `cancelling` as a best-effort cancellation request
+- background execution skips runs already marked `cancelled`
+- background execution converts `cancelling` runs to `cancelled` at the next completion checkpoint
+- cancellation warnings are persisted on the run
+- the web UI shows Cancel buttons for `pending` and `running` runs
