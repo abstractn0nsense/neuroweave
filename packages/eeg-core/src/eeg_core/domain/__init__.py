@@ -1,4 +1,40 @@
-from eeg_core.domain.recording import RecordingMetadata
+from eeg_core.domain.ingestion import (
+    Dataset,
+    DatasetStatus,
+    EventColumnMapping,
+    EventLog,
+    Experiment,
+    NormalizedEvent,
+    Participant,
+    Project,
+    Recording,
+    Session,
+    UploadedFile,
+    UploadedFileKind,
+    ValidationIssue,
+    ValidationReport,
+    ValidationSeverity,
+)
+from eeg_core.domain.recording import RecordingMetadata, recording_metadata_from_dict
+from eeg_core.domain.validation import validate_ingestion_dataset
 
-__all__ = ["RecordingMetadata"]
-
+__all__ = [
+    "Dataset",
+    "DatasetStatus",
+    "EventColumnMapping",
+    "EventLog",
+    "Experiment",
+    "NormalizedEvent",
+    "Participant",
+    "Project",
+    "Recording",
+    "RecordingMetadata",
+    "recording_metadata_from_dict",
+    "Session",
+    "UploadedFile",
+    "UploadedFileKind",
+    "ValidationIssue",
+    "ValidationReport",
+    "ValidationSeverity",
+    "validate_ingestion_dataset",
+]

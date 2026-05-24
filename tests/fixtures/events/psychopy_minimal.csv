@@ -1,0 +1,4 @@
+onset,duration,trial_type,stimulus,response,correct,rt
+1.0,0.2,target,A,left,1,0.45
+2.0,0.2,standard,B,right,0,0.51
+3.0,0.2,target,C,left,1,0.48

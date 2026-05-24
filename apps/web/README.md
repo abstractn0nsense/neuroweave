@@ -21,6 +21,16 @@ Phase 0 UI checks:
 - selected sample metadata
 - loading, empty, and API error states
 
+Phase 1 ingestion checks:
+
+- project and experiment creation or selection
+- participant/session dataset creation
+- EEG recording upload
+- event CSV/TSV upload and preview
+- event column mapping
+- dataset validation status, errors, and warnings
+- preprocessing handoff remains disabled until validation succeeds
+
 Expected responsibilities:
 
 - upload or select EEG datasets

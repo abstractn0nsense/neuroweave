@@ -57,7 +57,13 @@ Write-Host "Generating sample EEG files..."
 Invoke-Checked $apiPython @((Join-Path $repoRoot "scripts\generate_sample_eeg.py"))
 
 Write-Host "Running API/package tests..."
-Invoke-Checked $apiPython @("-m", "pytest", "tests")
+Invoke-Checked $apiPython @(
+    "-m",
+    "pytest",
+    "tests",
+    "-o",
+    "cache_dir=data/cache/pytest-cache"
+)
 
 Write-Host "Checking API endpoints with TestClient..."
 $apiCheckPath = Join-Path $cacheDir "phase0_api_smoke.py"

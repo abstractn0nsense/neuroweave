@@ -28,15 +28,41 @@ create dataset
 ## Upload API Shape
 
 ```text
+POST /projects
+GET /projects
+POST /projects/{project_id}/experiments
+GET /projects/{project_id}/experiments
 POST /datasets
 GET /datasets
 GET /datasets/{dataset_id}
 POST /datasets/{dataset_id}/files/eeg
 POST /datasets/{dataset_id}/files/events
+POST /datasets/{dataset_id}/events/mapping
 GET /datasets/{dataset_id}/validation
 GET /datasets/{dataset_id}/events
 GET /datasets/{dataset_id}/metadata
 ```
+
+## Implementation Roadmap
+
+Phase 1 should complete the API ingestion path before building the UI, so the frontend is not coupled to unstable event mapping and validation shapes.
+
+Completed:
+
+1. Domain models for project, experiment, participant, session, dataset, uploaded files, recording, event logs, and validation.
+2. JSON registry storage under `data/raw/uploads`.
+3. Project and experiment API endpoints.
+4. Dataset creation and lookup API endpoints.
+5. EEG upload endpoint with metadata extraction.
+6. Event or behavior log upload with CSV/TSV storage and preview.
+7. Event column mapping and normalized event generation.
+8. Dataset validation API for EEG duration, event timing, missing fields, and readiness state.
+9. UI ingest flow after the API can complete `EEG + event log + validation`.
+10. Phase 1 polish: shared event CSV fixture, UI preprocessing gate, manual browser smoke check, and GitHub Actions CI.
+
+Next:
+
+11. Preprocessing handoff: create a validated-dataset entrypoint for filtering, epoching, and downstream analysis jobs.
 
 ## Event And Behavior Logs
 
@@ -102,21 +128,70 @@ Warnings:
 data/
   raw/
     uploads/
-      {dataset_id}/
-        eeg/
-        events/
-        metadata.json
+      projects.json
+      experiments.json
+      participants.json
+      datasets/
+        {dataset_id}/
+          metadata.json
+          eeg/
+          events/
   processed/
   runs/
   cache/
 ```
 
+The API should use repository functions rather than reading or writing these files directly. The initial JSON-backed repository lives in `eeg_io.registry.JsonRegistryRepository`.
+
 Phase 1 can use JSON metadata files before introducing a database. The API should hide this detail behind repository/storage functions so a later database migration does not change route behavior.
+
+EEG uploads additionally create:
+
+```text
+data/
+  raw/
+    uploads/
+      datasets/
+        {dataset_id}/
+          uploaded_files.json
+          recording.json
+          eeg/
+            {original_filename}
+```
+
+Event uploads additionally create:
+
+```text
+data/
+  raw/
+    uploads/
+      datasets/
+        {dataset_id}/
+          events_preview.json
+          events/
+            {original_filename}
+```
+
+Event mapping additionally creates:
+
+```text
+data/
+  raw/
+    uploads/
+      datasets/
+        {dataset_id}/
+          event_log.json
+```
+
+Validation is computed from the dataset metadata, `recording.json`, and `event_log.json`. It updates the dataset status to `valid` when there are no blocking errors and to `invalid` when EEG files, mapped events, or event timing checks fail.
 
 ## Completion Criteria
 
 - A dataset can be created through the API.
+- Dataset creation verifies the selected project and experiment before storing participant/session metadata.
 - EEG file upload stores the original file and extracts metadata.
-- Event log upload stores the original file and returns a normalized event preview.
+- Event log upload stores the original file and returns a CSV/TSV header and row preview.
+- Event column mapping turns the preview into normalized events.
 - Validation reports `valid`, `warnings`, and `errors`.
 - The web UI shows dataset readiness before preprocessing.
+- The web UI supports project/experiment selection before participant/session dataset creation.
