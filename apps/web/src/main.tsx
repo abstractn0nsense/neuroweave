@@ -140,6 +140,8 @@ type PreprocessingConfig = {
 type PreprocessingRun = {
   run_id: string;
   dataset_id: string;
+  run_kind: string;
+  schema_version: number;
   config: PreprocessingConfig;
   status: string;
   started_at_utc: string | null;

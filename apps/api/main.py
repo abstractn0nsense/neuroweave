@@ -37,6 +37,7 @@ from eeg_core.domain import (  # noqa: E402
     PreprocessingRunStatus,
     Project,
     Recording,
+    RunKind,
     UploadedFile as IngestionUploadedFile,
     UploadedFileKind,
     ValidationIssue,
@@ -63,6 +64,22 @@ def _path_from_env(name: str, default: Path) -> Path:
     return Path(value).expanduser().resolve()
 
 
+def _preprocessing_output_path(dataset_id: str, run_id: str) -> Path:
+    return PROCESSED_DIR / dataset_id / run_id / "raw_preprocessed.fif"
+
+
+def _epoch_output_directory(dataset_id: str, run_id: str) -> Path:
+    return EPOCHS_DIR / dataset_id / run_id
+
+
+def _epoch_output_path(dataset_id: str, run_id: str) -> Path:
+    return _epoch_output_directory(dataset_id, run_id) / "epochs.fif"
+
+
+def _erp_output_directory(dataset_id: str, run_id: str) -> Path:
+    return ERP_DIR / dataset_id / run_id
+
+
 SAMPLE_DATASET_DIR = _path_from_env(
     "NEUROWEAVE_SAMPLE_DATASET_DIR",
     REPO_ROOT / "data" / "raw" / "samples",
@@ -76,6 +93,8 @@ PROCESSED_DIR = _path_from_env(
     "NEUROWEAVE_PROCESSED_DIR",
     REPO_ROOT / "data" / "processed",
 )
+EPOCHS_DIR = _path_from_env("NEUROWEAVE_EPOCHS_DIR", REPO_ROOT / "data" / "epochs")
+ERP_DIR = _path_from_env("NEUROWEAVE_ERP_DIR", REPO_ROOT / "data" / "erp")
 registry_repository = JsonRegistryRepository(UPLOADS_DIR)
 run_repository = JsonRunRepository(RUNS_DIR)
 
@@ -278,6 +297,8 @@ class PreprocessingConfigPayload(BaseModel):
 class PreprocessingRunResponse(BaseModel):
     run_id: str
     dataset_id: str
+    run_kind: str
+    schema_version: int
     config: PreprocessingConfigPayload
     status: str
     started_at_utc: str | None
@@ -720,7 +741,7 @@ def create_preprocessing_run(
         raise HTTPException(status_code=422, detail=config_errors)
 
     run_id = _new_id("preprocess")
-    output_path = PROCESSED_DIR / dataset_id / run_id / "raw_preprocessed.fif"
+    output_path = _preprocessing_output_path(dataset_id, run_id)
 
     run = PreprocessingRun(
         run_id=run_id,
@@ -924,6 +945,8 @@ def _preprocessing_run_response(run: PreprocessingRun) -> PreprocessingRunRespon
     return PreprocessingRunResponse(
         run_id=run.run_id,
         dataset_id=run.dataset_id,
+        run_kind=run.run_kind.value,
+        schema_version=run.schema_version,
         config=PreprocessingConfigPayload(**run.config.__dict__),
         status=run.status.value,
         started_at_utc=run.started_at_utc,
@@ -963,11 +986,50 @@ def _preprocessing_completed_provenance(
         output_directory=output_path.parent,
         processing_metadata=processing_metadata,
     )
+    manifest_metadata = _write_artifact_manifest(
+        output_directory=output_path.parent,
+        artifacts=[
+            _artifact_manifest_entry(
+                logical_name="raw_preprocessed",
+                path=output_path,
+                artifact_type="primary_fif",
+                output_directory=output_path.parent,
+            ),
+            *[
+                _artifact_manifest_entry(
+                    logical_name=logical_name,
+                    path=Path(str(path_value)),
+                    artifact_type="diagnostic_json",
+                    output_directory=output_path.parent,
+                )
+                for logical_name, path_value in (
+                    (
+                        "preprocessing_summary",
+                        diagnostics_metadata.get("preprocessing_summary_path"),
+                    ),
+                    ("filter_report", diagnostics_metadata.get("filter_report_path")),
+                    (
+                        "artifact_summary",
+                        diagnostics_metadata.get("artifact_summary_path"),
+                    ),
+                )
+                if isinstance(path_value, str) and Path(path_value).is_file()
+            ],
+        ],
+    )
+    output_size_bytes = output_path.stat().st_size
+    output_checksum_sha256 = _sha256_file(output_path)
     return {
         **run.output_metadata,
+        "artifact_root": str(output_path.parent),
+        "primary_artifact_path": str(output_path),
+        "primary_artifact_size_bytes": output_size_bytes,
+        "primary_artifact_checksum_sha256": output_checksum_sha256,
+        "artifact_count": manifest_metadata["artifact_count"],
+        "artifact_manifest_path": manifest_metadata["artifact_manifest_path"],
         "output_path": str(output_path),
-        "output_size_bytes": output_path.stat().st_size,
-        "output_checksum_sha256": _sha256_file(output_path),
+        "output_size_bytes": output_size_bytes,
+        "output_checksum_sha256": output_checksum_sha256,
         "output_file_format": processing_metadata["file_format"],
         "output_channel_count": processing_metadata["channel_count"],
         "output_sampling_rate_hz": processing_metadata["sampling_rate_hz"],
@@ -1026,6 +1088,49 @@ def _write_preprocessing_diagnostics(
         "artifact_annotation_count": output_artifacts.get("annotation_count")
         if isinstance(output_artifacts, dict)
         else None,
+    }
+
+
+def _write_artifact_manifest(
+    output_directory: Path,
+    artifacts: list[dict[str, str | int]],
+) -> dict[str, str | int]:
+    output_directory.mkdir(parents=True, exist_ok=True)
+    manifest_path = output_directory / "artifact_manifest.json"
+    manifest = {
+        "schema_version": 1,
+        "artifact_root": str(output_directory),
+        "artifact_count": len(artifacts),
+        "artifacts": artifacts,
+    }
+    _write_json_file(manifest_path, manifest)
+    return {
+        "artifact_count": len(artifacts),
+        "artifact_manifest_path": str(manifest_path),
+    }
+
+
+def _artifact_manifest_entry(
+    logical_name: str,
+    path: Path,
+    artifact_type: str,
+    output_directory: Path,
+) -> dict[str, str | int]:
+    if not path.is_file():
+        raise ValueError(f"Artifact does not exist: {path}")
+
+    resolved_path = path.resolve()
+    output_root = output_directory.resolve()
+    if not resolved_path.is_relative_to(output_root):
+        raise ValueError(f"Artifact path escapes its output directory: {path}")
+
+    return {
+        "logical_name": logical_name,
+        "artifact_type": artifact_type,
+        "path": str(path),
+        "size_bytes": path.stat().st_size,
+        "checksum_sha256": _sha256_file(path),
+        "created_at_utc": _utc_now_iso(),
     }
 
 

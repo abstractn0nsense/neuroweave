@@ -21,6 +21,7 @@ from eeg_core.domain import (
     PreprocessingRunStatus,
     Project,
     Recording,
+    RunKind,
     UploadedFile,
     UploadedFileKind,
     recording_metadata_from_dict,
@@ -284,17 +285,21 @@ class JsonRunRepository:
         path = self.preprocessing_run_path(run_id)
         if not path.exists():
             return None
-        return _preprocessing_run_from_json(_read_json_object(path))
+        data = _read_json_object(path)
+        if _run_kind_from_json(data) != RunKind.PREPROCESSING:
+            return None
+        return _preprocessing_run_from_json(data)
 
     def list_preprocessing_runs(
         self,
         dataset_id: str | None = None,
     ) -> list[PreprocessingRun]:
         self.initialize()
-        runs = [
-            _preprocessing_run_from_json(_read_json_object(path))
-            for path in sorted(self.runs_root.glob("*/run.json"))
-        ]
+        runs = []
+        for path in sorted(self.runs_root.glob("*/run.json")):
+            data = _read_json_object(path)
+            if _run_kind_from_json(data) == RunKind.PREPROCESSING:
+                runs.append(_preprocessing_run_from_json(data))
         if dataset_id is None:
             return runs
         return [run for run in runs if run.dataset_id == dataset_id]
@@ -403,6 +408,8 @@ def _preprocessing_run_from_json(data: JsonObject) -> PreprocessingRun:
         run_id=str(data["run_id"]),
         dataset_id=str(data["dataset_id"]),
         config=_preprocessing_config_from_json(data.get("config", {})),
+        run_kind=_run_kind_from_json(data) or RunKind.PREPROCESSING,
+        schema_version=int(data.get("schema_version", 1)),
         status=PreprocessingRunStatus(
             data.get("status", PreprocessingRunStatus.PENDING)
         ),
@@ -414,6 +421,16 @@ def _preprocessing_run_from_json(data: JsonObject) -> PreprocessingRun:
         warnings=[str(warning) for warning in data.get("warnings", [])],
         errors=[str(error) for error in data.get("errors", [])],
     )
+
+
+def _run_kind_from_json(data: JsonObject) -> RunKind | None:
+    value = data.get("run_kind")
+    if value is None:
+        return RunKind.PREPROCESSING
+    try:
+        return RunKind(str(value))
+    except ValueError:
+        return None
 
 
 def _normalized_event_from_json(data: JsonObject) -> NormalizedEvent:

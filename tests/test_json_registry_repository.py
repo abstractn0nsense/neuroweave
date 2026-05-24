@@ -15,6 +15,7 @@ from eeg_core.domain import (
     Project,
     Recording,
     RecordingMetadata,
+    RunKind,
     UploadedFile,
     UploadedFileKind,
 )
@@ -262,3 +263,62 @@ def test_run_repository_persists_preprocessing_runs(tmp_path):
     assert repository.get_preprocessing_run("preprocess-001") == run
     assert repository.list_preprocessing_runs(dataset_id="dataset-001") == [run]
     assert repository.preprocessing_run_path("preprocess-001").is_file()
+
+    stored = json.loads(
+        repository.preprocessing_run_path("preprocess-001").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert stored["run_kind"] == RunKind.PREPROCESSING
+    assert stored["schema_version"] == 1
+
+
+def test_run_repository_loads_legacy_preprocessing_runs_without_schema_marker(
+    tmp_path,
+):
+    repository = JsonRunRepository(tmp_path / "runs")
+    path = repository.preprocessing_run_path("preprocess-legacy")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "run_id": "preprocess-legacy",
+                "dataset_id": "dataset-001",
+                "config": {"reference": "average"},
+                "status": "completed",
+                "output_metadata": {"legacy_key": "legacy-value"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    run = repository.get_preprocessing_run("preprocess-legacy")
+
+    assert run is not None
+    assert run.run_kind == RunKind.PREPROCESSING
+    assert run.schema_version == 1
+    assert run.output_metadata["legacy_key"] == "legacy-value"
+
+
+def test_run_repository_skips_non_preprocessing_run_records(tmp_path):
+    repository = JsonRunRepository(tmp_path / "runs")
+    future_path = repository.preprocessing_run_path("epoch-001")
+    future_path.parent.mkdir(parents=True, exist_ok=True)
+    future_path.write_text(
+        json.dumps(
+            {
+                "run_id": "epoch-001",
+                "dataset_id": "dataset-001",
+                "run_kind": "epoch",
+                "schema_version": 1,
+                "config": {},
+                "status": "completed",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert repository.get_preprocessing_run("epoch-001") is None
+    assert repository.list_preprocessing_runs() == []

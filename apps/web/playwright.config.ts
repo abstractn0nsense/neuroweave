@@ -44,6 +44,8 @@ export default defineConfig({
         NEUROWEAVE_UPLOADS_DIR: path.join(e2eDataDir, "uploads"),
         NEUROWEAVE_RUNS_DIR: path.join(e2eDataDir, "runs"),
         NEUROWEAVE_PROCESSED_DIR: path.join(e2eDataDir, "processed"),
+        NEUROWEAVE_EPOCHS_DIR: path.join(e2eDataDir, "epochs"),
+        NEUROWEAVE_ERP_DIR: path.join(e2eDataDir, "erp"),
         NEUROWEAVE_SAMPLE_DATASET_DIR: path.join(repoRoot, "data", "raw", "samples"),
       },
       reuseExistingServer: !process.env.CI,

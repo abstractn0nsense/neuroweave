@@ -52,13 +52,15 @@ POST /preprocessing-runs/{run_id}/cancel
 
 These endpoints write through `eeg_io.registry.JsonRegistryRepository` to the local JSON registry under `data/raw/uploads/`.
 
-Preprocessing run metadata is written through `eeg_io.registry.JsonRunRepository` under `data/runs/`, and processed FIF outputs are written under `data/processed/`.
+Run metadata is written through `eeg_io.registry.JsonRunRepository` under `data/runs/`. New run records include a `run_kind` and `schema_version` marker while remaining compatible with older preprocessing run JSON that does not have those fields. Processed FIF outputs are written under `data/processed/`.
 
 Preprocessing config validation rejects invalid filter ordering, cutoff frequencies at or above Nyquist, upsampling beyond the input sampling rate, and custom reference channels that do not exist in the uploaded recording.
 
 Completed preprocessing runs store provenance in `output_metadata`, including input file identity, paths, checksums, size, input/output signal metadata, output checksum, and MNE version. The run `config` field is the persisted preprocessing configuration snapshot.
 
-Completed preprocessing runs also write diagnostics beside `raw_preprocessed.fif`: `preprocessing_summary.json`, `filter_report.json`, and `artifact_summary.json`. Their paths and key artifact counts are recorded in `output_metadata`.
+Completed preprocessing runs also write diagnostics beside `raw_preprocessed.fif`: `preprocessing_summary.json`, `filter_report.json`, and `artifact_summary.json`. Their paths and key artifact counts are recorded in `output_metadata`. Completed runs also write `artifact_manifest.json` with file paths, sizes, checksums, and artifact types for the primary FIF and diagnostics.
+
+Phase 3 analysis output roots are configurable with `NEUROWEAVE_EPOCHS_DIR` and `NEUROWEAVE_ERP_DIR`. When unset, epoch artifacts will default to `data/epochs/{dataset_id}/{run_id}/` and ERP artifacts will default to `data/erp/{dataset_id}/{run_id}/`.
 
 Preprocessing runs also persist captured MNE/Python warnings in `warnings`. Failed runs persist `errors`, retain input provenance, and remain available through the run lookup endpoints.
 

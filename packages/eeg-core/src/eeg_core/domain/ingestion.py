@@ -28,6 +28,12 @@ class ValidationSeverity(StrEnum):
     WARNING = "warning"
 
 
+class RunKind(StrEnum):
+    PREPROCESSING = "preprocessing"
+    EPOCH = "epoch"
+    ERP = "erp"
+
+
 class PreprocessingRunStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
@@ -192,6 +198,8 @@ class PreprocessingRun:
     run_id: str
     dataset_id: str
     config: PreprocessingConfig
+    run_kind: RunKind = RunKind.PREPROCESSING
+    schema_version: int = 1
     status: PreprocessingRunStatus = PreprocessingRunStatus.PENDING
     started_at_utc: str | None = None
     finished_at_utc: str | None = None
