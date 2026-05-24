@@ -31,6 +31,9 @@ from eeg_core.domain import (  # noqa: E402
     EpochConfig,
     EpochRun,
     EpochRunStatus,
+    ErpConfig,
+    ErpRun,
+    ErpRunStatus,
     EventColumnMapping,
     EventLog,
     Experiment,
@@ -50,8 +53,10 @@ from eeg_core.domain import (  # noqa: E402
 )
 from eeg_processing import (  # noqa: E402
     EpochingError,
+    ErpError,
     PreprocessingError,
     run_epoching_job,
+    run_erp_job,
     run_preprocessing_job,
 )
 from eeg_processing.epoching import SUPPORTED_CONDITION_FIELDS  # noqa: E402
@@ -87,6 +92,10 @@ def _epoch_output_path(dataset_id: str, run_id: str) -> Path:
 
 def _erp_output_directory(dataset_id: str, run_id: str) -> Path:
     return ERP_DIR / dataset_id / run_id
+
+
+def _erp_metadata_path(dataset_id: str, run_id: str) -> Path:
+    return _erp_output_directory(dataset_id, run_id) / "erp_metadata.json"
 
 
 SAMPLE_DATASET_DIR = _path_from_env(
@@ -202,6 +211,54 @@ class LocalEpochWorker:
 
 
 epoch_worker = LocalEpochWorker()
+
+
+class LocalErpWorker:
+    def __init__(self) -> None:
+        self._queue: Queue[str] = Queue()
+        self._queued_run_ids: set[str] = set()
+        self._lock = Lock()
+        self._thread: Thread | None = None
+
+    def start(self) -> None:
+        with self._lock:
+            if self._thread and self._thread.is_alive():
+                return
+            self._thread = Thread(
+                target=self._run_loop,
+                name="neuroweave-erp-worker",
+                daemon=True,
+            )
+            self._thread.start()
+
+    def enqueue(self, run_id: str) -> None:
+        self.start()
+        with self._lock:
+            if run_id in self._queued_run_ids:
+                return
+            self._queued_run_ids.add(run_id)
+            self._queue.put(run_id)
+
+    def recover(self) -> None:
+        for run in run_repository.list_erp_runs():
+            if run.status in {
+                ErpRunStatus.PENDING,
+                ErpRunStatus.RUNNING,
+            }:
+                self.enqueue(run.run_id)
+
+    def _run_loop(self) -> None:
+        while True:
+            run_id = self._queue.get()
+            try:
+                _execute_erp_run(run_id)
+            finally:
+                with self._lock:
+                    self._queued_run_ids.discard(run_id)
+                self._queue.task_done()
+
+
+erp_worker = LocalErpWorker()
 
 
 class HealthResponse(BaseModel):
@@ -401,6 +458,33 @@ class EpochRunsResponse(BaseModel):
     runs: list[EpochRunResponse]
 
 
+class ErpConfigPayload(BaseModel):
+    epoch_run_id: str
+    conditions: list[str] | None = None
+    picks: list[str] | None = None
+    method: str = "mean"
+
+
+class ErpRunResponse(BaseModel):
+    run_id: str
+    dataset_id: str
+    run_kind: str
+    schema_version: int
+    config: ErpConfigPayload
+    status: str
+    started_at_utc: str | None
+    finished_at_utc: str | None
+    cancel_requested_at_utc: str | None
+    output_path: str | None
+    output_metadata: dict[str, str | int | float | bool | None]
+    warnings: list[str]
+    errors: list[str]
+
+
+class ErpRunsResponse(BaseModel):
+    runs: list[ErpRunResponse]
+
+
 class CreateProjectRequest(BaseModel):
     project_id: str | None = None
     name: str
@@ -446,8 +530,10 @@ class ExperimentsResponse(BaseModel):
 async def lifespan(app: FastAPI):
     preprocessing_worker.start()
     epoch_worker.start()
+    erp_worker.start()
     preprocessing_worker.recover()
     epoch_worker.recover()
+    erp_worker.recover()
     yield
 
 
@@ -995,6 +1081,77 @@ def list_dataset_epoch_runs(dataset_id: str) -> EpochRunsResponse:
     )
 
 
+@app.post(
+    "/datasets/{dataset_id}/erp-runs",
+    response_model=ErpRunResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_erp_run(
+    dataset_id: str,
+    config_payload: ErpConfigPayload,
+) -> ErpRunResponse:
+    if registry_repository.get_dataset(dataset_id) is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    epoch_run = run_repository.get_epoch_run(config_payload.epoch_run_id)
+    if epoch_run is None:
+        raise HTTPException(status_code=404, detail="Epoch run not found")
+
+    config = ErpConfig(**config_payload.model_dump())
+    config_errors, config_warnings = _validate_erp_config(
+        config=config,
+        dataset_id=dataset_id,
+        epoch_run=epoch_run,
+    )
+    if config_errors:
+        raise HTTPException(status_code=422, detail=config_errors)
+
+    run_id = _new_id("erp")
+    output_path = _erp_metadata_path(dataset_id, run_id)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    run = ErpRun(
+        run_id=run_id,
+        dataset_id=dataset_id,
+        config=config,
+        status=ErpRunStatus.PENDING,
+        output_path=str(output_path),
+        output_metadata=_erp_input_provenance(epoch_run),
+        warnings=config_warnings,
+    )
+    run_repository.save_erp_run(run)
+    erp_worker.enqueue(run_id)
+    return _erp_run_response(run)
+
+
+@app.get(
+    "/erp-runs/{run_id}",
+    response_model=ErpRunResponse,
+)
+def get_erp_run(run_id: str) -> ErpRunResponse:
+    run = run_repository.get_erp_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="ERP run not found")
+
+    return _erp_run_response(run)
+
+
+@app.get(
+    "/datasets/{dataset_id}/erp-runs",
+    response_model=ErpRunsResponse,
+)
+def list_dataset_erp_runs(dataset_id: str) -> ErpRunsResponse:
+    if registry_repository.get_dataset(dataset_id) is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    return ErpRunsResponse(
+        runs=[
+            _erp_run_response(run)
+            for run in run_repository.list_erp_runs(dataset_id=dataset_id)
+        ]
+    )
+
+
 @app.get("/datasets/{dataset_id}", response_model=DatasetResponse)
 def get_dataset(dataset_id: str) -> DatasetResponse:
     dataset = registry_repository.get_dataset(dataset_id)
@@ -1148,6 +1305,24 @@ def _epoch_run_response(run: EpochRun) -> EpochRunResponse:
     )
 
 
+def _erp_run_response(run: ErpRun) -> ErpRunResponse:
+    return ErpRunResponse(
+        run_id=run.run_id,
+        dataset_id=run.dataset_id,
+        run_kind=run.run_kind.value,
+        schema_version=run.schema_version,
+        config=ErpConfigPayload(**run.config.__dict__),
+        status=run.status.value,
+        started_at_utc=run.started_at_utc,
+        finished_at_utc=run.finished_at_utc,
+        cancel_requested_at_utc=run.cancel_requested_at_utc,
+        output_path=run.output_path,
+        output_metadata=run.output_metadata,
+        warnings=run.warnings,
+        errors=run.errors,
+    )
+
+
 def _epoch_input_provenance(
     preprocessing_run: PreprocessingRun,
     event_log: EventLog | None,
@@ -1170,6 +1345,24 @@ def _epoch_input_provenance(
         "input_channel_count": recording.metadata.channel_count
         if recording is not None
         else None,
+    }
+
+
+def _erp_input_provenance(
+    epoch_run: EpochRun,
+) -> dict[str, str | int | float | bool | None]:
+    return {
+        "input_epoch_run_id": epoch_run.run_id,
+        "input_epochs_path": epoch_run.output_path,
+        "input_preprocessing_run_id": epoch_run.output_metadata.get(
+            "input_preprocessing_run_id"
+        ),
+        "input_condition_count": epoch_run.output_metadata.get("condition_count"),
+        "input_epoch_count": epoch_run.output_metadata.get("epoch_count"),
+        "input_sampling_rate_hz": epoch_run.output_metadata.get(
+            "output_sampling_rate_hz"
+        ),
+        "input_channel_count": epoch_run.output_metadata.get("output_channel_count"),
     }
 
 
@@ -1240,6 +1433,81 @@ def _epoch_completed_provenance(
         "dropped_epoch_count": processing_metadata["dropped_epoch_count"],
         **diagnostics_metadata,
     }
+
+
+def _erp_completed_provenance(
+    run: ErpRun,
+    output_path: Path,
+    processing_metadata: dict,
+) -> dict[str, str | int | float | bool | None]:
+    metadata_path = _write_erp_metadata(
+        output_path=output_path,
+        processing_metadata=processing_metadata,
+        run=run,
+    )
+    condition_artifacts = [
+        _artifact_manifest_entry(
+            logical_name=f"evoked_{item['safe_condition']}",
+            path=Path(str(item["evoked_path"])),
+            artifact_type="evoked_fif",
+            output_directory=output_path.parent,
+        )
+        for item in processing_metadata.get("conditions", [])
+        if isinstance(item, dict)
+        and isinstance(item.get("safe_condition"), str)
+        and isinstance(item.get("evoked_path"), str)
+    ]
+    manifest_metadata = _write_artifact_manifest(
+        output_directory=output_path.parent,
+        artifacts=[
+            *condition_artifacts,
+            _artifact_manifest_entry(
+                logical_name="erp_metadata",
+                path=metadata_path,
+                artifact_type="metadata_json",
+                output_directory=output_path.parent,
+            ),
+        ],
+    )
+    return {
+        **run.output_metadata,
+        "artifact_root": str(output_path.parent),
+        "primary_artifact_path": str(output_path),
+        "artifact_count": manifest_metadata["artifact_count"],
+        "artifact_manifest_path": manifest_metadata["artifact_manifest_path"],
+        "output_path": str(output_path),
+        "output_file_format": processing_metadata["file_format"],
+        "mne_version": processing_metadata["mne_version"],
+        "input_epoch_run_id": processing_metadata["input_epoch_run_id"],
+        "input_epochs_path": processing_metadata["input_epochs_path"],
+        "condition_count": processing_metadata["condition_count"],
+        "evoked_count": processing_metadata["evoked_count"],
+        "erp_metadata_path": str(metadata_path),
+        "erp_metadata_available": True,
+    }
+
+
+def _write_erp_metadata(
+    output_path: Path,
+    processing_metadata: dict,
+    run: ErpRun,
+) -> Path:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path = output_path
+    payload = processing_metadata.get("metadata")
+    if not isinstance(payload, dict):
+        payload = {
+            "schema_version": 1,
+            "conditions": processing_metadata.get("conditions", []),
+            "warnings": processing_metadata.get("warnings", []),
+        }
+    payload = {
+        "run_id": run.run_id,
+        "dataset_id": run.dataset_id,
+        **payload,
+    }
+    _write_json_file(metadata_path, payload)
+    return metadata_path
 
 
 def _write_epoch_diagnostics(
@@ -1814,6 +2082,158 @@ def _run_epoching_subprocess(
     )
 
 
+def _execute_erp_run(run_id: str) -> None:
+    run = run_repository.get_erp_run(run_id)
+    if run is None:
+        return
+    if run.status == ErpRunStatus.CANCELLED:
+        return
+    if run.status in {
+        ErpRunStatus.COMPLETED,
+        ErpRunStatus.FAILED,
+    }:
+        return
+    if run.status == ErpRunStatus.CANCELLING:
+        cancelled_run = replace(
+            run,
+            status=ErpRunStatus.CANCELLED,
+            finished_at_utc=_utc_now_iso(),
+            cancel_requested_at_utc=run.cancel_requested_at_utc,
+        )
+        run_repository.save_erp_run(cancelled_run)
+        return
+
+    epoch_run = run_repository.get_epoch_run(run.config.epoch_run_id)
+    if epoch_run is None or not epoch_run.output_path or not run.output_path:
+        failed_run = replace(
+            run,
+            status=ErpRunStatus.FAILED,
+            finished_at_utc=_utc_now_iso(),
+            errors=["ERP run is missing epoch output data."],
+        )
+        run_repository.save_erp_run(failed_run)
+        return
+
+    running_run = replace(
+        run,
+        status=ErpRunStatus.RUNNING,
+        started_at_utc=_utc_now_iso(),
+    )
+    run_repository.save_erp_run(running_run)
+
+    try:
+        output_path = Path(run.output_path)
+        metadata = _run_erp_subprocess(
+            run_id=run_id,
+            epochs_path=epoch_run.output_path,
+            output_directory=str(output_path.parent),
+            config=run.config,
+        )
+        completed_run = replace(
+            running_run,
+            status=ErpRunStatus.COMPLETED,
+            finished_at_utc=_utc_now_iso(),
+            output_metadata=_erp_completed_provenance(
+                run=running_run,
+                output_path=output_path,
+                processing_metadata=metadata,
+            ),
+            warnings=_dedupe_strings(
+                [
+                    *running_run.warnings,
+                    *[str(warning) for warning in metadata.get("warnings", [])],
+                ]
+            ),
+        )
+        current_run = run_repository.get_erp_run(run_id)
+        if current_run and current_run.status == ErpRunStatus.CANCELLING:
+            cancelled_run = replace(
+                completed_run,
+                status=ErpRunStatus.CANCELLED,
+                finished_at_utc=_utc_now_iso(),
+                cancel_requested_at_utc=current_run.cancel_requested_at_utc,
+                warnings=_dedupe_strings(
+                    [
+                        *current_run.warnings,
+                        *completed_run.warnings,
+                        "Run cancelled after ERP generation completed; output was retained.",
+                    ]
+                ),
+            )
+            run_repository.save_erp_run(cancelled_run)
+        else:
+            run_repository.save_erp_run(completed_run)
+    except ErpError as exc:
+        current_run = run_repository.get_erp_run(run_id)
+        current_warnings = current_run.warnings if current_run else []
+        next_status = (
+            ErpRunStatus.CANCELLED
+            if current_run and current_run.status == ErpRunStatus.CANCELLING
+            else ErpRunStatus.FAILED
+        )
+        failed_run = replace(
+            running_run,
+            status=next_status,
+            finished_at_utc=_utc_now_iso(),
+            cancel_requested_at_utc=(
+                current_run.cancel_requested_at_utc if current_run else None
+            ),
+            warnings=_dedupe_strings([*current_warnings, *exc.processing_warnings]),
+            errors=[str(exc)],
+        )
+        run_repository.save_erp_run(failed_run)
+
+
+def _run_erp_subprocess(
+    run_id: str,
+    epochs_path: str,
+    output_directory: str,
+    config: ErpConfig,
+) -> dict:
+    context = get_context("spawn")
+    result_queue = context.Queue()
+    process = context.Process(
+        target=run_erp_job,
+        args=(epochs_path, output_directory, config, result_queue),
+    )
+    process.start()
+
+    while process.is_alive():
+        process.join(timeout=0.1)
+        if _is_erp_cancellation_requested(run_id):
+            process.terminate()
+            process.join(timeout=5)
+            if process.is_alive():
+                process.kill()
+                process.join()
+            raise ErpError(
+                "ERP generation cancelled.",
+                processing_warnings=[
+                    "Cancellation terminated ERP generation subprocess."
+                ],
+            )
+
+    try:
+        result = result_queue.get_nowait()
+    except Empty as exc:
+        if process.exitcode == 0:
+            raise ErpError("ERP subprocess exited without a result.") from exc
+        raise ErpError(
+            f"ERP subprocess exited with code {process.exitcode}."
+        ) from exc
+
+    if result.get("status") == "completed":
+        metadata = result.get("metadata")
+        if isinstance(metadata, dict):
+            return metadata
+        raise ErpError("ERP subprocess returned invalid metadata.")
+
+    raise ErpError(
+        str(result.get("error") or "ERP subprocess failed."),
+        processing_warnings=[str(warning) for warning in result.get("warnings", [])],
+    )
+
+
 def _is_cancellation_requested(run_id: str) -> bool:
     run = run_repository.get_preprocessing_run(run_id)
     return run is not None and run.status in {
@@ -1827,6 +2247,14 @@ def _is_epoch_cancellation_requested(run_id: str) -> bool:
     return run is not None and run.status in {
         EpochRunStatus.CANCELLING,
         EpochRunStatus.CANCELLED,
+    }
+
+
+def _is_erp_cancellation_requested(run_id: str) -> bool:
+    run = run_repository.get_erp_run(run_id)
+    return run is not None and run.status in {
+        ErpRunStatus.CANCELLING,
+        ErpRunStatus.CANCELLED,
     }
 
 
@@ -1972,6 +2400,46 @@ def _validate_epoch_config(
         warnings.append(
             f"{out_of_bounds_count} candidate events fall outside the epoch window bounds and will be skipped."
         )
+
+    return errors, warnings
+
+
+def _validate_erp_config(
+    config: ErpConfig,
+    dataset_id: str,
+    epoch_run: EpochRun | None,
+) -> tuple[list[str], list[str]]:
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    if epoch_run is None:
+        errors.append("Epoch run not found.")
+    else:
+        if epoch_run.dataset_id != dataset_id:
+            errors.append("Epoch run must belong to the selected dataset.")
+        if epoch_run.status != EpochRunStatus.COMPLETED:
+            errors.append("Epoch run must be completed before ERP generation.")
+        if not epoch_run.output_path:
+            errors.append("Epoch run is missing an output path.")
+        elif not Path(epoch_run.output_path).is_file():
+            errors.append("Epoch output file was not found.")
+
+    if config.method != "mean":
+        errors.append("ERP method must be 'mean'.")
+
+    if config.conditions is not None:
+        conditions = [condition.strip() for condition in config.conditions]
+        if not all(conditions):
+            errors.append("ERP condition labels must not be empty.")
+        if len(set(conditions)) != len(conditions):
+            errors.append("ERP condition labels must be unique.")
+
+    if config.picks is not None:
+        picks = [pick.strip() for pick in config.picks]
+        if not all(picks):
+            errors.append("ERP picks must not be empty.")
+        if len(set(picks)) != len(picks):
+            errors.append("ERP picks must be unique.")
 
     return errors, warnings
 

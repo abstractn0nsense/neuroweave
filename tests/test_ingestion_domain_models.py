@@ -6,6 +6,9 @@ from eeg_core.domain import (
     EpochConfig,
     EpochRun,
     EpochRunStatus,
+    ErpConfig,
+    ErpRun,
+    ErpRunStatus,
     EventColumnMapping,
     Experiment,
     NormalizedEvent,
@@ -86,6 +89,26 @@ def test_epoch_run_contract_defaults_to_pending_epoch_run():
     assert payload["schema_version"] == 1
     assert payload["config"]["preprocessing_run_id"] == "preprocess-001"
     assert payload["config"]["condition_field"] == "trial_type"
+
+
+def test_erp_run_contract_defaults_to_pending_erp_run():
+    run = ErpRun(
+        run_id="erp-001",
+        dataset_id="dataset-001",
+        config=ErpConfig(
+            epoch_run_id="epoch-001",
+            conditions=["target"],
+        ),
+        output_path="data/erp/dataset-001/erp-001/erp_metadata.json",
+    )
+
+    payload = asdict(run)
+
+    assert run.status == ErpRunStatus.PENDING
+    assert payload["run_kind"] == "erp"
+    assert payload["schema_version"] == 1
+    assert payload["config"]["epoch_run_id"] == "epoch-001"
+    assert payload["config"]["conditions"] == ["target"]
 
 
 def test_validation_report_exposes_errors_and_warnings():

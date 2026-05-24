@@ -14,6 +14,9 @@ from eeg_core.domain import (
     EpochConfig,
     EpochRun,
     EpochRunStatus,
+    ErpConfig,
+    ErpRun,
+    ErpRunStatus,
     EventColumnMapping,
     EventLog,
     Experiment,
@@ -289,6 +292,11 @@ class JsonRunRepository:
         _write_json(self.epoch_run_path(run.run_id), asdict(run))
         return run
 
+    def save_erp_run(self, run: ErpRun) -> ErpRun:
+        self.initialize()
+        _write_json(self.erp_run_path(run.run_id), asdict(run))
+        return run
+
     def get_preprocessing_run(self, run_id: str) -> PreprocessingRun | None:
         path = self.preprocessing_run_path(run_id)
         if not path.exists():
@@ -306,6 +314,15 @@ class JsonRunRepository:
         if _run_kind_from_json(data) != RunKind.EPOCH:
             return None
         return _epoch_run_from_json(data)
+
+    def get_erp_run(self, run_id: str) -> ErpRun | None:
+        path = self.erp_run_path(run_id)
+        if not path.exists():
+            return None
+        data = _read_json_object(path)
+        if _run_kind_from_json(data) != RunKind.ERP:
+            return None
+        return _erp_run_from_json(data)
 
     def list_preprocessing_runs(
         self,
@@ -335,6 +352,20 @@ class JsonRunRepository:
             return runs
         return [run for run in runs if run.dataset_id == dataset_id]
 
+    def list_erp_runs(
+        self,
+        dataset_id: str | None = None,
+    ) -> list[ErpRun]:
+        self.initialize()
+        runs = []
+        for path in sorted(self.runs_root.glob("*/run.json")):
+            data = _read_json_object(path)
+            if _run_kind_from_json(data) == RunKind.ERP:
+                runs.append(_erp_run_from_json(data))
+        if dataset_id is None:
+            return runs
+        return [run for run in runs if run.dataset_id == dataset_id]
+
     def preprocessing_run_directory(self, run_id: str) -> Path:
         return self.runs_root / run_id
 
@@ -346,6 +377,12 @@ class JsonRunRepository:
 
     def epoch_run_path(self, run_id: str) -> Path:
         return self.epoch_run_directory(run_id) / "run.json"
+
+    def erp_run_directory(self, run_id: str) -> Path:
+        return self.runs_root / run_id
+
+    def erp_run_path(self, run_id: str) -> Path:
+        return self.erp_run_directory(run_id) / "run.json"
 
 
 def _project_from_json(data: JsonObject) -> Project:
@@ -452,6 +489,21 @@ def _epoch_config_from_json(data: JsonObject) -> EpochConfig:
     )
 
 
+def _erp_config_from_json(data: JsonObject) -> ErpConfig:
+    conditions = data.get("conditions")
+    picks = data.get("picks")
+    return ErpConfig(
+        epoch_run_id=str(data["epoch_run_id"]),
+        conditions=(
+            [str(condition) for condition in conditions]
+            if isinstance(conditions, list)
+            else None
+        ),
+        picks=[str(pick) for pick in picks] if isinstance(picks, list) else None,
+        method=str(data.get("method", "mean")),
+    )
+
+
 def _preprocessing_run_from_json(data: JsonObject) -> PreprocessingRun:
     return PreprocessingRun(
         run_id=str(data["run_id"]),
@@ -480,6 +532,24 @@ def _epoch_run_from_json(data: JsonObject) -> EpochRun:
         run_kind=_run_kind_from_json(data) or RunKind.EPOCH,
         schema_version=int(data.get("schema_version", 1)),
         status=EpochRunStatus(data.get("status", EpochRunStatus.PENDING)),
+        started_at_utc=data.get("started_at_utc"),
+        finished_at_utc=data.get("finished_at_utc"),
+        cancel_requested_at_utc=data.get("cancel_requested_at_utc"),
+        output_path=data.get("output_path"),
+        output_metadata=dict(data.get("output_metadata", {})),
+        warnings=[str(warning) for warning in data.get("warnings", [])],
+        errors=[str(error) for error in data.get("errors", [])],
+    )
+
+
+def _erp_run_from_json(data: JsonObject) -> ErpRun:
+    return ErpRun(
+        run_id=str(data["run_id"]),
+        dataset_id=str(data["dataset_id"]),
+        config=_erp_config_from_json(data.get("config", {})),
+        run_kind=_run_kind_from_json(data) or RunKind.ERP,
+        schema_version=int(data.get("schema_version", 1)),
+        status=ErpRunStatus(data.get("status", ErpRunStatus.PENDING)),
         started_at_utc=data.get("started_at_utc"),
         finished_at_utc=data.get("finished_at_utc"),
         cancel_requested_at_utc=data.get("cancel_requested_at_utc"),

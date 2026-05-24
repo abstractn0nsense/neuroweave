@@ -52,6 +52,15 @@ class EpochRunStatus(StrEnum):
     FAILED = "failed"
 
 
+class ErpRunStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    CANCELLING = "cancelling"
+    CANCELLED = "cancelled"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 @dataclass(frozen=True)
 class EventColumnMapping:
     onset_seconds: str | None = None
@@ -214,6 +223,14 @@ class EpochConfig:
 
 
 @dataclass(frozen=True)
+class ErpConfig:
+    epoch_run_id: str
+    conditions: list[str] | None = None
+    picks: list[str] | None = None
+    method: str = "mean"
+
+
+@dataclass(frozen=True)
 class PreprocessingRun:
     run_id: str
     dataset_id: str
@@ -238,6 +255,23 @@ class EpochRun:
     run_kind: RunKind = RunKind.EPOCH
     schema_version: int = 1
     status: EpochRunStatus = EpochRunStatus.PENDING
+    started_at_utc: str | None = None
+    finished_at_utc: str | None = None
+    cancel_requested_at_utc: str | None = None
+    output_path: str | None = None
+    output_metadata: Metadata = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ErpRun:
+    run_id: str
+    dataset_id: str
+    config: ErpConfig
+    run_kind: RunKind = RunKind.ERP
+    schema_version: int = 1
+    status: ErpRunStatus = ErpRunStatus.PENDING
     started_at_utc: str | None = None
     finished_at_utc: str | None = None
     cancel_requested_at_utc: str | None = None

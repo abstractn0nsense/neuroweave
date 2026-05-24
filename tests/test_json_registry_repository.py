@@ -7,6 +7,9 @@ from eeg_core.domain import (
     EpochConfig,
     EpochRun,
     EpochRunStatus,
+    ErpConfig,
+    ErpRun,
+    ErpRunStatus,
     EventColumnMapping,
     EventLog,
     Experiment,
@@ -316,6 +319,42 @@ def test_run_repository_persists_epoch_runs(tmp_path):
     assert stored["schema_version"] == 1
     assert stored["config"]["preprocessing_run_id"] == "preprocess-001"
     assert stored["config"]["condition_field"] == "trial_type"
+
+
+def test_run_repository_persists_erp_runs(tmp_path):
+    repository = JsonRunRepository(tmp_path / "runs")
+    run = ErpRun(
+        run_id="erp-001",
+        dataset_id="dataset-001",
+        config=ErpConfig(
+            epoch_run_id="epoch-001",
+            conditions=["target", "standard"],
+            picks=["Fp1", "Fp2"],
+        ),
+        status=ErpRunStatus.COMPLETED,
+        started_at_utc="2026-05-25T00:00:00+00:00",
+        finished_at_utc="2026-05-25T00:01:00+00:00",
+        output_path="data/erp/dataset-001/erp-001/erp_metadata.json",
+        output_metadata={
+            "artifact_root": "data/erp/dataset-001/erp-001",
+            "evoked_count": 2,
+        },
+        warnings=["mne filename warning"],
+    )
+
+    repository.save_erp_run(run)
+
+    assert repository.get_erp_run("erp-001") == run
+    assert repository.list_erp_runs(dataset_id="dataset-001") == [run]
+    assert repository.list_preprocessing_runs(dataset_id="dataset-001") == []
+    assert repository.list_epoch_runs(dataset_id="dataset-001") == []
+    assert repository.erp_run_path("erp-001").is_file()
+
+    stored = json.loads(repository.erp_run_path("erp-001").read_text(encoding="utf-8"))
+    assert stored["run_kind"] == RunKind.ERP
+    assert stored["schema_version"] == 1
+    assert stored["config"]["epoch_run_id"] == "epoch-001"
+    assert stored["config"]["conditions"] == ["target", "standard"]
 
 
 def test_run_repository_lists_epoch_runs_by_dataset(tmp_path):

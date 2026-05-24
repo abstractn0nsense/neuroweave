@@ -2,9 +2,10 @@ from multiprocessing.queues import Queue
 from pathlib import Path
 from typing import Any
 
-from eeg_core.domain import PreprocessingConfig
+from eeg_core.domain import ErpConfig, PreprocessingConfig
 from eeg_core.domain import EpochConfig, EventLog
 from eeg_processing.epoching import EpochingError, epoch_preprocessed_eeg
+from eeg_processing.erp import ErpError, generate_erps_from_epochs
 from eeg_processing.preprocessing import PreprocessingError, preprocess_raw_eeg
 
 
@@ -69,6 +70,37 @@ def run_epoching_job(
             {
                 "status": "failed",
                 "error": f"Epoching subprocess failed: {exc}",
+                "warnings": [],
+            }
+        )
+
+
+def run_erp_job(
+    epochs_path: str,
+    output_directory: str,
+    config: ErpConfig,
+    result_queue: Queue,
+) -> None:
+    try:
+        metadata = generate_erps_from_epochs(
+            epochs_path=Path(epochs_path),
+            output_directory=Path(output_directory),
+            config=config,
+        )
+        result_queue.put({"status": "completed", "metadata": metadata})
+    except ErpError as exc:
+        result_queue.put(
+            {
+                "status": "failed",
+                "error": str(exc),
+                "warnings": exc.processing_warnings,
+            }
+        )
+    except BaseException as exc:
+        result_queue.put(
+            {
+                "status": "failed",
+                "error": f"ERP subprocess failed: {exc}",
                 "warnings": [],
             }
         )

@@ -1054,6 +1054,11 @@ After epoch/ERP UI is added, include the Phase 3 E2E checks from 3.10.
 Purpose: produce deterministic condition-level evoked artifacts from completed epoch
 runs while keeping ERP as a separate analysis layer.
 
+Status: implemented with separate `ErpConfig`, `ErpRun`, and `ErpRunStatus`
+contracts, dataset-scoped ERP run endpoints, local ERP worker recovery, per-condition
+evoked FIF artifacts, `erp_metadata.json`, artifact manifests, and compact
+channel/time peak summaries.
+
 Implementation steps:
 
 1. Add ERP domain models only if ERP needs independent run state.
