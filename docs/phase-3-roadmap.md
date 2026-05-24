@@ -369,6 +369,8 @@ Contract notes:
 
 Purpose: reject bad epoch requests before a worker run is queued.
 
+Status: implemented as API-layer validation helpers for Phase 3.3 endpoint reuse.
+
 Implementation steps:
 
 1. Add API-level validation helper near the preprocessing validation helper first.

@@ -28,6 +28,7 @@ for package_src in (
 from eeg_core.domain import (  # noqa: E402
     Dataset as IngestionDataset,
     DatasetStatus,
+    EpochConfig,
     EventColumnMapping,
     EventLog,
     Experiment,
@@ -46,6 +47,7 @@ from eeg_core.domain import (  # noqa: E402
     validate_ingestion_dataset,
 )
 from eeg_processing import PreprocessingError, run_preprocessing_job  # noqa: E402
+from eeg_processing.epoching import SUPPORTED_CONDITION_FIELDS  # noqa: E402
 from eeg_io.datasets import find_eeg_file_by_id, list_eeg_files  # noqa: E402
 from eeg_io.event_logs import (  # noqa: E402
     EventLogNormalizationError,
@@ -1374,6 +1376,157 @@ def _validate_preprocessing_config(
                     )
 
     return errors
+
+
+def _validate_epoch_config(
+    config: EpochConfig,
+    dataset: IngestionDataset,
+    preprocessing_run: PreprocessingRun | None,
+    event_log: EventLog | None,
+    recording: Recording | None,
+) -> tuple[list[str], list[str]]:
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    if dataset.status != DatasetStatus.VALID:
+        errors.append("Dataset must be valid before epoching.")
+
+    if preprocessing_run is None:
+        errors.append("Preprocessing run not found.")
+    else:
+        if preprocessing_run.dataset_id != dataset.dataset_id:
+            errors.append("Preprocessing run must belong to the selected dataset.")
+        if preprocessing_run.status != PreprocessingRunStatus.COMPLETED:
+            errors.append("Preprocessing run must be completed before epoching.")
+        if not preprocessing_run.output_path:
+            errors.append("Preprocessing run is missing an output path.")
+        elif not Path(preprocessing_run.output_path).is_file():
+            errors.append("Preprocessing output file was not found.")
+
+    if event_log is None or not event_log.events:
+        errors.append("Dataset must have mapped events before epoching.")
+
+    if recording is None:
+        errors.append("Recording metadata is required before epoching.")
+
+    if config.tmin_seconds >= config.tmax_seconds:
+        errors.append("tmin_seconds must be lower than tmax_seconds.")
+    if config.tmax_seconds <= 0:
+        errors.append("tmax_seconds must be greater than 0.")
+
+    baseline_errors = _validate_epoch_baseline(config)
+    errors.extend(baseline_errors)
+
+    if config.condition_field not in SUPPORTED_CONDITION_FIELDS:
+        errors.append(f"Unsupported condition field: {config.condition_field}.")
+
+    if config.reject_eeg_uv is not None and config.reject_eeg_uv <= 0:
+        errors.append("reject_eeg_uv must be greater than 0.")
+
+    if errors:
+        return errors, warnings
+
+    assert event_log is not None
+    candidate_events = [
+        event
+        for event in event_log.events
+        if _epoch_condition_label(getattr(event, config.condition_field)) is not None
+    ]
+    if not candidate_events:
+        return [
+            f"No usable events found for condition field: {config.condition_field}."
+        ], warnings
+
+    output_duration = _epoch_output_duration_seconds(
+        preprocessing_run=preprocessing_run,
+        recording=recording,
+    )
+    output_sampling_rate = _epoch_output_sampling_rate_hz(
+        preprocessing_run=preprocessing_run,
+        recording=recording,
+    )
+    if output_sampling_rate is None or output_sampling_rate <= 0:
+        return ["Epoch validation requires a positive output sampling rate."], warnings
+    if output_duration is None or output_duration <= 0:
+        return ["Epoch validation requires a positive output duration."], warnings
+
+    out_of_bounds_count = 0
+    for event in candidate_events:
+        start_seconds = event.onset_seconds + config.tmin_seconds
+        end_seconds = event.onset_seconds + config.tmax_seconds
+        if start_seconds < 0 or end_seconds > output_duration:
+            out_of_bounds_count += 1
+
+    if out_of_bounds_count == len(candidate_events):
+        return ["All candidate epoch windows are outside the recording bounds."], warnings
+
+    if out_of_bounds_count:
+        warnings.append(
+            f"{out_of_bounds_count} candidate events fall outside the epoch window bounds and will be skipped."
+        )
+
+    return errors, warnings
+
+
+def _validate_epoch_baseline(config: EpochConfig) -> list[str]:
+    errors: list[str] = []
+    baseline_start = config.baseline_start_seconds
+    baseline_end = config.baseline_end_seconds
+
+    if baseline_start is None and baseline_end is None:
+        return errors
+    if baseline_start is None or baseline_end is None:
+        return [
+            "baseline_start_seconds and baseline_end_seconds must both be set or both be null."
+        ]
+    if baseline_start > baseline_end:
+        errors.append(
+            "baseline_start_seconds must be lower than or equal to baseline_end_seconds."
+        )
+    if baseline_start < config.tmin_seconds or baseline_end > config.tmax_seconds:
+        errors.append("Baseline range must be inside the epoch time window.")
+    return errors
+
+
+def _epoch_output_duration_seconds(
+    preprocessing_run: PreprocessingRun | None,
+    recording: Recording | None,
+) -> float | None:
+    if preprocessing_run is not None:
+        duration = preprocessing_run.output_metadata.get("output_duration_seconds")
+        if isinstance(duration, (int, float)) and not isinstance(duration, bool):
+            return float(duration)
+    if recording is not None:
+        return recording.metadata.duration_seconds
+    return None
+
+
+def _epoch_output_sampling_rate_hz(
+    preprocessing_run: PreprocessingRun | None,
+    recording: Recording | None,
+) -> float | None:
+    if preprocessing_run is not None:
+        sampling_rate = preprocessing_run.output_metadata.get("output_sampling_rate_hz")
+        if isinstance(sampling_rate, (int, float)) and not isinstance(
+            sampling_rate,
+            bool,
+        ):
+            return float(sampling_rate)
+    if recording is not None:
+        return recording.metadata.sampling_rate_hz
+    return None
+
+
+def _epoch_condition_label(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return str(value).lower()
+
+    label = str(value).strip()
+    if not label:
+        return None
+    return label
 
 
 def _find_uploaded_file(
