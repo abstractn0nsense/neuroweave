@@ -1292,6 +1292,11 @@ Contract notes:
 Purpose: protect the complete user workflow without making one large smoke test
 fragile.
 
+Status: implemented with shared Playwright workflow helpers, a Phase 2-only
+preprocessing smoke, separated `e2e:phase3:epoch` and `e2e:phase3:erp` scripts,
+isolated browser test data directory override support, and ERP smoke coverage
+through preview plus comparison prep.
+
 Implementation steps:
 
 1. Keep the existing Phase 2 smoke path intact.

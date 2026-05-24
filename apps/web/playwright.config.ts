@@ -6,7 +6,9 @@ import { fileURLToPath } from "node:url";
 const webDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(webDir, "../..");
 const apiDir = path.join(repoRoot, "apps", "api");
-const e2eDataDir = path.join(repoRoot, "data", "cache", "phase2-e2e");
+const e2eDataDir =
+  process.env.NEUROWEAVE_E2E_DATA_DIR ??
+  path.join(repoRoot, "data", "cache", "browser-e2e");
 const apiPort = 8010;
 const webPort = 5174;
 const apiBaseUrl = `http://127.0.0.1:${apiPort}`;
