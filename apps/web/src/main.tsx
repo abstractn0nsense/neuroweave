@@ -92,6 +92,23 @@ type EventColumnMapping = {
   reaction_time_seconds: string | null;
 };
 
+type EventMappingPreset = "" | "psychopy" | "bids_events" | "eeglab_annotations";
+
+type EventRowFilterCondition = {
+  column: string;
+  equals: string | null;
+};
+
+type EventRowFilter = {
+  include: EventRowFilterCondition[];
+  exclude: EventRowFilterCondition[];
+};
+
+type EventRowFilterForm = {
+  include: string;
+  exclude: string;
+};
+
 type EventPreview = {
   columns: string[];
   delimiter: string;
@@ -121,6 +138,7 @@ type EventLogResponse = {
   file_id: string;
   mapping: EventColumnMapping;
   row_count: number;
+  filter_count: number;
   events: NormalizedEvent[];
 };
 
@@ -285,6 +303,53 @@ const EMPTY_MAPPING: Record<MappingKey, string> = {
   reaction_time_seconds: "",
 };
 
+const EVENT_MAPPING_PRESETS: {
+  value: EventMappingPreset;
+  label: string;
+  mapping: Partial<Record<MappingKey, string>>;
+}[] = [
+  { value: "", label: "Custom", mapping: {} },
+  {
+    value: "psychopy",
+    label: "PsychoPy",
+    mapping: {
+      onset_seconds: "stim_onset",
+      duration_seconds: "stim_duration",
+      trial_type: "condition",
+      response: "key_resp.keys",
+      correct: "key_resp.corr",
+      reaction_time_seconds: "key_resp.rt",
+    },
+  },
+  {
+    value: "bids_events",
+    label: "BIDS Events",
+    mapping: {
+      onset_seconds: "onset",
+      duration_seconds: "duration",
+      trial_type: "trial_type",
+      stimulus: "stimulus",
+      response: "response",
+      correct: "correct",
+      reaction_time_seconds: "response_time",
+    },
+  },
+  {
+    value: "eeglab_annotations",
+    label: "EEGLAB Annotations",
+    mapping: {
+      onset_seconds: "onset",
+      duration_seconds: "duration",
+      trial_type: "type",
+    },
+  },
+];
+
+const EMPTY_ROW_FILTER: EventRowFilterForm = {
+  include: "",
+  exclude: "",
+};
+
 const DEFAULT_PREPROCESSING_CONFIG = {
   high_pass_hz: "1",
   low_pass_hz: "40",
@@ -379,6 +444,10 @@ function App() {
   const [eventFile, setEventFile] = useState<File | null>(null);
   const [eventPreview, setEventPreview] = useState<EventPreview | null>(null);
   const [mapping, setMapping] = useState<Record<MappingKey, string>>(EMPTY_MAPPING);
+  const [eventMappingPreset, setEventMappingPreset] =
+    useState<EventMappingPreset>("");
+  const [eventRowFilter, setEventRowFilter] =
+    useState<EventRowFilterForm>(EMPTY_ROW_FILTER);
   const [eventLog, setEventLog] = useState<EventLogResponse | null>(null);
   const [validation, setValidation] = useState<ValidationReport | null>(null);
   const [preprocessingConfig, setPreprocessingConfig] = useState(
@@ -543,6 +612,10 @@ function App() {
   useEffect(() => {
     if (!activeDatasetId) {
       setEventLog(null);
+      setEventPreview(null);
+      setMapping(EMPTY_MAPPING);
+      setEventMappingPreset("");
+      setEventRowFilter(EMPTY_ROW_FILTER);
       setValidation(null);
       setPreprocessingRuns({ status: "idle", data: null, error: null });
       setEpochRuns({ status: "idle", data: null, error: null });
@@ -555,6 +628,10 @@ function App() {
     setPreprocessingRuns({ status: "loading", data: null, error: null });
     setEpochRuns({ status: "loading", data: null, error: null });
     setErpRuns({ status: "loading", data: null, error: null });
+    setEventPreview(null);
+    setMapping(EMPTY_MAPPING);
+    setEventMappingPreset("");
+    setEventRowFilter(EMPTY_ROW_FILTER);
 
     loadDatasetContext(activeDatasetId)
       .then((context) => {
@@ -903,6 +980,8 @@ function App() {
           selectedExperiment?.default_event_mapping ?? null,
         ),
       );
+      setEventMappingPreset("");
+      setEventRowFilter(EMPTY_ROW_FILTER);
       updateDatasetInState(response.dataset);
       setNotice({ tone: "ok", message: "Event log uploaded." });
     });
@@ -913,16 +992,20 @@ function App() {
       setNotice({ tone: "error", message: "Select a dataset first." });
       return;
     }
-    if (!mapping.onset_seconds) {
+    if (!eventMappingPreset && !mapping.onset_seconds) {
       setNotice({ tone: "error", message: "Map an onset column first." });
       return;
     }
 
     await runAction("event-mapping", async () => {
+      const rowFilterPayload = normalizeRowFilterPayload(eventRowFilter);
       const eventLogResponse = await postJson<EventLogResponse>(
         `/datasets/${encodeURIComponent(activeDatasetId)}/events/mapping`,
         {
-          mapping: normalizeMappingPayload(mapping),
+          ...(eventMappingPreset
+            ? { preset: eventMappingPreset }
+            : { mapping: normalizeMappingPayload(mapping) }),
+          ...(rowFilterPayload ? { row_filter: rowFilterPayload } : {}),
         },
       );
       setEventLog(eventLogResponse);
@@ -1407,11 +1490,20 @@ function App() {
                   eventFile={eventFile}
                   eventLog={eventLog}
                   eventPreview={eventPreview}
+                  eventMappingPreset={eventMappingPreset}
+                  eventRowFilter={eventRowFilter}
                   mapping={mapping}
                   onBeginPreprocessing={beginPreprocessingHandoff}
                   onEegFileChange={setEegFile}
                   onEventFileChange={setEventFile}
+                  onEventMappingPresetChange={(preset) => {
+                    setEventMappingPreset(preset);
+                    if (preset && eventPreview) {
+                      setMapping(mappingFromPreset(preset, eventPreview.columns));
+                    }
+                  }}
                   onMappingChange={setMapping}
+                  onRowFilterChange={setEventRowFilter}
                   onPreprocessingConfigChange={setPreprocessingConfig}
                   onCancelPreprocessingRun={cancelPreprocessingRun}
                   onSubmitEventMapping={submitEventMapping}
@@ -1866,12 +1958,16 @@ function IntakeSection({
   eegFile,
   eventFile,
   eventLog,
+  eventMappingPreset,
   eventPreview,
+  eventRowFilter,
   mapping,
   onBeginPreprocessing,
   onEegFileChange,
   onEventFileChange,
+  onEventMappingPresetChange,
   onMappingChange,
+  onRowFilterChange,
   onPreprocessingConfigChange,
   onCancelPreprocessingRun,
   onSubmitEventMapping,
@@ -1887,12 +1983,16 @@ function IntakeSection({
   eegFile: File | null;
   eventFile: File | null;
   eventLog: EventLogResponse | null;
+  eventMappingPreset: EventMappingPreset;
   eventPreview: EventPreview | null;
+  eventRowFilter: EventRowFilterForm;
   mapping: Record<MappingKey, string>;
   onBeginPreprocessing: () => void;
   onEegFileChange: (file: File | null) => void;
   onEventFileChange: (file: File | null) => void;
+  onEventMappingPresetChange: (preset: EventMappingPreset) => void;
   onMappingChange: (mapping: Record<MappingKey, string>) => void;
+  onRowFilterChange: (filter: EventRowFilterForm) => void;
   onPreprocessingConfigChange: (
     config: typeof DEFAULT_PREPROCESSING_CONFIG,
   ) => void;
@@ -1965,6 +2065,26 @@ function IntakeSection({
         {eventPreview ? (
           <div className="mapping-layout">
             <div>
+              <div className="mapping-controls">
+                <label>
+                  <span>Preset</span>
+                  <select
+                    data-testid="mapping-preset-select"
+                    onChange={(event) =>
+                      onEventMappingPresetChange(
+                        event.target.value as EventMappingPreset,
+                      )
+                    }
+                    value={eventMappingPreset}
+                  >
+                    {EVENT_MAPPING_PRESETS.map((preset) => (
+                      <option key={preset.value || "custom"} value={preset.value}>
+                        {preset.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
               <div className="mapping-grid">
                 {MAPPING_FIELDS.map((field) => (
                   <label key={field.key}>
@@ -1974,6 +2094,7 @@ function IntakeSection({
                     </span>
                     <select
                       data-testid={`mapping-${field.key}-select`}
+                      disabled={Boolean(eventMappingPreset)}
                       onChange={(event) =>
                         onMappingChange({
                           ...mapping,
@@ -1992,10 +2113,45 @@ function IntakeSection({
                   </label>
                 ))}
               </div>
+              <div className="row-filter-grid">
+                <label>
+                  <span>Include</span>
+                  <input
+                    data-testid="row-filter-include-input"
+                    onChange={(event) =>
+                      onRowFilterChange({
+                        ...eventRowFilter,
+                        include: event.target.value,
+                      })
+                    }
+                    placeholder="trial_type=target"
+                    type="text"
+                    value={eventRowFilter.include}
+                  />
+                </label>
+                <label>
+                  <span>Exclude</span>
+                  <input
+                    data-testid="row-filter-exclude-input"
+                    onChange={(event) =>
+                      onRowFilterChange({
+                        ...eventRowFilter,
+                        exclude: event.target.value,
+                      })
+                    }
+                    placeholder="status=reject"
+                    type="text"
+                    value={eventRowFilter.exclude}
+                  />
+                </label>
+              </div>
               <button
                 className="primary-button"
                 data-testid="save-mapping-button"
-                disabled={!mapping.onset_seconds || busyAction === "event-mapping"}
+                disabled={
+                  (!eventMappingPreset && !mapping.onset_seconds) ||
+                  busyAction === "event-mapping"
+                }
                 onClick={onSubmitEventMapping}
                 type="button"
               >
@@ -2026,7 +2182,12 @@ function IntakeSection({
             Validate Dataset
           </button>
           {eventLog ? (
-            <span className="muted">{eventLog.events.length} normalized events</span>
+            <span className="muted">
+              {eventLog.events.length} normalized / {eventLog.row_count} rows
+              {eventLog.filter_count > 0
+                ? ` / ${eventLog.filter_count} filtered`
+                : ""}
+            </span>
           ) : (
             <span className="muted">No mapped event log yet</span>
           )}
@@ -3240,6 +3401,23 @@ function getInitialMapping(
   }, { ...EMPTY_MAPPING });
 }
 
+function mappingFromPreset(
+  presetValue: EventMappingPreset,
+  columns: string[],
+): Record<MappingKey, string> {
+  const preset = EVENT_MAPPING_PRESETS.find((item) => item.value === presetValue);
+  if (!preset) {
+    return { ...EMPTY_MAPPING };
+  }
+
+  return MAPPING_FIELDS.reduce<Record<MappingKey, string>>((next, field) => {
+    const presetColumn = preset.mapping[field.key];
+    next[field.key] =
+      presetColumn && columns.includes(presetColumn) ? presetColumn : "";
+    return next;
+  }, { ...EMPTY_MAPPING });
+}
+
 function guessMapping(columns: string[]): Record<MappingKey, string> {
   return {
     onset_seconds: findColumn(columns, ["onset", "stim_onset", "time", "timestamp"]),
@@ -3281,6 +3459,32 @@ function normalizeMappingPayload(mapping: Record<MappingKey, string>): EventColu
       reaction_time_seconds: null,
     },
   );
+}
+
+function normalizeRowFilterPayload(
+  filter: EventRowFilterForm,
+): EventRowFilter | null {
+  const include = parseRowFilterConditions(filter.include);
+  const exclude = parseRowFilterConditions(filter.exclude);
+  if (include.length === 0 && exclude.length === 0) {
+    return null;
+  }
+  return { include, exclude };
+}
+
+function parseRowFilterConditions(value: string): EventRowFilterCondition[] {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => {
+      const [column, ...rest] = item.split("=");
+      return {
+        column: column.trim(),
+        equals: rest.length > 0 ? rest.join("=").trim() || null : null,
+      };
+    })
+    .filter((condition) => condition.column);
 }
 
 function normalizePreprocessingConfig(
