@@ -3,6 +3,8 @@ import csv
 
 from eeg_core.domain import EventColumnMapping, EventLog, NormalizedEvent
 
+_NULL_TOKENS = {"", "n/a", "na", "null"}
+
 
 class EventLogPreviewError(Exception):
     pass
@@ -177,7 +179,9 @@ def _optional_str(row: dict[str, str | None], column_name: str | None) -> str | 
     if value is None:
         return None
     stripped = value.strip()
-    return stripped or None
+    if stripped.lower() in _NULL_TOKENS:
+        return None
+    return stripped
 
 
 def _detect_delimiter(text: str, path: Path) -> str:
