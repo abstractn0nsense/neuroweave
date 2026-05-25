@@ -2,45 +2,82 @@
 
 작성일: 2026-05-25
 
-업데이트: 2026-05-25, 코드 검증 및 5월 25-26일 안정화 파이프라인 반영
+업데이트: 2026-05-26, `main` 기준 코드 재검토 및 worker CLI preprocessing/epoching/ERP subpipeline 머지 반영
 
 ## 현재 판단
 
-지금까지 만든 것은 "실제 데이터로 끝까지 도는 분석 MVP"이다. 현재 상태는 실제 공개 EEG 데이터 2종에서 ingestion -> preprocessing -> epoch -> ERP -> comparison까지 끝까지 도는 검증 가능한 프로토타입이다. 다만 연구 결론을 바로 산출하는 도구라기보다는, 연구용으로 신뢰할 수 있는 툴이 되기 위한 안정화, 재현성, 검증 단계가 남아 있다.
+현재 NeuroWeave는 "실제 데이터로 끝까지 도는 분석 MVP"에서 "research exploration alpha 기반"으로 한 단계 올라왔다. UI hydration/CORS 안정화와 preprocessing/epoching/ERP worker CLI 분리는 완료되어 `main`에 머지되었다. processing pipeline의 실행 경계는 이제 API process 내부 multiprocessing target이 아니라 worker CLI subprocess로 통일되었다.
 
-기준은 BIDS EEG 구조와 MNE/MNE-BIDS 관례를 따라가는 것이 맞다. 6월 10일까지의 현실적인 목표는 "논문 결과 산출용 완성판"이 아니라, 실제 공개 EEG 데이터를 반복해서 넣고 검토할 수 있는 research exploration alpha이다.
+6월 10일까지의 현실적인 목표는 여전히 "논문 결과 산출용 완성판"이 아니라, 실제 공개 EEG 데이터를 반복해서 넣고 검토할 수 있는 내부 연구 탐색용 alpha이다.
+
+## 진행 수준 요약
+
+| 항목 | 현재 수준 | 근거 | 다음 판단 |
+| --- | --- | --- | --- |
+| UI hydration + CORS | 완료 | `loadDatasetContext(datasetId)` 도입, CORS env/localhost port 옵션 반영, PR #5 머지 | 유지보수만 |
+| preprocessing worker CLI | 완료 | `eeg_processing.worker_cli preprocessing`, API subprocess 전환, worker artifact 저장, PR #6 머지 | 유지보수만 |
+| Phase 2/3 browser smoke | 완료 | `npm run e2e:all` 추가, Phase 2 + Phase 3 epoch + ERP smoke 통과 | CI/릴리스 검증에 계속 사용 |
+| epoching/ERP worker CLI | 완료 | `eeg_processing.worker_cli epoching/erp`, API subprocess 전환, worker artifact/exit code 저장, PR #8 머지 | 유지보수만 |
+| BIDS sidecar ingest MVP | 미완료 | `packages/eeg-io/src/eeg_io/bids_sidecars.py` 없음 | 다음 subpipeline 1순위 |
+| Event mapping v2 | 미완료 | null 처리/row filter/condition preset 모델 없음 | BIDS sidecar ingest와 같이 설계 |
+| structured warning/diagnostics | 미완료 | 기존 `warnings: list[str]` 중심 | BIDS ingest 후 warning inventory 기반으로 추가 |
+| QC dashboard MVP | 미완료 | artifact는 있으나 단계별 QC UI/JSON은 아직 제한적 | 6월 초 MVP |
+| Export bundle MVP | 미완료 | artifact manifest는 있으나 report bundle 없음 | QC 후 진행 |
 
 ## 현재 코드 검증 결과
 
-검증 기준 시점: 2026-05-25
+검증 기준 시점: 2026-05-26, `main` 커밋 `afe0df9 Run epoching and ERP through worker CLI`
 
-- Git 상태: clean
-- Python 테스트: `apps/api/.venv/Scripts/python.exe -m pytest tests --basetemp=data/cache/pytest-tmp -o cache_dir=data/cache/pytest-cache`
-  - 결과: 96 passed
-  - 주의: 기본 pytest 실행은 `C:\Users\USER\AppData\Local\Temp\pytest-of-USER` 권한 문제로 실패할 수 있으므로 repo 내부 `--basetemp`를 사용한다.
-- Web build: `C:\Program Files\nodejs\npm.cmd run build`
+- Git 상태: clean, `main...origin/main`
+- Python 테스트:
+  - 명령: `apps/api/.venv/Scripts/python.exe -m pytest tests --basetemp=data/cache/pytest-tmp -o cache_dir=data/cache/pytest-cache`
+  - 결과: 126 passed
+  - 주의: Windows 기본 temp 권한 문제를 피하기 위해 repo 내부 `--basetemp`를 표준 테스트 명령으로 사용한다.
+- Web build:
+  - 명령: `C:\Program Files\nodejs\npm.cmd run build`
   - 결과: TypeScript check 및 Vite build 통과
-  - 주의: PowerShell에서 `npm`은 execution policy 때문에 `npm.ps1`이 막힐 수 있으므로 `npm.cmd`를 직접 호출한다.
+  - 주의: PowerShell에서 `npm.ps1`이 execution policy에 막힐 수 있으므로 `npm.cmd`를 직접 호출한다.
+- Browser smoke:
+  - 명령: `C:\Program Files\nodejs\npm.cmd run e2e:all`
+  - 결과: Phase 2 preprocessing, Phase 3 epoch, Phase 3 ERP smoke 통과
 
-## 현재 코드에서 바로 보이는 수정 필요점
+## 완료된 안정화
 
-- `apps/web/src/main.tsx`: event log가 mapping 직후에는 state에 들어가지만, 새로고침/재접속 시 `/datasets/{id}/events`를 다시 fetch하지 않아 UI가 `Unmapped`로 보인다.
-- `apps/api/main.py`: CORS allowlist가 `5173/5174`에 고정되어 있어 임시 dev port에서 UI가 API unavailable로 보일 수 있다.
-- `apps/api/main.py` worker subprocess: 현재 API thread queue + `multiprocessing.spawn` + result queue 구조이다. 연구용이면 CLI entrypoint 기반 worker로 분리해 Windows spawn/pickle/result_queue 의존을 제거하는 것이 맞다.
-- `packages/eeg-io`: BIDS sidecar를 읽지 않아 OpenNeuro `.set`에서 channel type warning이 발생한다.
-- `packages/eeg-io/src/eeg_io/event_logs.py`: BIDS `events.tsv`의 `n/a`, row filtering, condition source preset이 부족하다.
-- warnings는 아직 string 중심이다. 연구용이면 severity/code/impact/action이 있는 structured warning이 필요하다.
+### 1. UI hydration + CORS
 
-## 전체 파이프라인
+완료 범위:
 
-```mermaid
-flowchart LR
-  A["Early: 연구용 기반 안정화"] --> B["Middle: 분석 워크플로우 확장"]
-  B --> C["Late: 연구급 검증/재현성/배포"]
-  A1["UI hydration + CORS + worker CLI + BIDS ingest"] --> A
-  B1["QC dashboard + export MVP + batch foundation"] --> B
-  C1["statistics + validation suite + audit + collaboration"] --> C
-```
+- `apps/web/src/main.tsx`에 `loadDatasetContext(datasetId)` 도입
+- active dataset 변경/새로고침 후 dataset detail, event log, validation, preprocessing/epoch/ERP runs 동시 hydration
+- `/events`, `/validation`의 정상 404는 빈 상태로 처리
+- `NEUROWEAVE_CORS_ORIGINS` env 기반 allowlist 추가
+- `NEUROWEAVE_CORS_ALLOW_LOCALHOST_PORTS=true`로 임시 localhost/127.0.0.1 포트 허용 가능
+
+완료 기준 충족:
+
+- mapped event log가 새로고침 후 `Unmapped`로 돌아가지 않음
+- dev server port가 바뀌어도 설정 기반으로 API 연결 가능
+- Python/API CORS 테스트와 web build 통과
+
+### 2. preprocessing worker CLI
+
+완료 범위:
+
+- `packages/eeg-processing/src/eeg_processing/worker_cli.py`
+- 실행 형태: `python -m eeg_processing.worker_cli preprocessing --payload payload.json --result result.json`
+- payload/result JSON schema v1 고정
+- API preprocessing 실행을 worker CLI subprocess로 전환
+- Windows subprocess 호환을 위해 API가 `PYTHONPATH`를 명시적으로 전달
+- worker payload/result/stdout/stderr artifact 저장
+- `output_metadata`에 worker artifact path, schema version, exit code 기록
+- worker failure에서도 exit code와 artifact 보존
+
+완료 기준 충족:
+
+- preprocessing run이 API 내부 multiprocessing target 직접 호출 없이 실행됨
+- Windows spawn/pickle/result queue 의존 제거
+- 기존 API response shape 유지
+- Python 테스트, web build, browser smoke 통과
 
 ## 6월 10일까지의 현실 목표
 
@@ -48,8 +85,9 @@ flowchart LR
 
 완료 목표:
 
-- UI hydration + CORS env화
-- preprocessing/epoch/ERP worker CLI 분리
+- UI hydration + CORS env화: 완료
+- preprocessing worker CLI 분리: 완료
+- epoching/ERP worker CLI 분리: 완료
 - BIDS sidecar ingest MVP
 - BIDS event mapping/filter preset MVP
 - structured warning/diagnostics MVP
@@ -66,210 +104,183 @@ flowchart LR
 - 대규모 visual regression suite
 - multi-subject batch의 완성형 UI
 
-## 5월 25일 상세 파이프라인: UI Hydration + CORS 안정화
+### 3. epoching/ERP worker CLI
 
-목표: 새로고침/재접속 후에도 dataset context가 실제 backend 상태와 일치하도록 만들고, dev port 변화에 견디는 API 연결 구조를 만든다.
+완료 범위:
 
-### 1. Baseline 고정
+- `worker_cli.py`에 `epoching`, `erp` job routing 추가
+- epoching payload/result JSON schema v1 정의
+- ERP payload/result JSON schema v1 정의
+- API epoching 실행을 worker CLI subprocess로 전환
+- API ERP 실행을 worker CLI subprocess로 전환
+- preprocessing/epoching/ERP 공통 subprocess helper 정리
+- worker payload/result/stdout/stderr artifact 저장
+- worker exit code와 schema version을 run metadata에 기록
+- result JSON 누락, invalid JSON, non-object JSON 실패 테스트 추가
 
-실행:
+완료 기준 충족:
 
-- `apps/api/.venv/Scripts/python.exe -m pytest tests --basetemp=data/cache/pytest-tmp -o cache_dir=data/cache/pytest-cache`
-- `C:\Program Files\nodejs\npm.cmd run build`
+- preprocessing -> epoch -> ERP 전체가 CLI worker 경유로 실행됨
+- cancellation warning 문구와 기존 API response shape 유지
+- ERP preview artifact endpoint와 comparison summary 흐름 유지
+- Python 전체 테스트, web build, browser smoke, GitHub CI 통과
 
-완료 기준:
+## 완료된 subpipeline: epoching/ERP worker CLI 확장
 
-- Python 테스트 96개 통과
-- Web build 통과
-- Windows temp 권한 문제는 문서화하고 repo 내부 basetemp를 표준 테스트 명령으로 사용
+목표: preprocessing에서 검증된 worker CLI 계약을 epoching/ERP에도 확장해, 전체 processing pipeline의 실행 경계를 API process 밖으로 통일한다.
 
-### 2. CORS env화
+상태: 완료, PR #8 머지.
 
-추가할 env:
+### 작업 0. Baseline 및 브랜치
 
-- `NEUROWEAVE_CORS_ORIGINS`
-- 예: `http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174`
-
-기본값:
-
-- 기존 `5173/5174` allowlist 유지
-
-개발 확장 옵션:
-
-- `NEUROWEAVE_CORS_ALLOW_LOCALHOST_PORTS=true`
-- true일 때만 `localhost`/`127.0.0.1` 임의 port 허용 regex 사용
-
-안정성 기준:
-
-- production-like 실행에서는 명시 allowlist가 우선
-- launcher, README, `.env.example` 흐름을 깨지 않음
-- CORS 설정이 실패해도 기본 개발 포트는 계속 동작
-
-### 3. `loadDatasetContext(datasetId)` 도입
-
-우선 `apps/web/src/main.tsx` 내부 helper로 시작하고, 커지면 `apiClient.ts` 또는 dataset context hook으로 분리한다.
-
-한 번에 로드할 API:
-
-- `GET /datasets/{datasetId}`
-- `GET /datasets/{datasetId}/events`
-- `GET /datasets/{datasetId}/validation`
-- `GET /datasets/{datasetId}/preprocessing-runs`
-- `GET /datasets/{datasetId}/epoch-runs`
-- `GET /datasets/{datasetId}/erp-runs`
-
-404 처리:
-
-- `/events` 404는 정상 unmapped 상태로 보고 `eventLog=null`
-- `/validation` 404는 에러가 아니라 `validation=null`
-- dataset detail 404만 active dataset invalid 처리
-
-호환성 기준:
-
-- 기존 `refreshPreprocessingRuns`, `refreshEpochRuns`, `refreshErpRuns`는 유지
-- polling silent refresh는 기존 run refresh 함수 계속 사용
-- API response shape 변경 없음
-
-### 4. Active dataset 변경 흐름 재정리
-
-현재 흐름:
-
-- dataset 변경 -> preprocessing/epoch/ERP runs만 refresh
-
-변경 후:
-
-- dataset 변경 -> `loadDatasetContext(datasetId)` 실행
-- eventLog, validation, preprocessingRuns, epochRuns, erpRuns를 같은 dataset 기준으로 갱신
-
-race 방지:
-
-- `isCurrent` flag 또는 `AbortController` 사용
-- 빠르게 dataset을 바꿔도 이전 응답이 새 dataset state를 덮지 않게 함
+- `main` 최신 상태 확인
+- 새 브랜치 생성: `codex/worker-cli-epoch-erp`
+- 전체 Python 테스트, web build, `npm run e2e:all` baseline 실행
+- 아직 코드 수정 없음
 
 완료 기준:
 
-- mapped event log가 있는 dataset을 새로고침해도 Events가 `Unmapped`로 돌아가지 않음
-- valid dataset 새로고침 후 preprocessing 버튼 상태가 실제 validation/dataset status와 일치
-- dev server가 5175 같은 임시 port로 떠도 설정 기반으로 API 연결 가능
-- 기존 Python 테스트와 web build 통과
+- branch clean
+- Python tests 126 passed
+- web build 통과
+- browser smoke 통과
 
-## 5월 26일 상세 파이프라인: preprocessing worker CLI 분리
+### 작업 1. worker CLI job routing 확장
 
-목표: preprocessing 실행 경계를 API process 밖으로 분리해 Windows spawn/pickle/result_queue 의존을 제거하고, epoch/ERP로 확장 가능한 worker 계약을 만든다.
-
-### 1. CLI 계약 먼저 고정
-
-새 모듈:
-
-- `packages/eeg-processing/src/eeg_processing/worker_cli.py`
-
-실행 형태:
-
-- `python -m eeg_processing.worker_cli preprocessing --payload payload.json --result result.json`
-
-payload v1:
-
-```json
-{
-  "schema_version": 1,
-  "job": "preprocessing",
-  "run_id": "preprocess-...",
-  "input_path": "...",
-  "output_path": "...",
-  "config": {
-    "high_pass_hz": null,
-    "low_pass_hz": 40,
-    "notch_hz": 50,
-    "resample_hz": null,
-    "reference": "average"
-  }
-}
-```
-
-result v1:
-
-```json
-{
-  "schema_version": 1,
-  "status": "completed",
-  "metadata": {},
-  "warnings": [],
-  "error": null
-}
-```
-
-### 2. API wrapper는 기존 함수명 유지
-
-유지할 함수:
-
-- `_run_preprocessing_subprocess(run_id, input_path, output_path, config)`
-
-내부 변경:
-
-- multiprocessing `Queue` 대신 payload JSON 작성
-- `sys.executable -m eeg_processing.worker_cli ...` 실행
-- result JSON 읽기
-
-호환성 기준:
-
-- 기존 API response shape 유지
-- 기존 tests의 monkeypatch 지점 유지
-- epoch/ERP 전환 때 같은 패턴 재사용 가능
-
-### 3. run directory에 worker artifact 저장
-
-저장 위치:
-
-- `data/runs/{run_id}/worker_payload.json`
-- `data/runs/{run_id}/worker_result.json`
-- `data/runs/{run_id}/worker_stdout.log`
-- `data/runs/{run_id}/worker_stderr.log`
-
-`output_metadata` optional key:
-
-- `worker_schema_version`
-- `worker_payload_path`
-- `worker_result_path`
-- `worker_exit_code`
-
-호환성 기준:
-
-- 기존 `warnings`, `errors`, `output_path`, `output_metadata` 유지
-- 새 metadata는 optional field로만 추가
-- 구버전 run JSON도 계속 로드 가능
-
-### 4. Cancellation 유지
-
-API가 subprocess process id를 소유한다.
-
-`CANCELLING` 감지 시:
-
-- graceful terminate
-- timeout 후 kill
-- 기존 warning 문구 유지: `Cancellation terminated preprocessing subprocess.`
-
-완료 직후 cancel race도 기존 로직 유지:
-
-- output retained
-- status는 cancelled 처리 가능
-
-### 5. 테스트 범위
-
-기존 preprocessing API tests는 유지한다.
-
-추가할 테스트:
-
-- CLI payload -> completed result JSON 생성
-- CLI failure -> failed result JSON 생성
-- result JSON이 없고 exit code만 있을 때 failed 처리
-- cancellation 시 process terminate 경로 유지
+- `worker_cli.py`에 `epoching`, `erp` job command 추가
+- 기존 preprocessing schema는 유지
+- epoching/ERP payload/result v1 초안 추가
+- job mismatch, schema mismatch, payload validation 실패 처리 공통화
 
 완료 기준:
 
-- preprocessing run이 API 내부 multiprocessing target 직접 호출 없이 실행
-- Windows spawn/pickle/result_queue 의존 제거
-- Python 테스트 통과
-- Web build 통과
+- `python -m eeg_processing.worker_cli epoching --help`
+- `python -m eeg_processing.worker_cli erp --help`
+- 기존 preprocessing CLI 테스트 통과
+
+### 작업 2. epoching CLI 실행 추가
+
+- `run_epoching_job`의 Queue 결과 shape를 CLI result JSON으로 이식
+- event log/config payload를 JSON 직렬화 가능한 형태로 정의
+- API response shape는 변경하지 않음
+- worker artifact 저장 경로는 preprocessing과 같은 패턴 사용
+
+완료 기준:
+
+- epoching CLI success/failure 단위 테스트 통과
+- API epoch run이 CLI subprocess 경유로 completed/failed 처리
+- cancellation warning 문구 유지
+
+### 작업 3. ERP CLI 실행 추가
+
+- `run_erp_job`의 Queue 결과 shape를 CLI result JSON으로 이식
+- ERP config, comparison prep과 충돌 없이 artifact root 유지
+- plot warning/failure를 기존 warning 흐름과 호환
+
+완료 기준:
+
+- ERP CLI success/failure 단위 테스트 통과
+- API ERP run이 CLI subprocess 경유로 completed/failed 처리
+- ERP preview artifact endpoint 유지
+
+### 작업 4. 공통 worker subprocess wrapper 정리
+
+- preprocessing/epoching/ERP의 payload write, subprocess launch, result read, stdout/stderr 저장 로직 중복 최소화
+- job별 validation과 metadata만 분리
+- 과한 abstraction은 피하고 API 호출부 가독성 유지
+
+완료 기준:
+
+- 세 job 모두 worker artifact path와 exit code 기록
+- result JSON 누락/invalid JSON/non-object result 실패 테스트 통과
+- 기존 run JSON backward compatibility 유지
+
+### 작업 5. 통합 회귀 및 browser smoke
+
+- `tests/test_api_preprocessing.py`
+- `tests/test_api_epoch_execution.py`
+- `tests/test_api_epoch_runs.py`
+- `tests/test_api_erp_runs.py`
+- `tests/test_worker_cli.py`
+- 전체 Python tests
+- web build
+- `npm run e2e:all`
+
+완료 기준:
+
+- preprocessing -> epoch -> ERP 전체가 CLI worker 경유
+- Python tests 통과
+- browser smoke 통과
+- PR mergeable
+
+## 이번 주 남은 계획: 5월 27일-5월 31일
+
+### 5월 27일 수요일
+
+- BIDS sidecar ingest 설계 및 모듈 추가
+- `_channels.tsv`, `_eeg.json` 파서 추가
+- `RecordingMetadata` optional 확장 지점 확정
+
+완료 기준:
+
+- sidecar 파일이 없어도 기존 ingest 흐름이 깨지지 않음
+- `_channels.tsv`의 channel type/status/units 후보를 구조화해서 읽을 수 있음
+
+### 5월 28일 목요일
+
+- `_eeg.json` metadata 반영
+- line frequency, reference, sampling metadata 저장
+- OpenNeuro `.set` 계열 warning을 structured warning 후보로 분류
+
+완료 기준:
+
+- sidecar metadata가 registry optional field로 보존됨
+- 기존 JSON registry와 API response backward compatibility 유지
+
+### 5월 29일 금요일
+
+- BIDS events normalization 시작
+- `n/a`, `NA`, empty null 처리
+- row filter 모델 초안
+- `bids_events` preset 초안
+
+완료 기준:
+
+- BIDS `events.tsv`를 기존 EventLog 모델로 안정적으로 변환
+- condition derivation 입력이 UI/API에서 일관되게 보임
+
+### 5월 30일 토요일
+
+- Event mapping v2 확장
+- `psychopy`, `eeglab_annotations` preset 초안
+- raw row/source column 일부 보존
+- mapping preview와 validation 메시지 갱신
+
+완료 기준:
+
+- null/filter/preset 처리가 API와 UI에서 같은 결과를 낸다
+- 기존 event upload/mapping API 테스트가 유지된다
+
+### 5월 31일 일요일
+
+- structured diagnostics 모델 초안
+- 기존 string warning과 병행
+- 실제 공개 데이터 2종 통합 smoke
+- 6월 1일 이후 backlog 재조정
+
+완료 기준:
+
+- warning 원인/영향/조치가 최소 구조로 저장됨
+- 6월 1일 QC/export 착수 여부 판단 가능
+
+## 6월 1일-6월 10일 큰 흐름
+
+- 6월 1일-3일: ResearchDataset/provenance 계층 정리, source manifest/checksum 최소 구현
+- 6월 4일-5일: QC dashboard MVP
+- 6월 6일-7일: export bundle MVP, artifact manifest schema 정리
+- 6월 8일: validation suite smoke 고정
+- 6월 9일: 버그 수정, UX 정리, docs 업데이트
+- 6월 10일: release candidate tag, demo dataset 기준 최종 검증
 
 ## 초반 안정화: 구조 안정화 중심
 
@@ -301,7 +312,7 @@ API가 subprocess process id를 소유한다.
 
 ### 3. Event mapping v2
 
-현재 mapping은 column mapping만 있다. 연구용은 filtering과 condition derivation이 필요하다.
+현재 mapping은 column mapping 중심이다. 연구용은 filtering과 condition derivation이 필요하다.
 
 - `row_filter`: `trial_type == stimulus`
 - `condition_column`: `value`, `trial_type`, `stim_file` 등
@@ -309,17 +320,7 @@ API가 subprocess process id를 소유한다.
 - preset: `psychopy`, `bids_events`, `eeglab_annotations`
 - normalized event에는 `raw_row`, `source_file`, `source_columns` 일부 보존
 
-### 4. Worker 구조 교체
-
-preprocessing CLI 분리 후 같은 계약을 epoching, ERP로 확장한다.
-
-- `python -m eeg_processing.worker_cli epoching --payload payload.json --result result.json`
-- `python -m eeg_processing.worker_cli erp --payload payload.json --result result.json`
-- API는 payload JSON 작성 -> subprocess 실행 -> result JSON 읽기
-- stdin/pickle/result queue 의존 제거
-- cancellation은 process id + run status로 관리
-
-### 5. Structured warning model
+### 4. Structured warning model
 
 기존 `warnings: list[str]`는 유지하되, 새 `diagnostics.warnings[]`를 추가한다.
 
@@ -396,9 +397,9 @@ UI는 raw warning 대신 이 구조를 우선 표시한다.
 
 ## 추천 순서
 
-1. UI hydration + CORS env화
-2. preprocessing worker CLI 분리
-3. epoching/ERP worker CLI 확장
+1. UI hydration + CORS env화: 완료
+2. preprocessing worker CLI 분리: 완료
+3. epoching/ERP worker CLI 확장: 완료
 4. BIDS sidecar ingest
 5. BIDS event mapping/filter preset
 6. structured warning/diagnostics
@@ -409,6 +410,6 @@ UI는 raw warning 대신 이 구조를 우선 표시한다.
 
 ## 결론
 
-초반 안정화까지 끝나면 "실제 연구 데이터 탐색용 툴", 중반까지 가면 "내부 분석 워크벤치", 후반까지 가야 "연구 결과 산출에 쓸 수 있는 툴"이라고 보는 것이 맞다.
+현재는 "research exploration alpha 기반"이 확보된 상태다. worker CLI 경계는 preprocessing/epoching/ERP까지 통일되었으므로, 다음 단계는 실제 공개 EEG 데이터 호환성을 높이는 BIDS sidecar ingest와 Event mapping v2이다. 이 작업이 끝나야 structured diagnostics, QC, export를 안정적으로 얹을 수 있다.
 
 6월 10일까지는 research exploration alpha를 목표로 한다. 즉, 실제 공개 EEG 데이터를 안정적으로 반복 처리하고, mapping/validation/run 상태가 새로고침 후에도 일관되며, worker 실행 경계가 CLI로 분리되어 이후 BIDS ingest, QC, export, 재현성 기능을 얹을 수 있는 기반을 만드는 것이 핵심이다.
