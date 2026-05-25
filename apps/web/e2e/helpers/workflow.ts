@@ -33,7 +33,7 @@ export async function createPreprocessedDataset(
   labels: WorkflowLabels,
 ) {
   await page.goto("/");
-  await expect(page.getByText("Study Setup")).toBeVisible();
+  await expect(page.getByTestId("setup-workspace")).toBeVisible();
 
   await page.getByTestId("project-name-input").fill(labels.project);
   await page.getByTestId("create-project-button").click();
@@ -47,7 +47,23 @@ export async function createPreprocessedDataset(
   await page.getByTestId("dataset-session-input").fill(labels.session);
   await page.getByTestId("create-dataset-button").click();
   await expect(page.getByText("Dataset created.")).toBeVisible();
+
+  const activeDatasetId = (
+    await page.getByTestId("stage-dataset-value").textContent()
+  )?.trim();
+  expect(activeDatasetId).toBeTruthy();
+
+  await expect(page.getByTestId("setup-workspace")).toBeVisible();
+  await expect(page.getByTestId("analysis-workspace")).toHaveCount(0);
+  await page.getByTestId(`dataset-row-${activeDatasetId}`).click();
+  await expect(page.getByTestId("setup-workspace")).toBeVisible();
+  await expect(page.getByTestId("analysis-workspace")).toHaveCount(0);
+
   await page.getByRole("button", { name: "Continue Analysis" }).click();
+  await expect(page.getByTestId("analysis-workspace")).toBeVisible();
+  await expect(page.getByTestId("analysis-workspace")).toContainText(
+    activeDatasetId ?? "",
+  );
   await expect(page.getByText("Ingestion And Preprocessing")).toBeVisible();
 
   await page.getByTestId("eeg-file-input").setInputFiles(eegFixture);
@@ -72,7 +88,10 @@ export async function createPreprocessedDataset(
   expect(mappedEventsText).not.toBe("Unmapped");
 
   await page.reload();
-  await expect(page.getByText("Study Setup")).toBeVisible();
+  await expect(page.getByTestId("analysis-workspace")).toBeVisible();
+  await expect(page.getByTestId("analysis-workspace")).toContainText(
+    activeDatasetId ?? "",
+  );
   await expect(page.getByTestId("stage-events-value")).toHaveText(
     mappedEventsText ?? "",
   );

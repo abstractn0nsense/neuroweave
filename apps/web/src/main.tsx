@@ -1528,7 +1528,11 @@ function App() {
         </nav>
 
         {workspaceMode === "setup" ? (
-          <section className="setup-workspace" aria-label="Study and dataset setup">
+          <section
+            className="setup-workspace"
+            aria-label="Study and dataset setup"
+            data-testid="setup-workspace"
+          >
             <div className="setup-column">
               <section className="panel setup-panel" aria-labelledby="setup-title">
                 <div className="panel-header">
@@ -1636,7 +1640,11 @@ function App() {
             </div>
           </section>
         ) : (
-          <section className="analysis-workspace" aria-label="Analysis workspace">
+          <section
+            className="analysis-workspace"
+            aria-label="Analysis workspace"
+            data-testid="analysis-workspace"
+          >
             <section
               className="panel active-context-panel"
               aria-labelledby="active-context-title"
@@ -2133,6 +2141,7 @@ function DatasetSection({
           <button
             className="dataset-row"
             data-active={dataset.dataset_id === activeDatasetId}
+            data-testid={`dataset-row-${dataset.dataset_id}`}
             key={dataset.dataset_id}
             onClick={() => onSelectDataset(dataset.dataset_id)}
             type="button"
