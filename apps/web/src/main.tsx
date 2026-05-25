@@ -320,6 +320,10 @@ const API_BASE_URL =
 const THEME_STORAGE_KEY = "neuroweave-theme";
 const ACTIVE_DATASET_STORAGE_KEY = "neuroweave-active-dataset";
 const WORKSPACE_MODE_STORAGE_KEY = "neuroweave-workspace-mode";
+const SUPPORTED_EEG_EXTENSIONS = [".fif", ".edf", ".bdf", ".set", ".vhdr"];
+const SUPPORTED_EVENT_EXTENSIONS = [".csv", ".tsv"];
+const EEG_EXAMPLE_PATH = "tests/fixtures/eeg/sample_resting_raw.fif";
+const EVENT_EXAMPLE_PATH = "tests/fixtures/events/psychopy_minimal.csv";
 
 const MAPPING_FIELDS: { key: MappingKey; label: string; required?: boolean }[] = [
   { key: "onset_seconds", label: "Onset", required: true },
@@ -480,6 +484,12 @@ function App() {
   });
   const [eegFile, setEegFile] = useState<File | null>(null);
   const [eventFile, setEventFile] = useState<File | null>(null);
+  const [uploadedEegFilename, setUploadedEegFilename] = useState<string | null>(
+    null,
+  );
+  const [uploadedEventFilename, setUploadedEventFilename] = useState<string | null>(
+    null,
+  );
   const [eventPreview, setEventPreview] = useState<EventPreview | null>(null);
   const [mapping, setMapping] = useState<Record<MappingKey, string>>(EMPTY_MAPPING);
   const [eventMappingPreset, setEventMappingPreset] =
@@ -986,6 +996,8 @@ function App() {
       setActiveDatasetId(dataset.dataset_id);
       setEventPreview(null);
       setEventLog(null);
+      setUploadedEegFilename(null);
+      setUploadedEventFilename(null);
       setValidation(null);
       setQcSummary({ status: "success", data: null, error: null });
       setPreprocessingRuns({ status: "success", data: [], error: null });
@@ -999,13 +1011,45 @@ function App() {
     });
   }
 
+  function chooseEegFile(file: File | null) {
+    if (file && !hasSupportedExtension(file, SUPPORTED_EEG_EXTENSIONS)) {
+      setEegFile(null);
+      setNotice({
+        tone: "error",
+        message:
+          "Unsupported EEG file. Choose a FIF, EDF, BDF, SET, or BrainVision VHDR file.",
+      });
+      return;
+    }
+
+    setEegFile(file);
+  }
+
+  function chooseEventFile(file: File | null) {
+    if (file && !hasSupportedExtension(file, SUPPORTED_EVENT_EXTENSIONS)) {
+      setEventFile(null);
+      setNotice({
+        tone: "error",
+        message: "Unsupported event log. Choose a CSV or TSV file.",
+      });
+      return;
+    }
+
+    setEventFile(file);
+  }
+
   async function uploadEegFile() {
     if (!activeDatasetId || !eegFile) {
-      setNotice({ tone: "error", message: "Select a dataset and EEG file." });
+      setNotice({
+        tone: "error",
+        message:
+          "Select an active dataset and choose a supported EEG file before uploading.",
+      });
       return;
     }
 
     await runAction("eeg-upload", async () => {
+      const uploadedFilename = eegFile.name;
       const formData = new FormData();
       formData.append("file", eegFile);
       const response = await requestJson<{ dataset: Dataset }>(
@@ -1016,6 +1060,7 @@ function App() {
         },
       );
       setEegFile(null);
+      setUploadedEegFilename(uploadedFilename);
       updateDatasetInState(response.dataset);
       setValidation(null);
       setNotice({ tone: "ok", message: "EEG file uploaded." });
@@ -1024,11 +1069,16 @@ function App() {
 
   async function uploadEventFile() {
     if (!activeDatasetId || !eventFile) {
-      setNotice({ tone: "error", message: "Select a dataset and event file." });
+      setNotice({
+        tone: "error",
+        message:
+          "Select an active dataset and choose a CSV or TSV event log before uploading.",
+      });
       return;
     }
 
     await runAction("event-upload", async () => {
+      const uploadedFilename = eventFile.name;
       const formData = new FormData();
       formData.append("file", eventFile);
       const response = await requestJson<EventUploadResponse>(
@@ -1039,6 +1089,7 @@ function App() {
         },
       );
       setEventFile(null);
+      setUploadedEventFilename(uploadedFilename);
       setEventPreview(response.preview);
       setEventLog(null);
       setValidation(null);
@@ -1579,6 +1630,8 @@ function App() {
                     setActiveDatasetId(datasetId);
                     setEventPreview(null);
                     setEventLog(null);
+                    setUploadedEegFilename(null);
+                    setUploadedEventFilename(null);
                     setValidation(null);
                     setEpochConfig(DEFAULT_EPOCH_CONFIG);
                   }}
@@ -1704,8 +1757,8 @@ function App() {
                   eventRowFilter={eventRowFilter}
                   mapping={mapping}
                   onBeginPreprocessing={beginPreprocessingHandoff}
-                  onEegFileChange={setEegFile}
-                  onEventFileChange={setEventFile}
+                  onEegFileChange={chooseEegFile}
+                  onEventFileChange={chooseEventFile}
                   onEventMappingPresetChange={(preset) => {
                     setEventMappingPreset(preset);
                     if (preset && eventPreview) {
@@ -1722,6 +1775,8 @@ function App() {
                   onValidate={validateDataset}
                   preprocessingConfig={preprocessingConfig}
                   preprocessingRuns={preprocessingRuns}
+                  uploadedEegFilename={uploadedEegFilename}
+                  uploadedEventFilename={uploadedEventFilename}
                   validation={validation}
                 />
               </section>
@@ -2185,6 +2240,8 @@ function IntakeSection({
   onValidate,
   preprocessingConfig,
   preprocessingRuns,
+  uploadedEegFilename,
+  uploadedEventFilename,
   validation,
 }: {
   activeDataset: Dataset | null;
@@ -2212,11 +2269,29 @@ function IntakeSection({
   onValidate: () => void;
   preprocessingConfig: typeof DEFAULT_PREPROCESSING_CONFIG;
   preprocessingRuns: LoadState<PreprocessingRun[]>;
+  uploadedEegFilename: string | null;
+  uploadedEventFilename: string | null;
   validation: ValidationReport | null;
 }) {
   const disabled = !activeDataset;
   const canContinue = validation?.valid === true || activeDataset?.status === "valid";
   const configError = getPreprocessingConfigError(preprocessingConfig);
+  const eegStatus = getUploadStatus({
+    disabled,
+    selectedFilename: eegFile?.name ?? null,
+    uploadedFilename: uploadedEegFilename,
+    uploadedId: activeDataset?.recording_id ?? null,
+    emptyText: "No EEG file selected",
+    uploadedText: "EEG recording uploaded",
+  });
+  const eventStatus = getUploadStatus({
+    disabled,
+    selectedFilename: eventFile?.name ?? null,
+    uploadedFilename: uploadedEventFilename,
+    uploadedId: activeDataset?.event_log_id ?? null,
+    emptyText: "No event log selected",
+    uploadedText: "Event log uploaded",
+  });
 
   return (
     <div className="intake-stack">
@@ -2227,13 +2302,28 @@ function IntakeSection({
         </div>
         <div className="upload-grid">
           <div className="upload-group">
-            <h4>EEG Recording</h4>
+            <div className="upload-heading">
+              <h4>EEG Recording</h4>
+              <span className="upload-state" data-state={eegStatus.state}>
+                {eegStatus.label}
+              </span>
+            </div>
+            <p className="upload-help">
+              Supported formats: FIF, EDF, BDF, EEGLAB SET, BrainVision VHDR.
+            </p>
+            <p className="upload-example">
+              Example: <code>{EEG_EXAMPLE_PATH}</code>
+            </p>
             <input
+              accept={SUPPORTED_EEG_EXTENSIONS.join(",")}
               data-testid="eeg-file-input"
               disabled={disabled}
               onChange={(event) => onEegFileChange(event.target.files?.[0] ?? null)}
               type="file"
             />
+            <p className="upload-status" data-testid="eeg-upload-status">
+              {eegStatus.detail}
+            </p>
             <button
               className="secondary-button"
               data-testid="upload-eeg-button"
@@ -2243,9 +2333,24 @@ function IntakeSection({
             >
               Upload EEG
             </button>
+            <p className="upload-next-step">
+              Next: upload the matching event log, then review event mapping.
+            </p>
           </div>
           <div className="upload-group">
-            <h4>Event Log</h4>
+            <div className="upload-heading">
+              <h4>Event Log</h4>
+              <span className="upload-state" data-state={eventStatus.state}>
+                {eventStatus.label}
+              </span>
+            </div>
+            <p className="upload-help">
+              Supported formats: CSV or TSV. Include an onset column plus optional
+              duration, trial_type, response, correct, and reaction time columns.
+            </p>
+            <p className="upload-example">
+              Example: <code>{EVENT_EXAMPLE_PATH}</code>
+            </p>
             <input
               accept=".csv,.tsv,text/csv,text/tab-separated-values"
               data-testid="event-file-input"
@@ -2253,6 +2358,9 @@ function IntakeSection({
               onChange={(event) => onEventFileChange(event.target.files?.[0] ?? null)}
               type="file"
             />
+            <p className="upload-status" data-testid="event-upload-status">
+              {eventStatus.detail}
+            </p>
             <button
               className="secondary-button"
               data-testid="upload-events-button"
@@ -2262,6 +2370,9 @@ function IntakeSection({
             >
               Upload Events
             </button>
+            <p className="upload-next-step">
+              Next: confirm the previewed columns and save the event mapping.
+            </p>
           </div>
         </div>
       </section>
@@ -4351,6 +4462,65 @@ function getInitialActiveDatasetId(): string {
 function getInitialWorkspaceMode(): WorkspaceMode {
   const storedMode = window.localStorage.getItem(WORKSPACE_MODE_STORAGE_KEY);
   return storedMode === "analysis" ? "analysis" : "setup";
+}
+
+function hasSupportedExtension(file: File, extensions: string[]): boolean {
+  const filename = file.name.toLowerCase();
+  return extensions.some((extension) => filename.endsWith(extension));
+}
+
+function getUploadStatus({
+  disabled,
+  selectedFilename,
+  uploadedFilename,
+  uploadedId,
+  emptyText,
+  uploadedText,
+}: {
+  disabled: boolean;
+  selectedFilename: string | null;
+  uploadedFilename: string | null;
+  uploadedId: string | null;
+  emptyText: string;
+  uploadedText: string;
+}) {
+  if (disabled) {
+    return {
+      state: "waiting",
+      label: "Waiting",
+      detail: "Create or select a dataset before uploading.",
+    };
+  }
+
+  if (selectedFilename) {
+    return {
+      state: "ready",
+      label: "Ready",
+      detail: `Selected: ${selectedFilename}`,
+    };
+  }
+
+  if (uploadedFilename) {
+    return {
+      state: "uploaded",
+      label: "Uploaded",
+      detail: `${uploadedText}: ${uploadedFilename}`,
+    };
+  }
+
+  if (uploadedId) {
+    return {
+      state: "uploaded",
+      label: "Uploaded",
+      detail: uploadedText,
+    };
+  }
+
+  return {
+    state: "waiting",
+    label: "Required",
+    detail: emptyText,
+  };
 }
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

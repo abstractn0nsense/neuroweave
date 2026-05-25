@@ -1,4 +1,5 @@
 import { expect, type Page } from "@playwright/test";
+import { Buffer } from "node:buffer";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -65,14 +66,53 @@ export async function createPreprocessedDataset(
     activeDatasetId ?? "",
   );
   await expect(page.getByText("Ingestion And Preprocessing")).toBeVisible();
+  await expect(page.getByText("Supported formats: FIF, EDF, BDF")).toBeVisible();
+  await expect(
+    page.getByText("tests/fixtures/eeg/sample_resting_raw.fif"),
+  ).toBeVisible();
+  await expect(page.getByText("Supported formats: CSV or TSV")).toBeVisible();
+  await expect(
+    page.getByText("tests/fixtures/events/psychopy_minimal.csv"),
+  ).toBeVisible();
+  await expect(page.getByTestId("eeg-upload-status")).toHaveText(
+    "No EEG file selected",
+  );
+  await expect(page.getByTestId("event-upload-status")).toHaveText(
+    "No event log selected",
+  );
+  await expect(page.getByTestId("upload-eeg-button")).toBeDisabled();
+  await expect(page.getByTestId("upload-events-button")).toBeDisabled();
+
+  await page.getByTestId("event-file-input").setInputFiles({
+    name: "events.xlsx",
+    mimeType:
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    buffer: Buffer.from("not a csv"),
+  });
+  await expect(page.getByText("Unsupported event log.")).toBeVisible();
+  await expect(page.getByTestId("event-upload-status")).toHaveText(
+    "No event log selected",
+  );
 
   await page.getByTestId("eeg-file-input").setInputFiles(eegFixture);
+  await expect(page.getByTestId("eeg-upload-status")).toContainText(
+    path.basename(eegFixture),
+  );
   await page.getByTestId("upload-eeg-button").click();
   await expect(page.getByText("EEG file uploaded.")).toBeVisible();
+  await expect(page.getByTestId("eeg-upload-status")).toContainText(
+    path.basename(eegFixture),
+  );
 
   await page.getByTestId("event-file-input").setInputFiles(eventFixture);
+  await expect(page.getByTestId("event-upload-status")).toContainText(
+    path.basename(eventFixture),
+  );
   await page.getByTestId("upload-events-button").click();
   await expect(page.getByText("Event log uploaded.")).toBeVisible();
+  await expect(page.getByTestId("event-upload-status")).toContainText(
+    path.basename(eventFixture),
+  );
 
   await expect(page.getByTestId("mapping-onset_seconds-select")).toHaveValue(
     "onset",
