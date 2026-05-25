@@ -275,10 +275,30 @@ type ComparisonSummaryResponse = {
   erp_run: ErpRun;
 };
 
+type QcSummaryResponse = {
+  dataset_id: string;
+  run_id: string;
+  run_kind: string;
+  summary: QcSummaryPayload;
+};
+
+type QcSummaryPayload = {
+  schema_version: number;
+  run_kind: string;
+  artifact_manifest?: {
+    artifact_count?: number;
+    missing_artifacts?: { logical_name?: string; path?: string; exists?: boolean }[];
+  };
+  preprocessing?: Record<string, unknown>;
+  epoch?: Record<string, unknown>;
+  erp?: Record<string, unknown>;
+};
+
 type DatasetContext = {
   dataset: Dataset;
   eventLog: EventLogResponse | null;
   validation: ValidationReport | null;
+  qcSummary: QcSummaryResponse | null;
   preprocessingRuns: PreprocessingRun[];
   epochRuns: EpochRun[];
   erpRuns: ErpRun[];
@@ -465,6 +485,11 @@ function App() {
     useState<EventRowFilterForm>(EMPTY_ROW_FILTER);
   const [eventLog, setEventLog] = useState<EventLogResponse | null>(null);
   const [validation, setValidation] = useState<ValidationReport | null>(null);
+  const [qcSummary, setQcSummary] = useState<LoadState<QcSummaryResponse | null>>({
+    status: "idle",
+    data: null,
+    error: null,
+  });
   const [preprocessingConfig, setPreprocessingConfig] = useState(
     DEFAULT_PREPROCESSING_CONFIG,
   );
@@ -632,6 +657,7 @@ function App() {
       setEventMappingPreset("");
       setEventRowFilter(EMPTY_ROW_FILTER);
       setValidation(null);
+      setQcSummary({ status: "idle", data: null, error: null });
       setPreprocessingRuns({ status: "idle", data: null, error: null });
       setEpochRuns({ status: "idle", data: null, error: null });
       setErpRuns({ status: "idle", data: null, error: null });
@@ -643,6 +669,7 @@ function App() {
     setPreprocessingRuns({ status: "loading", data: null, error: null });
     setEpochRuns({ status: "loading", data: null, error: null });
     setErpRuns({ status: "loading", data: null, error: null });
+    setQcSummary({ status: "loading", data: null, error: null });
     setEventPreview(null);
     setMapping(EMPTY_MAPPING);
     setEventMappingPreset("");
@@ -656,6 +683,7 @@ function App() {
         updateDatasetInState(context.dataset);
         setEventLog(context.eventLog);
         setValidation(context.validation);
+        setQcSummary({ status: "success", data: context.qcSummary, error: null });
         setPreprocessingRuns({
           status: "success",
           data: context.preprocessingRuns,
@@ -671,6 +699,7 @@ function App() {
         const message = getErrorMessage(error);
         setEventLog(null);
         setValidation(null);
+        setQcSummary({ status: "error", data: null, error: message });
         setPreprocessingRuns({ status: "error", data: null, error: message });
         setEpochRuns({ status: "error", data: null, error: message });
         setErpRuns({ status: "error", data: null, error: message });
@@ -935,6 +964,7 @@ function App() {
       setEventPreview(null);
       setEventLog(null);
       setValidation(null);
+      setQcSummary({ status: "success", data: null, error: null });
       setPreprocessingRuns({ status: "success", data: [], error: null });
       setEpochRuns({ status: "success", data: [], error: null });
       setErpRuns({ status: "success", data: [], error: null });
@@ -1228,6 +1258,7 @@ function App() {
       preprocessingResponse,
       epochResponse,
       erpResponse,
+      qcSummary,
     ] = await Promise.all([
       fetchJson<Dataset>(`/datasets/${encodedDatasetId}`),
       fetchOptionalJson<EventLogResponse>(`/datasets/${encodedDatasetId}/events`),
@@ -1239,12 +1270,14 @@ function App() {
       ),
       fetchJson<EpochRunsResponse>(`/datasets/${encodedDatasetId}/epoch-runs`),
       fetchJson<ErpRunsResponse>(`/datasets/${encodedDatasetId}/erp-runs`),
+      fetchOptionalJson<QcSummaryResponse>(`/datasets/${encodedDatasetId}/qc-summary`),
     ]);
 
     return {
       dataset,
       eventLog,
       validation,
+      qcSummary,
       preprocessingRuns: preprocessingResponse.runs,
       epochRuns: epochResponse.runs,
       erpRuns: erpResponse.runs,
@@ -1267,6 +1300,7 @@ function App() {
         data: response.runs,
         error: null,
       });
+      await refreshQcSummary(datasetId, { silent: true });
     } catch (error: unknown) {
       setPreprocessingRuns({
         status: "error",
@@ -1292,6 +1326,7 @@ function App() {
         data: response.runs,
         error: null,
       });
+      await refreshQcSummary(datasetId, { silent: true });
     } catch (error: unknown) {
       setEpochRuns({
         status: "error",
@@ -1317,8 +1352,30 @@ function App() {
         data: response.runs,
         error: null,
       });
+      await refreshQcSummary(datasetId, { silent: true });
     } catch (error: unknown) {
       setErpRuns({
+        status: "error",
+        data: null,
+        error: getErrorMessage(error),
+      });
+    }
+  }
+
+  async function refreshQcSummary(
+    datasetId: string,
+    options: { silent?: boolean } = {},
+  ) {
+    if (!options.silent) {
+      setQcSummary({ status: "loading", data: null, error: null });
+    }
+    try {
+      const summary = await fetchOptionalJson<QcSummaryResponse>(
+        `/datasets/${encodeURIComponent(datasetId)}/qc-summary`,
+      );
+      setQcSummary({ status: "success", data: summary, error: null });
+    } catch (error: unknown) {
+      setQcSummary({
         status: "error",
         data: null,
         error: getErrorMessage(error),
@@ -1577,6 +1634,20 @@ function App() {
                   onStartComparisonSummary={beginComparisonSummary}
                   onStartErpRun={beginErpRun}
                 />
+              </section>
+
+              <section className="panel" aria-labelledby="qc-title">
+                <div className="panel-header">
+                  <div>
+                    <h2 id="qc-title">QC Dashboard</h2>
+                    <p className="subtle">
+                      {activeDataset
+                        ? "Summaries from manifest-backed run artifacts"
+                        : "Create or select a dataset"}
+                    </p>
+                  </div>
+                </div>
+                <QcDashboard qcSummary={qcSummary} />
               </section>
 
               <section className="panel" aria-labelledby="sample-list-title">
@@ -2895,6 +2966,173 @@ function ErpPreview({ run }: { run: ErpRun }) {
   );
 }
 
+function QcDashboard({
+  qcSummary,
+}: {
+  qcSummary: LoadState<QcSummaryResponse | null>;
+}) {
+  if (qcSummary.status === "loading" || qcSummary.status === "idle") {
+    return <p className="muted">Loading QC summary...</p>;
+  }
+  if (qcSummary.status === "error") {
+    return <p className="error-text">{qcSummary.error}</p>;
+  }
+  if (!qcSummary.data) {
+    return <p className="muted">No completed QC run yet.</p>;
+  }
+
+  const missingArtifacts =
+    qcSummary.data.summary.artifact_manifest?.missing_artifacts ?? [];
+
+  return (
+    <div className="qc-dashboard" data-testid="qc-dashboard">
+      <div className="qc-header">
+        <strong>{qcSummary.data.run_kind}</strong>
+        <span>{qcSummary.data.run_id}</span>
+        <span>
+          {qcSummary.data.summary.artifact_manifest?.artifact_count ?? 0} artifacts
+        </span>
+      </div>
+      {missingArtifacts.length > 0 ? (
+        <div className="qc-alert">
+          <strong>Missing artifacts</strong>
+          <span>{missingArtifacts.map((artifact) => artifact.logical_name).join(", ")}</span>
+        </div>
+      ) : null}
+      {qcSummary.data.summary.run_kind === "preprocessing" ? (
+        <PreprocessingQc summary={qcSummary.data.summary.preprocessing ?? {}} />
+      ) : null}
+      {qcSummary.data.summary.run_kind === "epoch" ? (
+        <EpochQc summary={qcSummary.data.summary.epoch ?? {}} />
+      ) : null}
+      {qcSummary.data.summary.run_kind === "erp" ? (
+        <ErpQc summary={qcSummary.data.summary.erp ?? {}} />
+      ) : null}
+    </div>
+  );
+}
+
+function PreprocessingQc({ summary }: { summary: Record<string, unknown> }) {
+  const filters = asRecord(summary.filters);
+  const reference = asRecord(summary.reference);
+  const resample = asRecord(summary.resample);
+  const channelStatus = asRecord(summary.channel_status);
+  const artifactRejection = asRecord(summary.artifact_rejection);
+
+  return (
+    <div className="qc-section">
+      <h3>Preprocessing QC</h3>
+      <dl className="run-summary-grid">
+        <QcMetric label="High-pass" value={operationStatus(filters.high_pass)} />
+        <QcMetric label="Low-pass" value={operationStatus(filters.low_pass)} />
+        <QcMetric label="Notch" value={operationStatus(filters.notch)} />
+        <QcMetric label="Reference" value={stringValue(reference.status)} />
+        <QcMetric label="Resample" value={stringValue(resample.status)} />
+        <QcMetric
+          label="Input Bad Ch"
+          value={stringValue(channelStatus.input_bad_channel_count)}
+        />
+        <QcMetric
+          label="Output Bad Ch"
+          value={stringValue(channelStatus.output_bad_channel_count)}
+        />
+        <QcMetric
+          label="Artifact Reject"
+          value={artifactRejection.enabled === true ? "enabled" : "off"}
+        />
+      </dl>
+    </div>
+  );
+}
+
+function EpochQc({ summary }: { summary: Record<string, unknown> }) {
+  const conditionCounts = asRecord(summary.condition_counts);
+  const totals = asRecord(conditionCounts.totals);
+  const dropLog = asRecord(summary.drop_log);
+  const dropSummary = asRecord(dropLog.summary);
+  const outOfBounds = asRecord(summary.out_of_bounds);
+
+  return (
+    <div className="qc-section">
+      <h3>Epoch QC</h3>
+      <dl className="run-summary-grid">
+        <QcMetric label="Candidates" value={stringValue(totals.candidate)} />
+        <QcMetric label="Retained" value={stringValue(totals.retained)} />
+        <QcMetric label="Dropped" value={stringValue(totals.dropped)} />
+        <QcMetric label="Drop Entries" value={stringValue(dropLog.entry_count)} />
+        <QcMetric
+          label="Dropped Epochs"
+          value={stringValue(dropSummary.dropped_epoch_count)}
+        />
+        <QcMetric
+          label="Out Of Bounds"
+          value={stringValue(outOfBounds.out_of_bounds)}
+        />
+      </dl>
+      <ConditionQcList conditions={asRecord(conditionCounts.conditions)} />
+    </div>
+  );
+}
+
+function ErpQc({ summary }: { summary: Record<string, unknown> }) {
+  const conditions = Array.isArray(summary.conditions) ? summary.conditions : [];
+  return (
+    <div className="qc-section">
+      <h3>ERP QC</h3>
+      <dl className="run-summary-grid">
+        <QcMetric label="Conditions" value={stringValue(summary.condition_count)} />
+        <QcMetric label="Plot Status" value={stringValue(summary.plot_status)} />
+      </dl>
+      <div className="qc-condition-list">
+        {conditions
+          .filter((condition): condition is Record<string, unknown> =>
+            isRecord(condition),
+          )
+          .map((condition, index) => (
+            <div className="qc-condition" key={`${condition.condition ?? index}`}>
+              <strong>{stringValue(condition.condition)}</strong>
+              <span>Nave {stringValue(condition.nave)}</span>
+              <span>GFP {formatMaybeNumber(condition.gfp_peak)}</span>
+              <span>Peak {formatMaybeNumber(condition.channel_peak)}</span>
+              <span>{stringValue(condition.plot_status)}</span>
+            </div>
+          ))}
+      </div>
+    </div>
+  );
+}
+
+function QcMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt>{label}</dt>
+      <dd>{value || "-"}</dd>
+    </div>
+  );
+}
+
+function ConditionQcList({ conditions }: { conditions: Record<string, unknown> }) {
+  const entries = Object.entries(conditions).filter(([, value]) => isRecord(value));
+  if (entries.length === 0) {
+    return null;
+  }
+  return (
+    <div className="qc-condition-list">
+      {entries.map(([condition, value]) => {
+        const counts = asRecord(value);
+        return (
+          <div className="qc-condition" key={condition}>
+            <strong>{condition}</strong>
+            <span>Candidate {stringValue(counts.candidate)}</span>
+            <span>Retained {stringValue(counts.retained)}</span>
+            <span>Dropped {stringValue(counts.dropped)}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function ComparisonSection({
   busyAction,
   comparisonConfig,
@@ -3798,6 +4036,37 @@ function formatErpMetadata(metadata: Record<string, MetadataValue>): string {
     typeof plotStatus === "string" ? plotStatus : null,
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(" / ") : "Metadata pending";
+}
+
+function operationStatus(value: unknown): string {
+  return stringValue(asRecord(value).status);
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string {
+  if (value === null || value === undefined || value === "") {
+    return "-";
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === "boolean") {
+    return value ? "yes" : "no";
+  }
+  return String(value);
+}
+
+function formatMaybeNumber(value: unknown): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value.toFixed(2)
+    : stringValue(value);
 }
 
 function getErpConditionLabels(run: ErpRun): string[] {

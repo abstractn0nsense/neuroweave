@@ -676,6 +676,54 @@ input[type="file"] {
   gap: var(--space-3);
 }
 
+.qc-dashboard {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.qc-header,
+.qc-alert,
+.qc-condition {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.qc-header span,
+.qc-condition span {
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-subtle);
+  color: var(--color-muted-strong);
+  font-size: 11px;
+  font-weight: 900;
+  padding: 5px 7px;
+  text-transform: uppercase;
+}
+
+.qc-alert {
+  border-left: 3px solid var(--color-warning);
+  background: var(--color-warning-soft);
+  padding: var(--space-3);
+}
+
+.qc-section {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.qc-condition-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.qc-condition {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-subtle);
+  padding: var(--space-3);
+}
+
 .validation-panel {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-control);
