@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 import sys
 from uuid import uuid4
 
@@ -61,7 +62,6 @@ from eeg_processing import (  # noqa: E402
     generate_comparison_summary,
     run_epoching_job,
     run_erp_job,
-    run_preprocessing_job,
 )
 from eeg_processing.epoching import SUPPORTED_CONDITION_FIELDS  # noqa: E402
 from eeg_io.datasets import find_eeg_file_by_id, list_eeg_files  # noqa: E402
@@ -149,6 +149,18 @@ EPOCHS_DIR = _path_from_env("NEUROWEAVE_EPOCHS_DIR", REPO_ROOT / "data" / "epoch
 ERP_DIR = _path_from_env("NEUROWEAVE_ERP_DIR", REPO_ROOT / "data" / "erp")
 registry_repository = JsonRegistryRepository(UPLOADS_DIR)
 run_repository = JsonRunRepository(RUNS_DIR)
+
+
+class WorkerSubprocessError(PreprocessingError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        worker_exit_code: int | None,
+        processing_warnings: list[str] | None = None,
+    ):
+        super().__init__(message, processing_warnings=processing_warnings)
+        self.worker_exit_code = worker_exit_code
 
 
 class LocalPreprocessingWorker:
@@ -2117,10 +2129,13 @@ def _execute_preprocessing_run(run_id: str) -> None:
         run_repository.save_preprocessing_run(failed_run)
         return
 
+    worker_artifacts = _preprocessing_worker_artifact_paths(run_id)
+    worker_metadata = _preprocessing_worker_metadata(worker_artifacts)
     running_run = replace(
         run,
         status=PreprocessingRunStatus.RUNNING,
         started_at_utc=_utc_now_iso(),
+        output_metadata={**run.output_metadata, **worker_metadata},
     )
     run_repository.save_preprocessing_run(running_run)
 
@@ -2130,14 +2145,23 @@ def _execute_preprocessing_run(run_id: str) -> None:
             input_path=input_path,
             output_path=output_path,
             config=run.config,
+            worker_artifacts=worker_artifacts,
+        )
+        worker_exit_code = metadata.pop("_worker_exit_code", None)
+        completed_run_base = replace(
+            running_run,
+            output_metadata={
+                **running_run.output_metadata,
+                "worker_exit_code": worker_exit_code,
+            },
         )
         output_file_path = Path(output_path)
         completed_run = replace(
-            running_run,
+            completed_run_base,
             status=PreprocessingRunStatus.COMPLETED,
             finished_at_utc=_utc_now_iso(),
             output_metadata=_preprocessing_completed_provenance(
-                run=running_run,
+                run=completed_run_base,
                 output_path=output_file_path,
                 processing_metadata=metadata,
             ),
@@ -2164,6 +2188,10 @@ def _execute_preprocessing_run(run_id: str) -> None:
     except PreprocessingError as exc:
         current_run = run_repository.get_preprocessing_run(run_id)
         current_warnings = current_run.warnings if current_run else []
+        failed_output_metadata = dict(running_run.output_metadata)
+        worker_exit_code = getattr(exc, "worker_exit_code", None)
+        if worker_exit_code is not None:
+            failed_output_metadata["worker_exit_code"] = worker_exit_code
         next_status = (
             PreprocessingRunStatus.CANCELLED
             if current_run and current_run.status == PreprocessingRunStatus.CANCELLING
@@ -2178,6 +2206,7 @@ def _execute_preprocessing_run(run_id: str) -> None:
             ),
             warnings=_dedupe_strings([*current_warnings, *exc.processing_warnings]),
             errors=[str(exc)],
+            output_metadata=failed_output_metadata,
         )
         run_repository.save_preprocessing_run(failed_run)
 
@@ -2187,23 +2216,62 @@ def _run_preprocessing_subprocess(
     input_path: str,
     output_path: str,
     config: PreprocessingConfig,
+    worker_artifacts: dict[str, Path],
 ) -> dict:
-    context = get_context("spawn")
-    result_queue = context.Queue()
-    process = context.Process(
-        target=run_preprocessing_job,
-        args=(input_path, output_path, config, result_queue),
+    payload_path = worker_artifacts["payload"]
+    result_path = worker_artifacts["result"]
+    stdout_path = worker_artifacts["stdout"]
+    stderr_path = worker_artifacts["stderr"]
+    payload_path.parent.mkdir(parents=True, exist_ok=True)
+    payload_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "job": "preprocessing",
+                "run_id": run_id,
+                "input_path": input_path,
+                "output_path": output_path,
+                "config": _preprocessing_config_payload(config),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
     )
-    process.start()
 
-    while process.is_alive():
-        process.join(timeout=0.1)
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "eeg_processing.worker_cli",
+            "preprocessing",
+            "--payload",
+            str(payload_path),
+            "--result",
+            str(result_path),
+        ],
+        cwd=REPO_ROOT,
+        env=_worker_subprocess_env(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    while process.poll() is None:
+        try:
+            process.wait(timeout=0.1)
+        except subprocess.TimeoutExpired:
+            pass
         if _is_cancellation_requested(run_id):
             process.terminate()
-            process.join(timeout=5)
-            if process.is_alive():
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
                 process.kill()
-                process.join()
+                process.wait()
+            stdout, stderr = process.communicate()
+            _write_worker_streams(stdout_path, stderr_path, stdout, stderr)
             raise PreprocessingError(
                 "Preprocessing cancelled.",
                 processing_warnings=[
@@ -2211,29 +2279,121 @@ def _run_preprocessing_subprocess(
                 ],
             )
 
-    try:
-        result = result_queue.get_nowait()
-    except Empty as exc:
-        if process.exitcode == 0:
-            raise PreprocessingError(
-                "Preprocessing subprocess exited without a result."
-            ) from exc
-        raise PreprocessingError(
-            f"Preprocessing subprocess exited with code {process.exitcode}."
-        ) from exc
+    stdout, stderr = process.communicate()
+    _write_worker_streams(stdout_path, stderr_path, stdout, stderr)
+    result = _load_worker_result(
+        result_path=result_path,
+        returncode=process.returncode,
+        stderr=stderr,
+    )
 
     if result.get("status") == "completed":
         metadata = result.get("metadata")
         if isinstance(metadata, dict):
+            metadata["_worker_exit_code"] = process.returncode
             return metadata
         raise PreprocessingError("Preprocessing subprocess returned invalid metadata.")
 
-    raise PreprocessingError(
-        str(result.get("error") or "Preprocessing subprocess failed."),
-        processing_warnings=[
-            str(warning) for warning in result.get("warnings", [])
-        ],
+    warnings = result.get("warnings", [])
+    if not isinstance(warnings, list):
+        warnings = []
+    raise WorkerSubprocessError(
+        str(result.get("error") or _worker_process_error(process.returncode, stderr)),
+        worker_exit_code=process.returncode,
+        processing_warnings=[str(warning) for warning in warnings],
     )
+
+
+def _preprocessing_config_payload(config: PreprocessingConfig) -> dict:
+    return {
+        "high_pass_hz": config.high_pass_hz,
+        "low_pass_hz": config.low_pass_hz,
+        "notch_hz": config.notch_hz,
+        "resample_hz": config.resample_hz,
+        "reference": config.reference,
+    }
+
+
+def _preprocessing_worker_artifact_paths(run_id: str) -> dict[str, Path]:
+    run_directory = run_repository.preprocessing_run_directory(run_id)
+    return {
+        "payload": run_directory / "worker_payload.json",
+        "result": run_directory / "worker_result.json",
+        "stdout": run_directory / "worker_stdout.log",
+        "stderr": run_directory / "worker_stderr.log",
+    }
+
+
+def _preprocessing_worker_metadata(
+    worker_artifacts: dict[str, Path],
+) -> dict[str, str | int | None]:
+    return {
+        "worker_schema_version": 1,
+        "worker_payload_path": str(worker_artifacts["payload"]),
+        "worker_result_path": str(worker_artifacts["result"]),
+        "worker_stdout_path": str(worker_artifacts["stdout"]),
+        "worker_stderr_path": str(worker_artifacts["stderr"]),
+        "worker_exit_code": None,
+    }
+
+
+def _write_worker_streams(
+    stdout_path: Path,
+    stderr_path: Path,
+    stdout: str,
+    stderr: str,
+) -> None:
+    stdout_path.write_text(stdout, encoding="utf-8")
+    stderr_path.write_text(stderr, encoding="utf-8")
+
+
+def _worker_subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+    package_paths = [
+        str(REPO_ROOT / "packages" / "eeg-core" / "src"),
+        str(REPO_ROOT / "packages" / "eeg-io" / "src"),
+        str(REPO_ROOT / "packages" / "eeg-processing" / "src"),
+    ]
+    existing_pythonpath = env.get("PYTHONPATH")
+    if existing_pythonpath:
+        package_paths.append(existing_pythonpath)
+    env["PYTHONPATH"] = os.pathsep.join(package_paths)
+    return env
+
+
+def _load_worker_result(
+    *,
+    result_path: Path,
+    returncode: int | None,
+    stderr: str,
+) -> dict:
+    try:
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise WorkerSubprocessError(
+            _worker_process_error(returncode, stderr),
+            worker_exit_code=returncode,
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise WorkerSubprocessError(
+            "Preprocessing subprocess returned invalid JSON.",
+            worker_exit_code=returncode,
+        ) from exc
+
+    if not isinstance(result, dict):
+        raise WorkerSubprocessError(
+            "Preprocessing subprocess returned a non-object result.",
+            worker_exit_code=returncode,
+        )
+    return result
+
+
+def _worker_process_error(returncode: int | None, stderr: str) -> str:
+    message = f"Preprocessing subprocess exited with code {returncode}."
+    stderr = stderr.strip()
+    if stderr:
+        return f"{message} stderr: {stderr}"
+    return message
 
 
 def _execute_epoch_run(run_id: str) -> None:

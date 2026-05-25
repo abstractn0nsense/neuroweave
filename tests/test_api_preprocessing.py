@@ -183,25 +183,44 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert metadata["diagnostics_file_count"] == 3
     assert metadata["artifact_bad_channel_count"] == 0
     assert metadata["artifact_annotation_count"] == 0
+    assert metadata["worker_schema_version"] == 1
+    assert metadata["worker_exit_code"] == 0
 
     summary_path = Path(str(metadata["preprocessing_summary_path"]))
     filter_report_path = Path(str(metadata["filter_report_path"]))
     artifact_summary_path = Path(str(metadata["artifact_summary_path"]))
     artifact_manifest_path = Path(str(metadata["artifact_manifest_path"]))
+    worker_payload_path = Path(str(metadata["worker_payload_path"]))
+    worker_result_path = Path(str(metadata["worker_result_path"]))
+    worker_stdout_path = Path(str(metadata["worker_stdout_path"]))
+    worker_stderr_path = Path(str(metadata["worker_stderr_path"]))
     assert summary_path.is_file()
     assert filter_report_path.is_file()
     assert artifact_summary_path.is_file()
     assert artifact_manifest_path.is_file()
+    assert worker_payload_path.is_file()
+    assert worker_result_path.is_file()
+    assert worker_stdout_path.is_file()
+    assert worker_stderr_path.is_file()
 
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     filter_report = json.loads(filter_report_path.read_text(encoding="utf-8"))
     artifact_summary = json.loads(artifact_summary_path.read_text(encoding="utf-8"))
     artifact_manifest = json.loads(artifact_manifest_path.read_text(encoding="utf-8"))
+    worker_payload = json.loads(worker_payload_path.read_text(encoding="utf-8"))
+    worker_result = json.loads(worker_result_path.read_text(encoding="utf-8"))
     assert summary["config"]["resample_hz"] == 50.0
     assert summary["output"]["sampling_rate_hz"] == 50.0
     assert filter_report["resample"]["status"] == "applied"
     assert filter_report["reference"]["status"] == "applied"
     assert artifact_summary["artifact_rejection"]["enabled"] is False
+    assert worker_payload["schema_version"] == 1
+    assert worker_payload["job"] == "preprocessing"
+    assert worker_payload["run_id"] == payload["run_id"]
+    assert worker_payload["config"]["resample_hz"] == 50.0
+    assert worker_result["schema_version"] == 1
+    assert worker_result["status"] == "completed"
+    assert worker_result["error"] is None
     assert artifact_manifest["schema_version"] == 1
     assert artifact_manifest["artifact_root"] == str(Path(payload["output_path"]).parent)
     assert artifact_manifest["artifact_count"] == 4
@@ -232,8 +251,9 @@ def test_create_preprocessing_run_persists_failed_run_details(
     _upload_and_map_events(client)
 
     def fail_preprocessing_subprocess(*args, **kwargs):
-        raise api_main.PreprocessingError(
+        raise api_main.WorkerSubprocessError(
             "synthetic preprocessing failure",
+            worker_exit_code=1,
             processing_warnings=["captured warning before failure"],
         )
 
@@ -264,6 +284,41 @@ def test_create_preprocessing_run_persists_failed_run_details(
     assert failed_payload["warnings"] == ["captured warning before failure"]
     assert failed_payload["errors"] == ["synthetic preprocessing failure"]
     assert runs[0]["output_metadata"]["input_file_id"]
+    assert runs[0]["output_metadata"]["worker_exit_code"] == 1
+
+
+def test_preprocessing_subprocess_failure_preserves_worker_artifacts(
+    tmp_path,
+    monkeypatch,
+):
+    run_repository = JsonRunRepository(tmp_path / "runs")
+    monkeypatch.setattr(api_main, "run_repository", run_repository)
+    worker_artifacts = api_main._preprocessing_worker_artifact_paths(
+        "preprocess-failed"
+    )
+
+    try:
+        api_main._run_preprocessing_subprocess(
+            run_id="preprocess-failed",
+            input_path=str(tmp_path / "input.fif"),
+            output_path=str(tmp_path / "output.fif"),
+            config=PreprocessingConfig(high_pass_hz=True),
+            worker_artifacts=worker_artifacts,
+        )
+    except api_main.WorkerSubprocessError as exc:
+        error = exc
+    else:
+        raise AssertionError("Expected preprocessing subprocess to fail.")
+
+    assert error.worker_exit_code == 1
+    assert str(error) == "Payload config high_pass_hz must be a number or null."
+    assert worker_artifacts["payload"].is_file()
+    assert worker_artifacts["result"].is_file()
+    assert worker_artifacts["stdout"].is_file()
+    assert worker_artifacts["stderr"].is_file()
+    result = json.loads(worker_artifacts["result"].read_text(encoding="utf-8"))
+    assert result["status"] == "failed"
+    assert result["run_id"] == "preprocess-failed"
 
 
 def test_cancel_pending_preprocessing_run_marks_cancelled(tmp_path, monkeypatch):
