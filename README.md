@@ -23,6 +23,8 @@ docs/
   user-guide-en.md      English user guide for the current local app
   public-demo-physionet-eegmmi.md
                         Opt-in public EEGMMI demo workflow
+  local-research-preview-release-checklist.md
+                        Release checklist for the installable local preview
   export-bundle.md      ZIP export structure and diagnostics contract
   neuro-weave-growth-pipeline.md
                         Product and research-platform growth pipeline
