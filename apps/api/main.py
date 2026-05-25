@@ -151,6 +151,18 @@ registry_repository = JsonRegistryRepository(UPLOADS_DIR)
 run_repository = JsonRunRepository(RUNS_DIR)
 
 
+class WorkerSubprocessError(PreprocessingError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        worker_exit_code: int | None,
+        processing_warnings: list[str] | None = None,
+    ):
+        super().__init__(message, processing_warnings=processing_warnings)
+        self.worker_exit_code = worker_exit_code
+
+
 class LocalPreprocessingWorker:
     def __init__(self) -> None:
         self._queue: Queue[str] = Queue()
@@ -2176,6 +2188,10 @@ def _execute_preprocessing_run(run_id: str) -> None:
     except PreprocessingError as exc:
         current_run = run_repository.get_preprocessing_run(run_id)
         current_warnings = current_run.warnings if current_run else []
+        failed_output_metadata = dict(running_run.output_metadata)
+        worker_exit_code = getattr(exc, "worker_exit_code", None)
+        if worker_exit_code is not None:
+            failed_output_metadata["worker_exit_code"] = worker_exit_code
         next_status = (
             PreprocessingRunStatus.CANCELLED
             if current_run and current_run.status == PreprocessingRunStatus.CANCELLING
@@ -2190,6 +2206,7 @@ def _execute_preprocessing_run(run_id: str) -> None:
             ),
             warnings=_dedupe_strings([*current_warnings, *exc.processing_warnings]),
             errors=[str(exc)],
+            output_metadata=failed_output_metadata,
         )
         run_repository.save_preprocessing_run(failed_run)
 
@@ -2280,8 +2297,9 @@ def _run_preprocessing_subprocess(
     warnings = result.get("warnings", [])
     if not isinstance(warnings, list):
         warnings = []
-    raise PreprocessingError(
+    raise WorkerSubprocessError(
         str(result.get("error") or _worker_process_error(process.returncode, stderr)),
+        worker_exit_code=process.returncode,
         processing_warnings=[str(warning) for warning in warnings],
     )
 
@@ -2352,12 +2370,21 @@ def _load_worker_result(
     try:
         result = json.loads(result_path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
-        raise PreprocessingError(_worker_process_error(returncode, stderr)) from exc
+        raise WorkerSubprocessError(
+            _worker_process_error(returncode, stderr),
+            worker_exit_code=returncode,
+        ) from exc
     except json.JSONDecodeError as exc:
-        raise PreprocessingError("Preprocessing subprocess returned invalid JSON.") from exc
+        raise WorkerSubprocessError(
+            "Preprocessing subprocess returned invalid JSON.",
+            worker_exit_code=returncode,
+        ) from exc
 
     if not isinstance(result, dict):
-        raise PreprocessingError("Preprocessing subprocess returned a non-object result.")
+        raise WorkerSubprocessError(
+            "Preprocessing subprocess returned a non-object result.",
+            worker_exit_code=returncode,
+        )
     return result
 
 

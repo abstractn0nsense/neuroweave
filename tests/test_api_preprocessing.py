@@ -251,8 +251,9 @@ def test_create_preprocessing_run_persists_failed_run_details(
     _upload_and_map_events(client)
 
     def fail_preprocessing_subprocess(*args, **kwargs):
-        raise api_main.PreprocessingError(
+        raise api_main.WorkerSubprocessError(
             "synthetic preprocessing failure",
+            worker_exit_code=1,
             processing_warnings=["captured warning before failure"],
         )
 
@@ -283,6 +284,41 @@ def test_create_preprocessing_run_persists_failed_run_details(
     assert failed_payload["warnings"] == ["captured warning before failure"]
     assert failed_payload["errors"] == ["synthetic preprocessing failure"]
     assert runs[0]["output_metadata"]["input_file_id"]
+    assert runs[0]["output_metadata"]["worker_exit_code"] == 1
+
+
+def test_preprocessing_subprocess_failure_preserves_worker_artifacts(
+    tmp_path,
+    monkeypatch,
+):
+    run_repository = JsonRunRepository(tmp_path / "runs")
+    monkeypatch.setattr(api_main, "run_repository", run_repository)
+    worker_artifacts = api_main._preprocessing_worker_artifact_paths(
+        "preprocess-failed"
+    )
+
+    try:
+        api_main._run_preprocessing_subprocess(
+            run_id="preprocess-failed",
+            input_path=str(tmp_path / "input.fif"),
+            output_path=str(tmp_path / "output.fif"),
+            config=PreprocessingConfig(high_pass_hz=True),
+            worker_artifacts=worker_artifacts,
+        )
+    except api_main.WorkerSubprocessError as exc:
+        error = exc
+    else:
+        raise AssertionError("Expected preprocessing subprocess to fail.")
+
+    assert error.worker_exit_code == 1
+    assert str(error) == "Payload config high_pass_hz must be a number or null."
+    assert worker_artifacts["payload"].is_file()
+    assert worker_artifacts["result"].is_file()
+    assert worker_artifacts["stdout"].is_file()
+    assert worker_artifacts["stderr"].is_file()
+    result = json.loads(worker_artifacts["result"].read_text(encoding="utf-8"))
+    assert result["status"] == "failed"
+    assert result["run_id"] == "preprocess-failed"
 
 
 def test_cancel_pending_preprocessing_run_marks_cancelled(tmp_path, monkeypatch):
