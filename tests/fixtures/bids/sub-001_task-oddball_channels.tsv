@@ -1,0 +1,4 @@
+name	type	units	status	status_description
+Fp1	EEG	uV	good	n/a
+Fp2	EEG	uV	bad	noisy electrode
+EOG1	EOG	n/a	NA	
