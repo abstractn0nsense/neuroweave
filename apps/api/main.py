@@ -4,6 +4,7 @@ from threading import Lock, Thread
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from contextlib import asynccontextmanager
+from typing import Literal
 import hashlib
 import json
 import os
@@ -72,6 +73,7 @@ from eeg_io.datasets import find_eeg_file_by_id, list_eeg_files  # noqa: E402
 from eeg_io.event_logs import (  # noqa: E402
     EventLogNormalizationError,
     EventLogPreviewError,
+    event_mapping_preset,
     normalize_event_log,
     preview_event_log,
 )
@@ -490,6 +492,7 @@ class ValidationReportResponse(BaseModel):
 
 class EventMappingRequest(BaseModel):
     mapping: EventColumnMappingPayload | None = None
+    preset: Literal["psychopy", "bids_events", "eeglab_annotations"] | None = None
 
 
 class PreprocessingConfigPayload(BaseModel):
@@ -995,7 +998,7 @@ def map_dataset_events(
     if uploaded_file is None or uploaded_file.kind != UploadedFileKind.EVENTS:
         raise HTTPException(status_code=404, detail="Event file not found")
 
-    mapping = _resolve_event_mapping(dataset, request.mapping)
+    mapping = _resolve_event_mapping(dataset, request.mapping, request.preset)
     try:
         event_log = normalize_event_log(
             dataset_id=dataset_id,
@@ -3499,9 +3502,12 @@ def _find_uploaded_file(
 def _resolve_event_mapping(
     dataset: IngestionDataset,
     request_mapping: EventColumnMappingPayload | None,
+    preset: str | None = None,
 ) -> EventColumnMapping:
     if request_mapping is not None:
         return EventColumnMapping(**request_mapping.model_dump())
+    if preset is not None:
+        return event_mapping_preset(preset)
 
     experiment = registry_repository.get_experiment(dataset.experiment_id)
     if experiment is None:

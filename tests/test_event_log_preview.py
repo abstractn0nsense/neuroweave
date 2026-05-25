@@ -2,7 +2,9 @@ import pytest
 
 from eeg_core.domain import EventColumnMapping
 from eeg_io.event_logs import (
+    EVENT_MAPPING_PRESETS,
     EventLogNormalizationError,
+    event_mapping_preset,
     normalize_event_log,
     preview_event_log,
 )
@@ -132,3 +134,33 @@ def test_normalize_event_log_requires_onset_mapping(tmp_path):
             path=path,
             mapping=EventColumnMapping(trial_type="trial_type"),
         )
+
+
+def test_event_mapping_presets_are_defined():
+    assert set(EVENT_MAPPING_PRESETS) == {
+        "psychopy",
+        "bids_events",
+        "eeglab_annotations",
+    }
+    assert event_mapping_preset("psychopy") == EventColumnMapping(
+        onset_seconds="stim_onset",
+        duration_seconds="stim_duration",
+        trial_type="condition",
+        response="key_resp.keys",
+        correct="key_resp.corr",
+        reaction_time_seconds="key_resp.rt",
+    )
+    assert event_mapping_preset("bids_events") == EventColumnMapping(
+        onset_seconds="onset",
+        duration_seconds="duration",
+        trial_type="trial_type",
+        stimulus="stimulus",
+        response="response",
+        correct="correct",
+        reaction_time_seconds="response_time",
+    )
+    assert event_mapping_preset("eeglab_annotations") == EventColumnMapping(
+        onset_seconds="onset",
+        duration_seconds="duration",
+        trial_type="type",
+    )

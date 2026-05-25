@@ -82,6 +82,50 @@ def test_map_dataset_events_accepts_request_mapping_override(tmp_path, monkeypat
     assert response.json()["events"][0]["correct"] is None
 
 
+def test_map_dataset_events_accepts_preset(tmp_path, monkeypatch):
+    repository = JsonRegistryRepository(tmp_path / "uploads")
+    client = _create_dataset_with_event_upload(repository, monkeypatch)
+
+    response = client.post(
+        "/datasets/dataset-001/events/mapping",
+        json={"preset": "psychopy"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mapping"]["onset_seconds"] == "stim_onset"
+    assert payload["mapping"]["trial_type"] == "condition"
+    assert payload["mapping"]["correct"] == "key_resp.corr"
+    assert payload["events"][0]["trial_type"] == "target"
+    assert payload["events"][0]["correct"] is True
+
+
+def test_map_dataset_events_mapping_override_takes_precedence_over_preset(
+    tmp_path,
+    monkeypatch,
+):
+    repository = JsonRegistryRepository(tmp_path / "uploads")
+    client = _create_dataset_with_event_upload(repository, monkeypatch)
+
+    response = client.post(
+        "/datasets/dataset-001/events/mapping",
+        json={
+            "preset": "bids_events",
+            "mapping": {
+                "onset_seconds": "stim_onset",
+                "trial_type": "condition",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mapping"]["onset_seconds"] == "stim_onset"
+    assert payload["mapping"]["trial_type"] == "condition"
+    assert payload["mapping"]["correct"] is None
+    assert payload["events"][0]["trial_type"] == "target"
+
+
 def test_map_dataset_events_reports_missing_onset_mapping(tmp_path, monkeypatch):
     repository = JsonRegistryRepository(tmp_path / "uploads")
     client = _create_dataset_with_event_upload(repository, monkeypatch)

@@ -4,6 +4,30 @@ import csv
 from eeg_core.domain import EventColumnMapping, EventLog, NormalizedEvent
 
 _NULL_TOKENS = {"", "n/a", "na", "null"}
+EVENT_MAPPING_PRESETS: dict[str, EventColumnMapping] = {
+    "psychopy": EventColumnMapping(
+        onset_seconds="stim_onset",
+        duration_seconds="stim_duration",
+        trial_type="condition",
+        response="key_resp.keys",
+        correct="key_resp.corr",
+        reaction_time_seconds="key_resp.rt",
+    ),
+    "bids_events": EventColumnMapping(
+        onset_seconds="onset",
+        duration_seconds="duration",
+        trial_type="trial_type",
+        stimulus="stimulus",
+        response="response",
+        correct="correct",
+        reaction_time_seconds="response_time",
+    ),
+    "eeglab_annotations": EventColumnMapping(
+        onset_seconds="onset",
+        duration_seconds="duration",
+        trial_type="type",
+    ),
+}
 
 
 class EventLogPreviewError(Exception):
@@ -75,6 +99,13 @@ def normalize_event_log(
         row_count=len(rows),
         events=events,
     )
+
+
+def event_mapping_preset(name: str) -> EventColumnMapping:
+    try:
+        return EVENT_MAPPING_PRESETS[name]
+    except KeyError as exc:
+        raise EventLogNormalizationError(f"Unknown event mapping preset: {name}") from exc
 
 
 def _normalize_event(
