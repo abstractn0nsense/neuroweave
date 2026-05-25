@@ -147,6 +147,7 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert queued_payload["finished_at_utc"] is None
     assert queued_payload["config"]["resample_hz"] == 50.0
     assert queued_payload["output_metadata"]["input_file_id"]
+    assert queued_payload["diagnostics"] == {}
 
     payload = _wait_for_run_status(
         client,
@@ -294,6 +295,13 @@ def test_create_preprocessing_run_persists_failed_run_details(
     assert runs[0] == failed_payload
     assert failed_payload["status"] == "failed"
     assert failed_payload["warnings"] == ["captured warning before failure"]
+    assert failed_payload["diagnostics"]["warnings"][0] == {
+        "severity": "warning",
+        "source": "preprocessing",
+        "code": "unstructured_warning",
+        "impact": "captured warning before failure",
+        "suggested_action": None,
+    }
     assert failed_payload["errors"] == ["synthetic preprocessing failure"]
     assert runs[0]["output_metadata"]["input_file_id"]
     assert runs[0]["output_metadata"]["worker_exit_code"] == 1

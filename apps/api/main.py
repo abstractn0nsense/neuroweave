@@ -520,6 +520,18 @@ class PreprocessingConfigPayload(BaseModel):
     reference: str | None = None
 
 
+class DiagnosticWarningResponse(BaseModel):
+    severity: str
+    source: str
+    code: str
+    impact: str | None
+    suggested_action: str | None
+
+
+class RunDiagnosticsResponse(BaseModel):
+    warnings: list[DiagnosticWarningResponse] = Field(default_factory=list)
+
+
 class PreprocessingRunResponse(BaseModel):
     run_id: str
     dataset_id: str
@@ -533,6 +545,7 @@ class PreprocessingRunResponse(BaseModel):
     output_path: str | None
     output_metadata: dict[str, str | int | float | bool | None]
     warnings: list[str]
+    diagnostics: RunDiagnosticsResponse | dict
     errors: list[str]
 
 
@@ -563,6 +576,7 @@ class EpochRunResponse(BaseModel):
     output_path: str | None
     output_metadata: dict[str, str | int | float | bool | None]
     warnings: list[str]
+    diagnostics: RunDiagnosticsResponse | dict
     errors: list[str]
 
 
@@ -592,6 +606,7 @@ class ErpRunResponse(BaseModel):
     output_path: str | None
     output_metadata: dict[str, str | int | float | bool | None]
     warnings: list[str]
+    diagnostics: RunDiagnosticsResponse | dict
     errors: list[str]
 
 
@@ -1608,6 +1623,7 @@ def _preprocessing_run_response(run: PreprocessingRun) -> PreprocessingRunRespon
         output_path=run.output_path,
         output_metadata=run.output_metadata,
         warnings=run.warnings,
+        diagnostics=_run_diagnostics_response(run.diagnostics),
         errors=run.errors,
     )
 
@@ -1626,6 +1642,7 @@ def _epoch_run_response(run: EpochRun) -> EpochRunResponse:
         output_path=run.output_path,
         output_metadata=run.output_metadata,
         warnings=run.warnings,
+        diagnostics=_run_diagnostics_response(run.diagnostics),
         errors=run.errors,
     )
 
@@ -1644,8 +1661,46 @@ def _erp_run_response(run: ErpRun) -> ErpRunResponse:
         output_path=run.output_path,
         output_metadata=run.output_metadata,
         warnings=run.warnings,
+        diagnostics=_run_diagnostics_response(run.diagnostics),
         errors=run.errors,
     )
+
+
+def _run_diagnostics_response(diagnostics: dict) -> RunDiagnosticsResponse | dict:
+    warnings = diagnostics.get("warnings") if isinstance(diagnostics, dict) else None
+    if not warnings:
+        return {}
+    return RunDiagnosticsResponse(
+        warnings=[
+            DiagnosticWarningResponse(
+                severity=_diagnostic_warning_field(warning, "severity"),
+                source=_diagnostic_warning_field(warning, "source"),
+                code=_diagnostic_warning_field(warning, "code"),
+                impact=_diagnostic_warning_optional_field(warning, "impact"),
+                suggested_action=_diagnostic_warning_optional_field(
+                    warning,
+                    "suggested_action",
+                ),
+            )
+            for warning in warnings
+        ]
+    )
+
+
+def _diagnostic_warning_field(warning: object, field_name: str) -> str:
+    value = _diagnostic_warning_optional_field(warning, field_name)
+    if isinstance(value, ValidationSeverity):
+        return value.value
+    return str(value) if value is not None else ""
+
+
+def _diagnostic_warning_optional_field(
+    warning: object,
+    field_name: str,
+) -> object | None:
+    if isinstance(warning, dict):
+        return warning.get(field_name)
+    return getattr(warning, field_name, None)
 
 
 def _epoch_input_provenance(

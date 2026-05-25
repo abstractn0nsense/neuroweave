@@ -431,6 +431,13 @@ def test_erp_worker_persists_failed_execution(tmp_path, monkeypatch):
 
     assert payload["status"] == "failed"
     assert payload["warnings"] == ["captured ERP warning"]
+    assert payload["diagnostics"]["warnings"][0] == {
+        "severity": "warning",
+        "source": "erp",
+        "code": "unstructured_warning",
+        "impact": "captured ERP warning",
+        "suggested_action": None,
+    }
     assert payload["errors"] == ["synthetic ERP failure"]
     assert not Path(payload["output_path"]).exists()
     assert "erp_metadata_path" not in payload["output_metadata"]

@@ -277,6 +277,13 @@ def test_create_epoch_run_persists_out_of_bounds_warning(tmp_path, monkeypatch):
     assert response.json()["warnings"] == [
         "1 candidate events fall outside the epoch window bounds and will be skipped."
     ]
+    assert response.json()["diagnostics"]["warnings"][0] == {
+        "severity": "warning",
+        "source": "epoch",
+        "code": "unstructured_warning",
+        "impact": response.json()["warnings"][0],
+        "suggested_action": None,
+    }
     stored = api_main.run_repository.get_epoch_run(response.json()["run_id"])
     assert stored is not None
     assert stored.warnings == response.json()["warnings"]
