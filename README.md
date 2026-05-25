@@ -7,6 +7,7 @@ NeuroWeave is being prepared as a neuroscience and EEG workflow project.
 ```text
 apps/
   api/                  Server/API entrypoint for EEG workflows
+  desktop/              Electron shell for app-window development
   web/                  Web UI for EEG workflow setup and review
 packages/
   eeg-core/             EEG domain models and pipeline contracts
@@ -75,6 +76,7 @@ Do not commit `data/` contents or add `data/.gitkeep`. Scripts and app startup c
 Phase 0 uses local per-app environments:
 
 - API: Python `.venv` inside `apps/api`
+- Desktop: npm dependencies inside `apps/desktop/node_modules`
 - Web: npm dependencies inside `apps/web/node_modules`
 
 Use CPython 3.12 or 3.13 for the API environment. Python 3.14 mingw builds may not have compatible wheels for the Phase 0 dependencies yet. On Windows, prefer the setup script because `python` may resolve to MSYS Python instead of CPython.
@@ -106,6 +108,28 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install_neuroweave_shortcut.p
 ```
 
 This creates Desktop and Start Menu shortcuts with a NeuroWeave icon. The shortcut hides runtime server windows and opens only the browser once the local app is ready.
+
+### Desktop Shell MVP
+
+A minimal Electron shell is available under `apps/desktop`. It does not bundle
+the API or installer yet; it opens the existing local web UI in an app window.
+
+Start the normal local servers first:
+
+```powershell
+.\Start NeuroWeave.bat
+```
+
+Then run the desktop shell:
+
+```powershell
+cd apps/desktop
+npm install
+npm run dev
+```
+
+The default web target is `http://127.0.0.1:5173`. Override it with
+`NEUROWEAVE_WEB_URL` for alternate dev ports. See `apps/desktop/README.md`.
 
 ### Phase 0 Quickstart
 

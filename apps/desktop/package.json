@@ -1,0 +1,16 @@
+{
+  "name": "@neuroweave/desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Electron shell for the local NeuroWeave web UI.",
+  "main": "src/main.cjs",
+  "scripts": {
+    "dev": "electron .",
+    "start": "electron .",
+    "check": "node --check src/main.cjs && node --check scripts/ensure-electron.cjs",
+    "postinstall": "node scripts/ensure-electron.cjs"
+  },
+  "devDependencies": {
+    "electron": "^42.2.0"
+  }
+}
