@@ -19,7 +19,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+if getattr(sys, "frozen", False):
+    REPO_ROOT = Path(os.environ.get("NEUROWEAVE_APP_ROOT", Path(sys.executable).parent)).resolve()
+else:
+    REPO_ROOT = Path(__file__).resolve().parents[2]
 for package_src in (
     "packages/eeg-core/src",
     "packages/eeg-io/src",
@@ -3219,6 +3222,40 @@ def _worker_subprocess_env() -> dict[str, str]:
     return env
 
 
+def _worker_cli_command(job: str, payload_path: Path, result_path: Path) -> list[str]:
+    worker_command = os.environ.get("NEUROWEAVE_WORKER_COMMAND")
+    if worker_command:
+        return [
+            worker_command,
+            "worker",
+            job,
+            "--payload",
+            str(payload_path),
+            "--result",
+            str(result_path),
+        ]
+    if getattr(sys, "frozen", False):
+        return [
+            sys.executable,
+            "worker",
+            job,
+            "--payload",
+            str(payload_path),
+            "--result",
+            str(result_path),
+        ]
+    return [
+        sys.executable,
+        "-m",
+        "eeg_processing.worker_cli",
+        job,
+        "--payload",
+        str(payload_path),
+        "--result",
+        str(result_path),
+    ]
+
+
 def _run_worker_cli_subprocess(
     *,
     job: str,
@@ -3236,16 +3273,7 @@ def _run_worker_cli_subprocess(
     _write_worker_payload(payload_path, payload)
 
     process = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "eeg_processing.worker_cli",
-            job,
-            "--payload",
-            str(payload_path),
-            "--result",
-            str(result_path),
-        ],
+        _worker_cli_command(job, payload_path, result_path),
         cwd=REPO_ROOT,
         env=_worker_subprocess_env(),
         stdout=subprocess.PIPE,

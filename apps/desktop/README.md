@@ -3,9 +3,11 @@
 This is the Phase A10 Electron shell MVP. It opens the existing NeuroWeave web UI
 inside a desktop app window and manages the local FastAPI backend process.
 
-This package does not bundle the web build, installer, updater, or packaged
-backend runtime yet. In development mode it starts the repository FastAPI backend
-from `apps/api/.venv`, waits for `/health`, then loads the existing Vite web UI.
+This package does not create an installer or updater yet. In development mode it
+starts the repository FastAPI backend from `apps/api/.venv`, waits for `/health`,
+then loads the existing Vite web UI. In packaged mode it loads the React
+production build from Electron resources and starts the bundled backend
+executable from Electron resources.
 
 ## Development
 
@@ -65,11 +67,52 @@ Development mode:
 
 Packaged mode:
 
-- does not assume the repository layout
+- loads `resources/web/index.html`
+- starts `resources/backend/neuroweave-api.exe`
 - writes logs under Electron `userData/logs`
-- expects future installer work to provide a backend runtime
-- can be wired before bundling with `NEUROWEAVE_API_COMMAND`,
-  `NEUROWEAVE_API_ARGS`, and `NEUROWEAVE_API_CWD`
+- stores local research data under Electron `userData/data`
+- can be overridden before bundling with `NEUROWEAVE_API_COMMAND`,
+  `NEUROWEAVE_API_ARGS`, `NEUROWEAVE_API_CWD`, and
+  `NEUROWEAVE_DESKTOP_DATA_DIR`
+
+Packaged local data layout:
+
+```text
+userData/
+  logs/                 desktop-api.log
+  data/
+    raw/samples/        local sample EEG files
+    raw/uploads/        user-uploaded recordings and event logs
+    runs/               run state
+    processed/          preprocessing outputs
+    epochs/             epoch outputs
+    erp/                ERP outputs, plots, reports, bundles
+```
+
+## Packaging
+
+Build the React production app:
+
+```powershell
+npm run build:web
+```
+
+Build the PyInstaller backend executable:
+
+```powershell
+npm run build:backend
+```
+
+Create an unpacked Windows Electron app directory:
+
+```powershell
+npm run package:dir
+```
+
+The packaged app is written to `apps/desktop/dist-app-unpacked/win-unpacked/`.
+This is not an installer; it is the app directory used to verify bundled
+resources before the installer phase. The A11 directory build keeps `asar`
+disabled so repeated local packaging and resource inspection are straightforward.
 
 ## Checks
 
@@ -82,6 +125,18 @@ Backend launch smoke:
 ```powershell
 $env:NEUROWEAVE_API_PORT = "8110"
 npm run smoke:backend
+Remove-Item Env:\NEUROWEAVE_API_PORT
+```
+
+Packaged resource smoke without creating an installer:
+
+```powershell
+$env:NEUROWEAVE_DESKTOP_FORCE_PACKAGED_MODE = "1"
+$env:NEUROWEAVE_DESKTOP_RESOURCES_DIR = "..\..\dist\desktop"
+$env:NEUROWEAVE_API_PORT = "8114"
+npm run smoke:backend
+Remove-Item Env:\NEUROWEAVE_DESKTOP_FORCE_PACKAGED_MODE
+Remove-Item Env:\NEUROWEAVE_DESKTOP_RESOURCES_DIR
 Remove-Item Env:\NEUROWEAVE_API_PORT
 ```
 

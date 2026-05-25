@@ -5,6 +5,10 @@
   "description": "Electron shell for the local NeuroWeave web UI.",
   "main": "src/main.cjs",
   "scripts": {
+    "build:web": "npm --prefix ../web run build",
+    "build:backend": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/build_backend_exe.ps1",
+    "clean:package": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"if (Test-Path dist-app-unpacked) { Remove-Item -LiteralPath dist-app-unpacked -Recurse -Force }\"",
+    "package:dir": "npm run clean:package && npm run build:web && npm run build:backend && electron-builder --dir --win",
     "dev": "electron .",
     "dev:external-backend": "set NEUROWEAVE_DESKTOP_SKIP_BACKEND=1&& electron .",
     "smoke:backend": "set NEUROWEAVE_DESKTOP_QUIT_AFTER_BACKEND_HEALTH=1&& electron .",
@@ -13,6 +17,36 @@
     "postinstall": "node scripts/ensure-electron.cjs"
   },
   "devDependencies": {
-    "electron": "^42.2.0"
+    "electron": "^42.2.0",
+    "electron-builder": "^26.8.1"
+  },
+  "build": {
+    "appId": "org.neuroweave.desktop",
+    "productName": "NeuroWeave",
+    "directories": {
+      "output": "dist-app-unpacked"
+    },
+    "asar": false,
+    "files": [
+      "assets/**/*",
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../web/dist",
+        "to": "web"
+      },
+      {
+        "from": "../../dist/desktop/backend",
+        "to": "backend"
+      }
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        "dir"
+      ]
+    }
   }
 }

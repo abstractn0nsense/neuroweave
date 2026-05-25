@@ -21,6 +21,7 @@ data/
 *.tsbuildinfo
 test-results/
 playwright-report/
+apps/desktop/dist-app*/
 
 # Logs
 *.log

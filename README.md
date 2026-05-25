@@ -111,10 +111,10 @@ This creates Desktop and Start Menu shortcuts with a NeuroWeave icon. The shortc
 
 ### Desktop Shell MVP
 
-A minimal Electron shell is available under `apps/desktop`. It does not bundle
-the installer or packaged backend runtime yet, but in development mode it starts
-the local FastAPI backend, waits for `/health`, then opens the existing local web
-UI in an app window.
+A minimal Electron shell is available under `apps/desktop`. In development mode
+it starts the local FastAPI backend, waits for `/health`, then opens the local
+Vite web UI in an app window. In packaged mode it loads the React production
+build and bundled PyInstaller backend executable from Electron resources.
 
 Start the web dev server first:
 
@@ -136,6 +136,18 @@ The default web target is `http://127.0.0.1:5173` and the default API health
 target is `http://127.0.0.1:8000/health`. Override them with
 `NEUROWEAVE_WEB_URL`, `NEUROWEAVE_API_PORT`, or `NEUROWEAVE_API_HEALTH_URL` for
 alternate dev ports. See `apps/desktop/README.md`.
+
+Packaging checks:
+
+```powershell
+cd apps/desktop
+npm run package:dir
+```
+
+The unpacked Windows app uses `resources/web/` for the React build and
+`resources/backend/neuroweave-api.exe` for the backend. Packaged logs and local
+research data live under Electron `userData`, not inside the installation
+directory.
 
 ### Phase 0 Quickstart
 

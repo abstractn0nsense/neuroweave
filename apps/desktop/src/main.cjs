@@ -3,6 +3,7 @@ const childProcess = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
+const { pathToFileURL } = require("node:url");
 
 const DEFAULT_WEB_PORT = 5173;
 const DEFAULT_API_PORT = 8000;
@@ -12,6 +13,7 @@ const ICON_PATH = path.join(__dirname, "..", "assets", "neuroweave-icon.svg");
 
 let mainWindow = null;
 let backendProcess = null;
+let backendCommand = null;
 let backendStartedByDesktop = false;
 let backendExited = false;
 let backendStartupError = null;
@@ -21,13 +23,32 @@ function getRepoRoot() {
   return path.resolve(__dirname, "..", "..", "..");
 }
 
+function isPackagedMode() {
+  return app.isPackaged || process.env.NEUROWEAVE_DESKTOP_FORCE_PACKAGED_MODE === "1";
+}
+
+function getResourceRoot() {
+  if (process.env.NEUROWEAVE_DESKTOP_RESOURCES_DIR) {
+    return process.env.NEUROWEAVE_DESKTOP_RESOURCES_DIR;
+  }
+  if (app.isPackaged) {
+    return process.resourcesPath;
+  }
+  return path.join(getRepoRoot(), "dist", "desktop");
+}
+
 function getApiPort() {
   return Number(process.env.NEUROWEAVE_API_PORT || DEFAULT_API_PORT);
 }
 
 function getWebUrl() {
+  if (process.env.NEUROWEAVE_WEB_URL) {
+    return process.env.NEUROWEAVE_WEB_URL;
+  }
+  if (isPackagedMode()) {
+    return pathToFileURL(path.join(getResourceRoot(), "web", "index.html")).toString();
+  }
   return (
-    process.env.NEUROWEAVE_WEB_URL ||
     `http://127.0.0.1:${Number(process.env.NEUROWEAVE_WEB_PORT || DEFAULT_WEB_PORT)}`
   );
 }
@@ -37,10 +58,20 @@ function getApiHealthUrl() {
 }
 
 function getLogDirectory() {
-  if (app.isPackaged) {
+  if (isPackagedMode()) {
     return path.join(app.getPath("userData"), "logs");
   }
   return path.join(getRepoRoot(), "data", "logs");
+}
+
+function getDataDirectory() {
+  if (process.env.NEUROWEAVE_DESKTOP_DATA_DIR) {
+    return process.env.NEUROWEAVE_DESKTOP_DATA_DIR;
+  }
+  if (isPackagedMode()) {
+    return path.join(app.getPath("userData"), "data");
+  }
+  return path.join(getRepoRoot(), "data");
 }
 
 function getBackendLogPath() {
@@ -51,7 +82,7 @@ function getBackendMode() {
   if (process.env.NEUROWEAVE_DESKTOP_BACKEND_MODE) {
     return process.env.NEUROWEAVE_DESKTOP_BACKEND_MODE;
   }
-  return app.isPackaged ? "packaged" : "development";
+  return isPackagedMode() ? "packaged" : "development";
 }
 
 function getBackendLaunchConfig() {
@@ -68,9 +99,19 @@ function getBackendLaunchConfig() {
   }
 
   if (mode === "packaged") {
-    throw new Error(
-      "Packaged backend runtime is not bundled yet. Set NEUROWEAVE_API_COMMAND, NEUROWEAVE_API_ARGS, and NEUROWEAVE_API_CWD to launch an external backend."
-    );
+    const executableName = process.platform === "win32" ? "neuroweave-api.exe" : "neuroweave-api";
+    const backendExecutable = path.join(getResourceRoot(), "backend", executableName);
+    if (!fs.existsSync(backendExecutable)) {
+      throw new Error(
+        `Packaged backend executable was not found at ${backendExecutable}. Run the backend packaging script before packaging the desktop app.`
+      );
+    }
+    return {
+      mode,
+      command: backendExecutable,
+      args: [],
+      cwd: path.dirname(backendExecutable)
+    };
   }
 
   const repoRoot = getRepoRoot();
@@ -95,7 +136,12 @@ function getBackendLaunchConfig() {
 
 function isAppUrl(url) {
   try {
-    return new URL(url).origin === new URL(getWebUrl()).origin;
+    const candidate = new URL(url);
+    const appUrl = new URL(getWebUrl());
+    if (appUrl.protocol === "file:") {
+      return candidate.protocol === "file:" && candidate.pathname.startsWith(path.dirname(appUrl.pathname));
+    }
+    return candidate.origin === appUrl.origin;
   } catch {
     return false;
   }
@@ -203,7 +249,9 @@ function createWindow() {
   mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription) => {
     showStatusPage("NeuroWeave Web UI Unavailable", [
       `The web UI is not reachable at ${getWebUrl()}.`,
-      "Start the existing Vite web dev server, then reopen the desktop shell.",
+      isPackagedMode()
+        ? "The packaged React build is missing or unreadable."
+        : "Start the existing Vite web dev server, then reopen the desktop shell.",
       `${errorCode}: ${errorDescription}`
     ]);
   });
@@ -307,15 +355,29 @@ async function startBackendIfNeeded() {
     `[${new Date().toISOString()}] Starting ${launchConfig.mode} backend: ${launchConfig.command} ${launchConfig.args.join(" ")}\n`
   );
 
+  const backendEnv = {
+    ...process.env,
+    NEUROWEAVE_API_PORT: String(getApiPort()),
+    NEUROWEAVE_SAMPLE_DATASET_DIR: process.env.NEUROWEAVE_SAMPLE_DATASET_DIR || path.join(getDataDirectory(), "raw", "samples"),
+    NEUROWEAVE_UPLOADS_DIR: process.env.NEUROWEAVE_UPLOADS_DIR || path.join(getDataDirectory(), "raw", "uploads"),
+    NEUROWEAVE_RUNS_DIR: process.env.NEUROWEAVE_RUNS_DIR || path.join(getDataDirectory(), "runs"),
+    NEUROWEAVE_PROCESSED_DIR: process.env.NEUROWEAVE_PROCESSED_DIR || path.join(getDataDirectory(), "processed"),
+    NEUROWEAVE_EPOCHS_DIR: process.env.NEUROWEAVE_EPOCHS_DIR || path.join(getDataDirectory(), "epochs"),
+    NEUROWEAVE_ERP_DIR: process.env.NEUROWEAVE_ERP_DIR || path.join(getDataDirectory(), "erp"),
+    NEUROWEAVE_CORS_ALLOW_LOCALHOST_PORTS: process.env.NEUROWEAVE_CORS_ALLOW_LOCALHOST_PORTS || "true"
+  };
+  if (isPackagedMode()) {
+    backendEnv.NEUROWEAVE_WORKER_COMMAND = launchConfig.command;
+    backendEnv.NEUROWEAVE_CORS_ORIGINS = process.env.NEUROWEAVE_CORS_ORIGINS || "null";
+  }
+
   backendProcess = childProcess.spawn(launchConfig.command, launchConfig.args, {
     cwd: launchConfig.cwd,
-    env: {
-      ...process.env,
-      NEUROWEAVE_CORS_ALLOW_LOCALHOST_PORTS: process.env.NEUROWEAVE_CORS_ALLOW_LOCALHOST_PORTS || "true"
-    },
+    env: backendEnv,
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"]
   });
+  backendCommand = launchConfig.command;
   backendStartedByDesktop = true;
 
   backendProcess.stdout.pipe(logStream, { end: false });
@@ -335,7 +397,7 @@ async function startBackendIfNeeded() {
 
 function stopBackend() {
   return new Promise((resolve) => {
-    if (!backendStartedByDesktop || !backendProcess || backendExited) {
+    if (!backendStartedByDesktop) {
       resolve();
       return;
     }
@@ -355,16 +417,93 @@ function stopBackend() {
       finish();
     }, 8000);
     const termTimeout = setTimeout(() => {
-      if (!backendExited) {
-        processToStop.kill("SIGKILL");
+      if (processToStop) {
+        forceStopProcessTree(processToStop.pid);
       }
+      stopOwnedApiPortListener();
     }, 5000);
 
-    processToStop.once("exit", () => {
-      finish();
-    });
-    processToStop.kill("SIGTERM");
+    if (process.platform === "win32") {
+      const taskkill = processToStop && !backendExited ? stopProcessTree(processToStop.pid) : null;
+      const stopListener = () => {
+        const listenerStop = stopOwnedApiPortListener();
+        listenerStop?.once("close", () => {
+          setTimeout(finish, 500);
+        });
+        listenerStop?.once("error", () => {
+          finish();
+        });
+      };
+      if (taskkill) {
+        taskkill.once("close", stopListener);
+        taskkill.once("error", () => {
+          forceStopProcessTree(processToStop.pid);
+          stopListener();
+        });
+      } else {
+        stopListener();
+      }
+    } else {
+      processToStop?.once("exit", () => {
+        finish();
+      });
+      if (processToStop && !backendExited) {
+        stopProcessTree(processToStop.pid);
+      } else {
+        finish();
+      }
+    }
   });
+}
+
+function stopProcessTree(processId) {
+  if (process.platform === "win32") {
+    return childProcess.spawn("taskkill.exe", ["/PID", String(processId), "/T"], {
+      windowsHide: true,
+      stdio: "ignore"
+    });
+  }
+  backendProcess.kill("SIGTERM");
+  return null;
+}
+
+function forceStopProcessTree(processId) {
+  if (process.platform === "win32") {
+    childProcess.spawn("taskkill.exe", ["/PID", String(processId), "/T", "/F"], {
+      windowsHide: true,
+      stdio: "ignore"
+    });
+    return;
+  }
+  backendProcess.kill("SIGKILL");
+}
+
+function stopOwnedApiPortListener() {
+  if (process.platform !== "win32" || !backendCommand) {
+    return null;
+  }
+
+  const normalizedBackendCommand = backendCommand.toLowerCase().replace(/'/g, "''");
+  const command = [
+    "$ErrorActionPreference = 'SilentlyContinue';",
+    `$backend = '${normalizedBackendCommand}';`,
+    `$port = ${getApiPort()};`,
+    "$connections = Get-NetTCPConnection -LocalPort $port -State Listen;",
+    "foreach ($connection in $connections) {",
+    "  $processInfo = Get-CimInstance Win32_Process -Filter \"ProcessId = $($connection.OwningProcess)\";",
+    "  $commandLine = if ($processInfo.CommandLine) { $processInfo.CommandLine.ToLowerInvariant() } else { '' };",
+    "  if ($commandLine.Contains($backend)) { Stop-Process -Id $connection.OwningProcess -Force; }",
+    "}"
+  ].join(" ");
+
+  return childProcess.spawn(
+    "powershell.exe",
+    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+    {
+      windowsHide: true,
+      stdio: "ignore"
+    }
+  );
 }
 
 async function bootDesktop() {
@@ -418,7 +557,7 @@ if (!hasSingleInstanceLock) {
     if (quitAfterBackendStop) {
       return;
     }
-    if (!backendStartedByDesktop || !backendProcess || backendExited) {
+    if (!backendStartedByDesktop) {
       return;
     }
 

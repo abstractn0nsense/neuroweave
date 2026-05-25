@@ -67,6 +67,18 @@ powershell -ExecutionPolicy Bypass -File .\scripts\stop_neuroweave.ps1
 The stop script uses both runtime markers and listening ports, and only stops
 processes whose command line points at the current checkout.
 
+## Desktop Packaging Backend
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_backend_exe.ps1
+```
+
+This builds `dist/desktop/backend/neuroweave-api.exe` with PyInstaller. The
+Electron package step copies that executable into `resources/backend/` and starts
+it in packaged mode. Runtime logs and research data are written to Electron
+`userData`, while development builds continue using the repository `data/`
+directory.
+
 Run the lifecycle smoke before desktop packaging changes:
 
 ```powershell
