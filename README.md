@@ -83,7 +83,21 @@ Use CPython 3.12 or 3.13 for the API environment. Python 3.14 mingw builds may n
 
 On Windows, double-click `Start NeuroWeave.bat` from the repository root. The launcher starts the API and web servers, waits until both respond, writes logs under `data/logs/`, and opens `http://127.0.0.1:5173`.
 
-If the servers are already running, the launcher reuses them instead of starting duplicates. To stop repository-owned listeners on the default ports, double-click `Stop NeuroWeave.bat`.
+If the servers are already running from this checkout, the launcher reuses them
+instead of starting duplicates. If a stale repo-owned listener is found, the
+launcher stops it before starting a fresh process. If another application owns
+the requested port, startup fails instead of killing an unrelated process.
+
+Runtime files:
+
+```text
+data/logs/       API, web, setup, and install logs
+data/runtime/    repo-owned process marker files
+```
+
+To stop repository-owned listeners on the default ports, double-click
+`Stop NeuroWeave.bat`. The stop script checks process command lines and runtime
+markers so it does not terminate unrelated listeners.
 
 For an app-like entrypoint, install Windows shortcuts:
 
@@ -140,6 +154,16 @@ powershell -ExecutionPolicy Bypass -File .\scripts\smoke_phase0.ps1
 ```
 
 The smoke test generates sample EEG files, runs API/package tests, checks sample API endpoints, and builds the web app.
+
+Lifecycle smoke for desktop-packaging readiness:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\smoke_lifecycle.ps1
+```
+
+This starts the local API and web app, verifies `/health`, runs start a second
+time to check idempotency, checks logs/runtime markers, then stops only
+repo-owned processes.
 
 ### API Checks
 

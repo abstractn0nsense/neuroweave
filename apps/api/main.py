@@ -224,6 +224,9 @@ class LocalPreprocessingWorker:
             )
             self._thread.start()
 
+    def is_alive(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
     def enqueue(self, run_id: str) -> None:
         self.start()
         with self._lock:
@@ -271,6 +274,9 @@ class LocalEpochWorker:
                 daemon=True,
             )
             self._thread.start()
+
+    def is_alive(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
 
     def enqueue(self, run_id: str) -> None:
         self.start()
@@ -320,6 +326,9 @@ class LocalErpWorker:
             )
             self._thread.start()
 
+    def is_alive(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
     def enqueue(self, run_id: str) -> None:
         self.start()
         with self._lock:
@@ -353,6 +362,8 @@ erp_worker = LocalErpWorker()
 class HealthResponse(BaseModel):
     status: str
     service: str
+    workers: dict[str, bool] = Field(default_factory=dict)
+    data_directories: dict[str, str] = Field(default_factory=dict)
 
 
 class SampleDataset(BaseModel):
@@ -723,7 +734,23 @@ app.add_middleware(
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
-    return HealthResponse(status="ok", service="neuroweave-api")
+    return HealthResponse(
+        status="ok",
+        service="neuroweave-api",
+        workers={
+            "preprocessing": preprocessing_worker.is_alive(),
+            "epoch": epoch_worker.is_alive(),
+            "erp": erp_worker.is_alive(),
+        },
+        data_directories={
+            "samples": str(SAMPLE_DATASET_DIR),
+            "uploads": str(UPLOADS_DIR),
+            "runs": str(RUNS_DIR),
+            "processed": str(PROCESSED_DIR),
+            "epochs": str(EPOCHS_DIR),
+            "erp": str(ERP_DIR),
+        },
+    )
 
 
 @app.post(

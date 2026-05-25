@@ -45,6 +45,11 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start_neuroweave.ps1
 
 The root `Start NeuroWeave.bat` file calls this script for double-click startup. It starts the API and web servers, waits for `http://127.0.0.1:8000/health` and `http://127.0.0.1:5173`, writes logs to `data/logs/api.log` and `data/logs/web.log`, and opens the browser.
 
+The start script is idempotent for this checkout. It reuses healthy repo-owned
+listeners, stops stale repo-owned listeners, and refuses to take over ports owned
+by unrelated processes. Runtime process markers are written under
+`data/runtime/`.
+
 Create Desktop and Start Menu shortcuts with:
 
 ```powershell
@@ -58,6 +63,19 @@ Stop the default local servers with:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\stop_neuroweave.ps1
 ```
+
+The stop script uses both runtime markers and listening ports, and only stops
+processes whose command line points at the current checkout.
+
+Run the lifecycle smoke before desktop packaging changes:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\smoke_lifecycle.ps1
+```
+
+It starts the app, verifies API health and worker threads, starts again to check
+idempotency, checks `data/logs/` and `data/runtime/`, then stops repo-owned
+processes.
 
 ## Phase 0 Smoke Test
 
