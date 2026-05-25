@@ -30,7 +30,12 @@ from eeg_core.domain.ingestion import (
     diagnostic_warning_from_dict,
     diagnostic_warnings_from_strings,
 )
-from eeg_core.domain.recording import RecordingMetadata, recording_metadata_from_dict
+from eeg_core.domain.recording import (
+    ChannelMetadata,
+    RecordingMetadata,
+    channel_metadata_from_dict,
+    recording_metadata_from_dict,
+)
 from eeg_core.domain.validation import validate_ingestion_dataset
 
 __all__ = [
@@ -54,7 +59,9 @@ __all__ = [
     "PreprocessingRunStatus",
     "Project",
     "Recording",
+    "ChannelMetadata",
     "RecordingMetadata",
+    "channel_metadata_from_dict",
     "recording_metadata_from_dict",
     "RunDiagnostics",
     "RunKind",

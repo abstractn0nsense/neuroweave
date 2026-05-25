@@ -25,6 +25,9 @@ def test_read_eeg_metadata_from_fif(tmp_path):
     assert metadata.sampling_rate_hz == 256
     assert metadata.duration_seconds == 2
     assert metadata.channel_names == channel_names
+    assert metadata.channel_details == []
+    assert metadata.line_frequency_hz is None
+    assert metadata.reference is None
 
 
 def test_list_and_find_eeg_files(tmp_path):

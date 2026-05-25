@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 
 from eeg_core.domain import (
+    ChannelMetadata,
     Dataset,
     DatasetStatus,
     DiagnosticWarning,
@@ -166,6 +167,110 @@ def test_registry_persists_uploaded_files_and_recording(tmp_path):
     assert repository.get_recording(dataset.dataset_id) == recording
     assert repository.uploaded_files_path(dataset.dataset_id).is_file()
     assert repository.recording_path(dataset.dataset_id).is_file()
+
+    stored = json.loads(
+        repository.recording_path(dataset.dataset_id).read_text(encoding="utf-8")
+    )
+    assert stored["metadata"]["channel_details"] == []
+    assert stored["metadata"]["line_frequency_hz"] is None
+    assert stored["metadata"]["reference"] is None
+
+
+def test_registry_loads_legacy_recording_metadata_without_sidecar_fields(tmp_path):
+    repository = JsonRegistryRepository(tmp_path / "uploads")
+    recording_path = repository.recording_path("dataset-001")
+    recording_path.parent.mkdir(parents=True, exist_ok=True)
+    recording_path.write_text(
+        json.dumps(
+            {
+                "recording_id": "recording-legacy",
+                "dataset_id": "dataset-001",
+                "file_id": "file-001",
+                "metadata": {
+                    "dataset_id": "dataset-001",
+                    "file_format": "fif",
+                    "channel_count": 2,
+                    "sampling_rate_hz": 256.0,
+                    "duration_seconds": 4.0,
+                    "channel_names": ["Fp1", "Fp2"],
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    recording = repository.get_recording("dataset-001")
+
+    assert recording is not None
+    assert recording.metadata.channel_details == []
+    assert recording.metadata.line_frequency_hz is None
+    assert recording.metadata.reference is None
+
+
+def test_registry_loads_recording_metadata_with_sidecar_fields(tmp_path):
+    repository = JsonRegistryRepository(tmp_path / "uploads")
+    recording_path = repository.recording_path("dataset-001")
+    recording_path.parent.mkdir(parents=True, exist_ok=True)
+    recording_path.write_text(
+        json.dumps(
+            {
+                "recording_id": "recording-001",
+                "dataset_id": "dataset-001",
+                "file_id": "file-001",
+                "metadata": {
+                    "dataset_id": "dataset-001",
+                    "file_format": "fif",
+                    "channel_count": 2,
+                    "sampling_rate_hz": 256.0,
+                    "duration_seconds": 4.0,
+                    "channel_names": ["Fp1", "Fp2"],
+                    "channel_details": [
+                        {
+                            "name": "Fp1",
+                            "type": "EEG",
+                            "units": "uV",
+                            "status": "good",
+                            "status_description": None,
+                        },
+                        {
+                            "name": "Fp2",
+                            "type": "EEG",
+                            "units": "uV",
+                            "status": "bad",
+                            "status_description": "noisy electrode",
+                        },
+                    ],
+                    "line_frequency_hz": 60,
+                    "reference": "Cz",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    recording = repository.get_recording("dataset-001")
+
+    assert recording is not None
+    assert recording.metadata.channel_details == [
+        ChannelMetadata(
+            name="Fp1",
+            type="EEG",
+            units="uV",
+            status="good",
+            status_description=None,
+        ),
+        ChannelMetadata(
+            name="Fp2",
+            type="EEG",
+            units="uV",
+            status="bad",
+            status_description="noisy electrode",
+        ),
+    ]
+    assert recording.metadata.line_frequency_hz == 60.0
+    assert recording.metadata.reference == "Cz"
 
 
 def test_registry_preserves_concurrent_uploaded_file_writes(tmp_path):
