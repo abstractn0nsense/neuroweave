@@ -94,6 +94,24 @@ export async function createPreprocessedDataset(
     "No event log selected",
   );
 
+  await page.getByTestId("validate-dataset-button").click();
+  await expect(page.getByText("Dataset has blocking errors.")).toBeVisible();
+  await expect(page.getByTestId("validation-errors")).toContainText(
+    "recording_missing",
+  );
+  await expect(page.getByTestId("validation-errors")).toContainText(
+    "recording_id",
+  );
+  await expect(page.getByTestId("validation-errors")).toContainText(
+    "Next action: Upload a supported EEG recording",
+  );
+  await expect(page.getByTestId("validation-errors")).toContainText(
+    "event_log_missing",
+  );
+  await expect(page.getByTestId("validation-warnings")).toContainText(
+    "No warnings.",
+  );
+
   await page.getByTestId("eeg-file-input").setInputFiles(eegFixture);
   await expect(page.getByTestId("eeg-upload-status")).toContainText(
     path.basename(eegFixture),
@@ -138,7 +156,15 @@ export async function createPreprocessedDataset(
 
   await page.getByTestId("validate-dataset-button").click();
   await expect(page.getByText("Dataset is valid.")).toBeVisible();
-  await expect(page.getByText("Dataset is ready for preprocessing.")).toBeVisible();
+  await expect(page.getByTestId("validation-ready-message")).toContainText(
+    "Dataset is ready for preprocessing.",
+  );
+  await expect(page.getByTestId("validation-panel")).toContainText(
+    "Preprocessing is available",
+  );
+  await expect(page.getByTestId("validation-errors")).toContainText(
+    "No blocking errors.",
+  );
 
   await page.getByTestId("resample-hz-input").fill("50");
   await expect(page.getByTestId("resample-hz-input")).toHaveValue("50");

@@ -3662,27 +3662,93 @@ function EventPreviewTable({ preview }: { preview: EventPreview }) {
 }
 
 function ValidationPanel({ report }: { report: ValidationReport }) {
+  const hasErrors = report.errors.length > 0;
+  const hasWarnings = report.warnings.length > 0;
+
   return (
-    <div className={`validation-panel ${report.valid ? "valid" : "invalid"}`}>
+    <div
+      className={`validation-panel ${report.valid ? "valid" : "invalid"}`}
+      data-testid="validation-panel"
+    >
       <div className="validation-heading">
-        <strong>{report.valid ? "Valid" : "Invalid"}</strong>
+        <div>
+          <strong>{report.valid ? "Valid" : "Invalid"}</strong>
+          <p>
+            {report.valid
+              ? "Preprocessing is available once EEG recording and mapped events are present."
+              : "Resolve blocking errors before preprocessing can start."}
+          </p>
+        </div>
         <span>
           {report.errors.length} errors / {report.warnings.length} warnings
         </span>
       </div>
-      {report.issues.length === 0 ? (
-        <p className="muted">Dataset is ready for preprocessing.</p>
+      {report.valid ? (
+        <p className="validation-ready" data-testid="validation-ready-message">
+          Dataset is ready for preprocessing. Configure filters below and start a
+          preprocessing run.
+        </p>
+      ) : null}
+      <ValidationIssueSection
+        emptyText="No blocking errors."
+        issues={report.errors}
+        severity="error"
+        title="Errors"
+      />
+      <ValidationIssueSection
+        emptyText="No warnings."
+        issues={report.warnings}
+        severity="warning"
+        title="Warnings"
+      />
+      {!hasErrors && !hasWarnings ? (
+        <p className="muted">All required validation checks passed.</p>
+      ) : null}
+    </div>
+  );
+}
+
+function ValidationIssueSection({
+  emptyText,
+  issues,
+  severity,
+  title,
+}: {
+  emptyText: string;
+  issues: ValidationIssue[];
+  severity: ValidationIssue["severity"];
+  title: string;
+}) {
+  return (
+    <section
+      className="validation-issue-section"
+      data-testid={`validation-${severity}s`}
+    >
+      <div className="validation-section-heading">
+        <h4>{title}</h4>
+        <span>{issues.length}</span>
+      </div>
+      {issues.length === 0 ? (
+        <p className="muted">{emptyText}</p>
       ) : (
         <ul className="issue-list">
-          {report.issues.map((issue) => (
-            <li key={`${issue.severity}-${issue.code}-${issue.field ?? ""}`}>
-              <strong>{issue.code}</strong>
-              <span>{issue.message}</span>
+          {issues.map((issue) => (
+            <li
+              data-severity={issue.severity}
+              key={`${issue.severity}-${issue.code}-${issue.field ?? ""}`}
+            >
+              <div className="issue-meta">
+                <span>{issue.severity}</span>
+                <code>{issue.code}</code>
+                <small>{issue.field ?? "dataset"}</small>
+              </div>
+              <strong>{issue.message}</strong>
+              <p>{getValidationActionHint(issue)}</p>
             </li>
           ))}
         </ul>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -4521,6 +4587,47 @@ function getUploadStatus({
     label: "Required",
     detail: emptyText,
   };
+}
+
+function getValidationActionHint(issue: ValidationIssue): string {
+  const actionByCode: Record<string, string> = {
+    recording_missing:
+      "Upload a supported EEG recording, then run validation again.",
+    event_log_missing:
+      "Upload a CSV or TSV event log, save the event mapping, then revalidate.",
+    participant_label_missing:
+      "Add a participant label in Setup so exports can identify this dataset.",
+    session_label_missing:
+      "Add a session label in Setup if the study has repeated sessions.",
+    sampling_rate_invalid:
+      "Check that the EEG file is readable and contains valid sampling metadata.",
+    duration_invalid:
+      "Check the EEG recording duration before continuing with preprocessing.",
+    channels_missing:
+      "Use an EEG recording with channel names and at least one valid channel.",
+    event_log_empty:
+      "Review event mapping and row filters so at least one event is normalized.",
+    event_onset_out_of_range:
+      "Align event onset units/timing with the EEG recording duration.",
+    event_duration_missing:
+      "Continue if fixed epoch windows are intended, or map a duration column.",
+    event_response_missing:
+      "Continue if response analysis is not required, or map a response column.",
+    event_correct_missing:
+      "Continue if accuracy is not needed, or map a correct/accuracy column.",
+    event_reaction_time_missing:
+      "Continue if reaction-time analysis is not needed, or map an RT column.",
+  };
+
+  if (actionByCode[issue.code]) {
+    return `Next action: ${actionByCode[issue.code]}`;
+  }
+
+  if (issue.severity === "error") {
+    return "Next action: Fix this blocking issue and run validation again.";
+  }
+
+  return "Next action: Review whether this warning affects the analysis plan.";
 }
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
