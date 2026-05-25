@@ -57,7 +57,7 @@ def test_get_dataset_export_bundle_downloads_latest_completed_run(
         assert sorted(bundle.namelist()) == [
             "analysis_report.json",
             "artifact_manifest.json",
-            "artifacts/erp_metadata.json",
+            "diagnostics/erp_metadata.json",
             "export_bundle_manifest.json",
             "figures/erp_standard_plot.png",
         ]

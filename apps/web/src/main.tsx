@@ -3235,6 +3235,7 @@ function ErpRunList({
         const reportReady =
           typeof run.output_metadata.analysis_report_url === "string" &&
           run.output_metadata.analysis_report_url.length > 0;
+        const exportStatus = getErpExportStatus(run);
         return (
           <div className="run-row" key={run.run_id}>
             <div>
@@ -3247,6 +3248,9 @@ function ErpRunList({
                 <span>{formatErpMetadata(run.output_metadata)}</span>
                 <span>{run.config.plot_mode}</span>
               </div>
+              <p className="run-action-status" data-ready={exportReady}>
+                {exportStatus}
+              </p>
               <button
                 className="secondary-button compact-button"
                 data-testid={`report-erp-run-${run.run_id}`}
@@ -3254,8 +3258,8 @@ function ErpRunList({
                 onClick={() => onGenerateAnalysisReport(run)}
                 title={
                   exportReady
-                    ? "Generate analysis report"
-                    : "Report is available after completed artifacts are ready"
+                    ? "Generate or refresh analysis_report.json"
+                    : exportStatus
                 }
                 type="button"
               >
@@ -3282,8 +3286,10 @@ function ErpRunList({
                 onClick={() => onDownloadExportBundle(run)}
                 title={
                   exportReady
-                    ? "Download export bundle"
-                    : "Export is available after completed artifacts are ready"
+                    ? reportReady
+                      ? "Download ZIP with report, manifest, provenance, diagnostics, plots, and artifacts"
+                      : "Download ZIP; report will be generated first"
+                    : exportStatus
                 }
                 type="button"
               >
@@ -4571,6 +4577,28 @@ function isErpExportReady(run: ErpRun): boolean {
     typeof run.output_metadata.artifact_manifest_path === "string" &&
     run.output_metadata.artifact_manifest_path.length > 0
   );
+}
+
+function getErpExportStatus(run: ErpRun): string {
+  if (run.status !== "completed") {
+    return `Export unavailable: run is ${run.status}.`;
+  }
+
+  if (
+    typeof run.output_metadata.artifact_manifest_path !== "string" ||
+    run.output_metadata.artifact_manifest_path.length === 0
+  ) {
+    return "Export unavailable: artifact manifest is not ready.";
+  }
+
+  if (
+    typeof run.output_metadata.analysis_report_url === "string" &&
+    run.output_metadata.analysis_report_url.length > 0
+  ) {
+    return "Export ready: report, manifest, plots, provenance, diagnostics, and artifacts.";
+  }
+
+  return "Export ready: report will be generated before ZIP download.";
 }
 
 function getErrorMessage(error: unknown): string {

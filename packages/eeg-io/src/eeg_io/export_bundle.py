@@ -120,11 +120,23 @@ def _write_file_entry(
 
 
 def _artifact_archive_path(artifact: ArtifactReference) -> str:
-    directory = "figures" if _is_figure_artifact(artifact) else "artifacts"
+    directory = _artifact_archive_directory(artifact)
     filename = _safe_filename(
         f"{artifact.logical_name}{artifact.path.suffix.lower()}"
     )
     return f"{directory}/{filename}"
+
+
+def _artifact_archive_directory(artifact: ArtifactReference) -> str:
+    if _is_figure_artifact(artifact):
+        return "figures"
+    if _is_config_artifact(artifact):
+        return "configs"
+    if _is_provenance_artifact(artifact):
+        return "provenance"
+    if _is_diagnostic_artifact(artifact):
+        return "diagnostics"
+    return "artifacts"
 
 
 def _is_figure_artifact(artifact: ArtifactReference) -> bool:
@@ -133,6 +145,31 @@ def _is_figure_artifact(artifact: ArtifactReference) -> bool:
         "figure" in artifact_type
         or "plot" in artifact_type
         or artifact.path.suffix.lower() in _FIGURE_EXTENSIONS
+    )
+
+
+def _is_config_artifact(artifact: ArtifactReference) -> bool:
+    name = artifact.logical_name.lower()
+    artifact_type = artifact.artifact_type.lower()
+    return "config" in name or "config" in artifact_type
+
+
+def _is_provenance_artifact(artifact: ArtifactReference) -> bool:
+    name = artifact.logical_name.lower()
+    artifact_type = artifact.artifact_type.lower()
+    return "provenance" in name or "provenance" in artifact_type
+
+
+def _is_diagnostic_artifact(artifact: ArtifactReference) -> bool:
+    name = artifact.logical_name.lower()
+    artifact_type = artifact.artifact_type.lower()
+    return (
+        "diagnostic" in name
+        or "diagnostic" in artifact_type
+        or "metadata" in name
+        or "metadata" in artifact_type
+        or name.endswith("summary")
+        or name.endswith("report")
     )
 
 
