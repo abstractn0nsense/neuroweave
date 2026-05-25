@@ -7,12 +7,14 @@ from typing import Any, Sequence
 
 from eeg_core.domain import (
     EpochConfig,
+    ErpConfig,
     EventColumnMapping,
     EventLog,
     NormalizedEvent,
     PreprocessingConfig,
 )
 from eeg_processing.epoching import EpochingError, epoch_preprocessed_eeg
+from eeg_processing.erp import ErpError, generate_erps_from_epochs
 from eeg_processing.preprocessing import PreprocessingError, preprocess_raw_eeg
 
 
@@ -99,6 +101,8 @@ def _run_supported_payload(
         return _run_preprocessing_payload(payload)
     if job == EPOCHING_JOB:
         return _run_epoching_payload(payload)
+    if job == ERP_JOB:
+        return _run_erp_payload(payload)
     return _unimplemented_job_result(job, payload)
 
 
@@ -223,6 +227,51 @@ def _run_epoching_payload(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]
     )
 
 
+def _run_erp_payload(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    try:
+        epochs_path = _required_path(payload, "epochs_path")
+        output_directory = _required_path(payload, "output_directory")
+        config = _erp_config_from_payload(payload.get("config"))
+        metadata = generate_erps_from_epochs(
+            epochs_path=epochs_path,
+            output_directory=output_directory,
+            config=config,
+        )
+    except WorkerCliError as exc:
+        return (
+            1,
+            _base_result(
+                payload,
+                status="failed",
+                error=str(exc),
+            ),
+        )
+    except ErpError as exc:
+        return (
+            1,
+            _base_result(
+                payload,
+                status="failed",
+                warnings=exc.processing_warnings,
+                error=str(exc),
+            ),
+        )
+    except Exception as exc:
+        return (
+            1,
+            _base_result(
+                payload,
+                status="failed",
+                error=f"ERP worker failed: {exc}",
+            ),
+        )
+
+    return (
+        0,
+        _base_result(payload, status="completed", metadata=metadata),
+    )
+
+
 def _required_path(payload: dict[str, Any], key: str) -> Path:
     value = payload.get(key)
     if not isinstance(value, str) or not value.strip():
@@ -315,6 +364,28 @@ def _event_log_from_payload(value: Any) -> EventLog:
         row_count=int(_required_float(value, "row_count")),
         events=[_normalized_event_from_payload(event) for event in events],
     )
+
+
+def _erp_config_from_payload(value: Any) -> ErpConfig:
+    if not isinstance(value, dict):
+        raise WorkerCliError("Payload config must be a JSON object.")
+
+    return ErpConfig(
+        epoch_run_id=_required_string(value, "epoch_run_id"),
+        conditions=_optional_string_list(value.get("conditions"), "conditions"),
+        picks=_optional_string_list(value.get("picks"), "picks"),
+        method=_optional_string(value.get("method"), "method") or "mean",
+        plot_mode=_optional_string(value.get("plot_mode"), "plot_mode") or "gfp",
+        plot_channel=_optional_string(value.get("plot_channel"), "plot_channel"),
+    )
+
+
+def _optional_string_list(value: Any, field_name: str) -> list[str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise WorkerCliError(f"Payload config {field_name} must be a list or null.")
+    return [str(item) for item in value]
 
 
 def _normalized_event_from_payload(value: Any) -> NormalizedEvent:
