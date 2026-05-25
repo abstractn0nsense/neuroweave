@@ -11,7 +11,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 from uuid import uuid4
 
 from fastapi import FastAPI, File, HTTPException, UploadFile, status
@@ -2118,10 +2117,13 @@ def _execute_preprocessing_run(run_id: str) -> None:
         run_repository.save_preprocessing_run(failed_run)
         return
 
+    worker_artifacts = _preprocessing_worker_artifact_paths(run_id)
+    worker_metadata = _preprocessing_worker_metadata(worker_artifacts)
     running_run = replace(
         run,
         status=PreprocessingRunStatus.RUNNING,
         started_at_utc=_utc_now_iso(),
+        output_metadata={**run.output_metadata, **worker_metadata},
     )
     run_repository.save_preprocessing_run(running_run)
 
@@ -2131,14 +2133,23 @@ def _execute_preprocessing_run(run_id: str) -> None:
             input_path=input_path,
             output_path=output_path,
             config=run.config,
+            worker_artifacts=worker_artifacts,
+        )
+        worker_exit_code = metadata.pop("_worker_exit_code", None)
+        completed_run_base = replace(
+            running_run,
+            output_metadata={
+                **running_run.output_metadata,
+                "worker_exit_code": worker_exit_code,
+            },
         )
         output_file_path = Path(output_path)
         completed_run = replace(
-            running_run,
+            completed_run_base,
             status=PreprocessingRunStatus.COMPLETED,
             finished_at_utc=_utc_now_iso(),
             output_metadata=_preprocessing_completed_provenance(
-                run=running_run,
+                run=completed_run_base,
                 output_path=output_file_path,
                 processing_metadata=metadata,
             ),
@@ -2188,76 +2199,81 @@ def _run_preprocessing_subprocess(
     input_path: str,
     output_path: str,
     config: PreprocessingConfig,
+    worker_artifacts: dict[str, Path],
 ) -> dict:
-    with tempfile.TemporaryDirectory(prefix=f"preprocessing-{run_id}-") as temp_dir:
-        temp_path = Path(temp_dir)
-        payload_path = temp_path / "payload.json"
-        result_path = temp_path / "result.json"
-        payload_path.write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "job": "preprocessing",
-                    "run_id": run_id,
-                    "input_path": input_path,
-                    "output_path": output_path,
-                    "config": _preprocessing_config_payload(config),
-                },
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
+    payload_path = worker_artifacts["payload"]
+    result_path = worker_artifacts["result"]
+    stdout_path = worker_artifacts["stdout"]
+    stderr_path = worker_artifacts["stderr"]
+    payload_path.parent.mkdir(parents=True, exist_ok=True)
+    payload_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "job": "preprocessing",
+                "run_id": run_id,
+                "input_path": input_path,
+                "output_path": output_path,
+                "config": _preprocessing_config_payload(config),
+            },
+            indent=2,
+            sort_keys=True,
         )
+        + "\n",
+        encoding="utf-8",
+    )
 
-        process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "eeg_processing.worker_cli",
-                "preprocessing",
-                "--payload",
-                str(payload_path),
-                "--result",
-                str(result_path),
-            ],
-            cwd=REPO_ROOT,
-            env=_worker_subprocess_env(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "eeg_processing.worker_cli",
+            "preprocessing",
+            "--payload",
+            str(payload_path),
+            "--result",
+            str(result_path),
+        ],
+        cwd=REPO_ROOT,
+        env=_worker_subprocess_env(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
 
-        while process.poll() is None:
+    while process.poll() is None:
+        try:
+            process.wait(timeout=0.1)
+        except subprocess.TimeoutExpired:
+            pass
+        if _is_cancellation_requested(run_id):
+            process.terminate()
             try:
-                process.wait(timeout=0.1)
+                process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                pass
-            if _is_cancellation_requested(run_id):
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
-                process.communicate()
-                raise PreprocessingError(
-                    "Preprocessing cancelled.",
-                    processing_warnings=[
-                        "Cancellation terminated preprocessing subprocess."
-                    ],
-                )
+                process.kill()
+                process.wait()
+            stdout, stderr = process.communicate()
+            _write_worker_streams(stdout_path, stderr_path, stdout, stderr)
+            raise PreprocessingError(
+                "Preprocessing cancelled.",
+                processing_warnings=[
+                    "Cancellation terminated preprocessing subprocess."
+                ],
+            )
 
-        _stdout, stderr = process.communicate()
-        result = _load_worker_result(
-            result_path=result_path,
-            returncode=process.returncode,
-            stderr=stderr,
-        )
+    stdout, stderr = process.communicate()
+    _write_worker_streams(stdout_path, stderr_path, stdout, stderr)
+    result = _load_worker_result(
+        result_path=result_path,
+        returncode=process.returncode,
+        stderr=stderr,
+    )
 
     if result.get("status") == "completed":
         metadata = result.get("metadata")
         if isinstance(metadata, dict):
+            metadata["_worker_exit_code"] = process.returncode
             return metadata
         raise PreprocessingError("Preprocessing subprocess returned invalid metadata.")
 
@@ -2278,6 +2294,39 @@ def _preprocessing_config_payload(config: PreprocessingConfig) -> dict:
         "resample_hz": config.resample_hz,
         "reference": config.reference,
     }
+
+
+def _preprocessing_worker_artifact_paths(run_id: str) -> dict[str, Path]:
+    run_directory = run_repository.preprocessing_run_directory(run_id)
+    return {
+        "payload": run_directory / "worker_payload.json",
+        "result": run_directory / "worker_result.json",
+        "stdout": run_directory / "worker_stdout.log",
+        "stderr": run_directory / "worker_stderr.log",
+    }
+
+
+def _preprocessing_worker_metadata(
+    worker_artifacts: dict[str, Path],
+) -> dict[str, str | int | None]:
+    return {
+        "worker_schema_version": 1,
+        "worker_payload_path": str(worker_artifacts["payload"]),
+        "worker_result_path": str(worker_artifacts["result"]),
+        "worker_stdout_path": str(worker_artifacts["stdout"]),
+        "worker_stderr_path": str(worker_artifacts["stderr"]),
+        "worker_exit_code": None,
+    }
+
+
+def _write_worker_streams(
+    stdout_path: Path,
+    stderr_path: Path,
+    stdout: str,
+    stderr: str,
+) -> None:
+    stdout_path.write_text(stdout, encoding="utf-8")
+    stderr_path.write_text(stderr, encoding="utf-8")
 
 
 def _worker_subprocess_env() -> dict[str, str]:

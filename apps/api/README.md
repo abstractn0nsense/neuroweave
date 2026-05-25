@@ -72,6 +72,8 @@ Preprocessing config validation rejects invalid filter ordering, cutoff frequenc
 
 Completed preprocessing runs store provenance in `output_metadata`, including input file identity, paths, checksums, size, input/output signal metadata, output checksum, and MNE version. The run `config` field is the persisted preprocessing configuration snapshot.
 
+Preprocessing execution runs through the `eeg_processing.worker_cli` subprocess contract. Each preprocessing run directory under `data/runs/{run_id}/` keeps `worker_payload.json`, `worker_result.json`, `worker_stdout.log`, and `worker_stderr.log`; their paths and the worker exit code are recorded in `output_metadata` for debugging and reproducibility.
+
 Completed preprocessing runs also write diagnostics beside `raw_preprocessed_raw.fif`: `preprocessing_summary.json`, `filter_report.json`, and `artifact_summary.json`. Their paths and key artifact counts are recorded in `output_metadata`. Completed runs also write `artifact_manifest.json` with file paths, sizes, checksums, and artifact types for the primary FIF and diagnostics. Existing runs that still point at `raw_preprocessed.fif` remain readable through the backend fallback path.
 
 Phase 3 analysis output roots are configurable with `NEUROWEAVE_EPOCHS_DIR` and `NEUROWEAVE_ERP_DIR`. When unset, epoch artifacts will default to `data/epochs/{dataset_id}/{run_id}/` and ERP artifacts will default to `data/erp/{dataset_id}/{run_id}/`.
