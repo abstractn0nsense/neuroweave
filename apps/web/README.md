@@ -49,6 +49,17 @@ npm run e2e:phase3:epoch
 npm run e2e:phase3:erp
 ```
 
+Run the browser suite sequentially with:
+
+```powershell
+cd apps/web
+npm run e2e:all
+```
+
+Do not start the Phase 2 and Phase 3 Playwright scripts in parallel unless their
+ports are overridden. The default Playwright config uses the same API and web
+ports for each suite.
+
 `e2e:phase3:epoch` extends the preprocessing path through a completed epoch run.
 `e2e:phase3:erp` extends that path through ERP preview and comparison prep. Use
 `NEUROWEAVE_E2E_DATA_DIR` to override the isolated browser test data directory.

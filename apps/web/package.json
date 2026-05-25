@@ -10,7 +10,8 @@
     "e2e:phase2": "playwright test e2e/phase2-smoke.spec.ts",
     "e2e:phase3:epoch": "playwright test e2e/phase3-epoch-smoke.spec.ts",
     "e2e:phase3:erp": "playwright test e2e/phase3-erp-smoke.spec.ts",
-    "e2e:phase3": "playwright test e2e/phase3-epoch-smoke.spec.ts e2e/phase3-erp-smoke.spec.ts"
+    "e2e:phase3": "playwright test e2e/phase3-epoch-smoke.spec.ts e2e/phase3-erp-smoke.spec.ts",
+    "e2e:all": "npm run e2e:phase2 && npm run e2e:phase3:epoch && npm run e2e:phase3:erp"
   },
   "dependencies": {
     "react": "^19.0.0",
