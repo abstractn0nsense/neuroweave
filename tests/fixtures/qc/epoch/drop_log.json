@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "summary": {
+    "retained_epoch_count": 2,
+    "dropped_epoch_count": 1,
+    "reasons": {
+      "USER": 1
+    }
+  },
+  "entries": [
+    {
+      "event_index": 1,
+      "condition": "standard",
+      "reasons": ["USER"]
+    }
+  ]
+}

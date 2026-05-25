@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "artifact_root": ".",
+  "artifact_count": 3,
+  "artifacts": [
+    {
+      "logical_name": "preprocessing_summary",
+      "artifact_type": "diagnostic_json",
+      "path": "preprocessing_summary.json"
+    },
+    {
+      "logical_name": "filter_report",
+      "artifact_type": "diagnostic_json",
+      "path": "filter_report.json"
+    },
+    {
+      "logical_name": "artifact_summary",
+      "artifact_type": "diagnostic_json",
+      "path": "artifact_summary.json"
+    }
+  ]
+}

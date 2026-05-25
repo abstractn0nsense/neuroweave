@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "events": {
+    "total": 4,
+    "used": 3,
+    "skipped": 1
+  },
+  "skipped_events": {
+    "out_of_bounds": 1
+  },
+  "epochs": {
+    "created": 3,
+    "retained": 2,
+    "dropped": 1
+  }
+}

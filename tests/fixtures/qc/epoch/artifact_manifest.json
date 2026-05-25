@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "artifact_root": ".",
+  "artifact_count": 3,
+  "artifacts": [
+    {
+      "logical_name": "epoch_summary",
+      "artifact_type": "diagnostic_json",
+      "path": "epoch_summary.json"
+    },
+    {
+      "logical_name": "condition_counts",
+      "artifact_type": "diagnostic_json",
+      "path": "condition_counts.json"
+    },
+    {
+      "logical_name": "drop_log",
+      "artifact_type": "diagnostic_json",
+      "path": "drop_log.json"
+    }
+  ]
+}

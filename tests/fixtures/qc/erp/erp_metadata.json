@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "run_id": "erp-001",
+  "dataset_id": "dataset-001",
+  "condition_count": 2,
+  "plot": {
+    "status": "partial"
+  },
+  "conditions": [
+    {
+      "condition": "standard",
+      "nave": 12,
+      "gfp_peak": 3.4,
+      "channel_peak": 5.6,
+      "plot_status": "completed",
+      "plot_mode": "gfp",
+      "plot_channel": null,
+      "plot_warnings": []
+    },
+    {
+      "condition": "target",
+      "nave": 8,
+      "gfp_peak": 4.2,
+      "channel_peak": 6.1,
+      "plot_status": "failed",
+      "plot_mode": "channel",
+      "plot_channel": "Pz",
+      "plot_warnings": ["Plot generation failed."]
+    }
+  ]
+}

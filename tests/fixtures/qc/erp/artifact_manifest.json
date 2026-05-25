@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "artifact_root": ".",
+  "artifact_count": 1,
+  "artifacts": [
+    {
+      "logical_name": "erp_metadata",
+      "artifact_type": "erp_metadata_json",
+      "path": "erp_metadata.json"
+    }
+  ]
+}

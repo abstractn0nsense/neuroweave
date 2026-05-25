@@ -1,0 +1,14 @@
+{
+  "input": {
+    "bad_channels": ["Fp1"],
+    "bad_channel_count": 1
+  },
+  "output": {
+    "bad_channels": [],
+    "bad_channel_count": 0
+  },
+  "artifact_rejection": {
+    "enabled": false,
+    "reason": "Not implemented"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "input": {
+    "channel_count": 32,
+    "sampling_rate_hz": 512
+  },
+  "output": {
+    "channel_count": 31,
+    "sampling_rate_hz": 256
+  },
+  "warnings": []
+}

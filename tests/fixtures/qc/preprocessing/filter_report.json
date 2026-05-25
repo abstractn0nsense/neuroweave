@@ -1,0 +1,35 @@
+{
+  "high_pass": {
+    "enabled": true,
+    "status": "applied",
+    "parameters": {
+      "cutoff_hz": 1.0
+    }
+  },
+  "low_pass": {
+    "enabled": true,
+    "status": "applied",
+    "parameters": {
+      "cutoff_hz": 40.0
+    }
+  },
+  "notch": {
+    "enabled": true,
+    "status": "skipped",
+    "reason": "Notch frequency is above Nyquist."
+  },
+  "reference": {
+    "enabled": true,
+    "status": "applied",
+    "parameters": {
+      "reference": "average"
+    }
+  },
+  "resample": {
+    "enabled": true,
+    "status": "applied",
+    "parameters": {
+      "sampling_rate_hz": 256
+    }
+  }
+}

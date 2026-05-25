@@ -19,6 +19,7 @@ from eeg_io.provenance import (
     build_event_log_provenance_payload,
     build_provenance_payload,
 )
+from eeg_io.qc_summary import QC_SUMMARY_SCHEMA_VERSION, QcSummaryError, build_qc_summary
 
 __all__ = [
     "ArtifactManifest",
@@ -28,9 +29,12 @@ __all__ = [
     "BidsEegSidecar",
     "BidsSidecarError",
     "PROVENANCE_SCHEMA_VERSION",
+    "QC_SUMMARY_SCHEMA_VERSION",
+    "QcSummaryError",
     "artifact_manifest_from_dict",
     "build_provenance_payload",
     "build_event_log_provenance_payload",
+    "build_qc_summary",
     "load_artifact_manifest",
     "read_channels_tsv",
     "read_eeg_json",
