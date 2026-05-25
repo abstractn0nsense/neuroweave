@@ -71,6 +71,8 @@ from eeg_io.bids_sidecars import (  # noqa: E402
     read_channels_tsv,
     read_eeg_json,
 )
+from eeg_io.analysis_report import AnalysisReportError, write_analysis_report  # noqa: E402
+from eeg_io.artifact_manifest import ArtifactManifestError  # noqa: E402
 from eeg_io.datasets import find_eeg_file_by_id, list_eeg_files  # noqa: E402
 from eeg_io.event_logs import (  # noqa: E402
     EventLogNormalizationError,
@@ -79,6 +81,7 @@ from eeg_io.event_logs import (  # noqa: E402
     normalize_event_log,
     preview_event_log,
 )
+from eeg_io.export_bundle import build_export_bundle  # noqa: E402
 from eeg_io.provenance import (  # noqa: E402
     build_event_log_provenance_payload,
     build_provenance_payload,
@@ -1398,6 +1401,32 @@ def get_dataset_qc_summary(
     )
 
 
+@app.get("/datasets/{dataset_id}/export-bundle")
+def get_dataset_export_bundle(
+    dataset_id: str,
+    run_id: str | None = None,
+) -> FileResponse:
+    if registry_repository.get_dataset(dataset_id) is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    run = _resolve_qc_summary_run(dataset_id=dataset_id, run_id=run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Completed export run not found")
+
+    return _export_bundle_response(run)
+
+
+@app.get("/erp-runs/{run_id}/export-bundle")
+def get_erp_run_export_bundle(run_id: str) -> FileResponse:
+    run = run_repository.get_erp_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="ERP run not found")
+    if _run_status_value(run) != "completed":
+        raise HTTPException(status_code=409, detail="Run is not completed")
+
+    return _export_bundle_response(run)
+
+
 @app.post(
     "/erp-runs/{run_id}/comparison-summary",
     response_model=ComparisonSummaryResponse,
@@ -2516,8 +2545,44 @@ def _run_artifact_manifest_path(
     return None
 
 
+def _export_bundle_response(run: PreprocessingRun | EpochRun | ErpRun) -> FileResponse:
+    manifest_path = _run_artifact_manifest_path(run)
+    if manifest_path is None:
+        raise HTTPException(status_code=404, detail="Artifact manifest not found")
+
+    output_directory = manifest_path.parent
+    analysis_report_path = output_directory / "analysis_report.json"
+    export_bundle_path = output_directory / "export_bundle.zip"
+    try:
+        write_analysis_report(
+            analysis_report_path,
+            dataset_id=run.dataset_id,
+            run_id=run.run_id,
+            run_kind=_run_kind_value(run),
+            artifact_manifest_path=manifest_path,
+            config_snapshot=asdict(run.config),
+        )
+        build_export_bundle(
+            artifact_manifest_path=manifest_path,
+            analysis_report_path=analysis_report_path,
+            output_zip_path=export_bundle_path,
+        )
+    except (AnalysisReportError, ArtifactManifestError, QcSummaryError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return FileResponse(
+        export_bundle_path,
+        media_type="application/zip",
+        filename=f"neuroweave_{run.dataset_id}_{run.run_id}_export_bundle.zip",
+    )
+
+
 def _run_status_value(run: PreprocessingRun | EpochRun | ErpRun) -> str:
     return str(run.status.value if hasattr(run.status, "value") else run.status)
+
+
+def _run_kind_value(run: PreprocessingRun | EpochRun | ErpRun) -> str:
+    return str(run.run_kind.value if hasattr(run.run_kind, "value") else run.run_kind)
 
 
 def _run_finished_sort_value(run: PreprocessingRun | EpochRun | ErpRun) -> str:
