@@ -1566,7 +1566,9 @@ function ActiveDatasetSummary({
           >
             <span>{String(index + 1).padStart(2, "0")}</span>
             <strong>{item.label}</strong>
-            <small>{item.value}</small>
+            <small data-testid={`stage-${item.label.toLowerCase()}-value`}>
+              {item.value}
+            </small>
           </div>
         ))}
       </div>

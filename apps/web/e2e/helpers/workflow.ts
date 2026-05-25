@@ -61,6 +61,19 @@ export async function createPreprocessedDataset(
   );
   await page.getByTestId("save-mapping-button").click();
   await expect(page.getByText("Event mapping saved.")).toBeVisible();
+  await expect(page.getByTestId("stage-events-value")).toContainText(
+    "normalized",
+  );
+  const mappedEventsText = await page
+    .getByTestId("stage-events-value")
+    .textContent();
+  expect(mappedEventsText).not.toBe("Unmapped");
+
+  await page.reload();
+  await expect(page.getByText("Study Setup")).toBeVisible();
+  await expect(page.getByTestId("stage-events-value")).toHaveText(
+    mappedEventsText ?? "",
+  );
 
   await page.getByTestId("validate-dataset-button").click();
   await expect(page.getByText("Dataset is valid.")).toBeVisible();
