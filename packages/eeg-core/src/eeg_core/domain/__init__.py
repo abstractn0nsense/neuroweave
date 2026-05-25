@@ -28,6 +28,7 @@ from eeg_core.domain.ingestion import (
     ValidationReport,
     ValidationSeverity,
     diagnostic_warning_from_dict,
+    diagnostic_warnings_from_strings,
 )
 from eeg_core.domain.recording import RecordingMetadata, recording_metadata_from_dict
 from eeg_core.domain.validation import validate_ingestion_dataset
@@ -64,5 +65,6 @@ __all__ = [
     "ValidationReport",
     "ValidationSeverity",
     "diagnostic_warning_from_dict",
+    "diagnostic_warnings_from_strings",
     "validate_ingestion_dataset",
 ]

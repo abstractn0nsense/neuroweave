@@ -280,6 +280,9 @@ def test_create_epoch_run_persists_out_of_bounds_warning(tmp_path, monkeypatch):
     stored = api_main.run_repository.get_epoch_run(response.json()["run_id"])
     assert stored is not None
     assert stored.warnings == response.json()["warnings"]
+    assert stored.diagnostics["warnings"][0].source == "epoch"
+    assert stored.diagnostics["warnings"][0].code == "unstructured_warning"
+    assert stored.diagnostics["warnings"][0].impact == response.json()["warnings"][0]
 
 
 def test_get_and_list_epoch_runs_return_404_for_missing_records(tmp_path, monkeypatch):

@@ -19,6 +19,7 @@ from eeg_core.domain import (
     ValidationReport,
     ValidationSeverity,
     diagnostic_warning_from_dict,
+    diagnostic_warnings_from_strings,
 )
 
 
@@ -200,3 +201,22 @@ def test_diagnostic_warning_deserializes_from_payload():
         impact="Some events were excluded from epoching.",
         suggested_action="Review the event mapping and epoch window.",
     )
+
+
+def test_diagnostic_warnings_from_strings_uses_default_warning_contract():
+    diagnostics = diagnostic_warnings_from_strings(
+        ["Reference unchanged.", ""],
+        source="preprocessing",
+    )
+
+    assert asdict(diagnostics["warnings"][0]) == {
+        "severity": "warning",
+        "source": "preprocessing",
+        "code": "unstructured_warning",
+        "impact": "Reference unchanged.",
+        "suggested_action": None,
+    }
+
+
+def test_diagnostic_warnings_from_strings_returns_empty_diagnostics_without_warnings():
+    assert diagnostic_warnings_from_strings([], source="epoch") == {}

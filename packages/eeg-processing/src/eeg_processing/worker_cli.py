@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -12,6 +13,7 @@ from eeg_core.domain import (
     EventLog,
     NormalizedEvent,
     PreprocessingConfig,
+    diagnostic_warnings_from_strings,
 )
 from eeg_processing.epoching import EpochingError, epoch_preprocessed_eeg
 from eeg_processing.erp import ErpError, generate_erps_from_epochs
@@ -447,15 +449,37 @@ def _base_result(
     warnings: list[str] | None = None,
     error: str | None = None,
 ) -> dict[str, Any]:
+    warning_values = warnings or []
     return {
         "schema_version": SCHEMA_VERSION,
         "job": payload.get("job"),
         "run_id": payload.get("run_id"),
         "status": status,
         "metadata": metadata or {},
-        "warnings": warnings or [],
+        "warnings": warning_values,
+        "diagnostics": _diagnostics_payload_from_warnings(
+            warning_values,
+            source=_warning_source_from_payload(payload),
+        ),
         "error": error,
     }
+
+
+def _diagnostics_payload_from_warnings(
+    warnings: list[str],
+    *,
+    source: str,
+) -> dict[str, list[dict[str, Any]]]:
+    diagnostics = diagnostic_warnings_from_strings(warnings, source=source)
+    structured_warnings = diagnostics.get("warnings", [])
+    return {
+        "warnings": [asdict(warning) for warning in structured_warnings]
+    }
+
+
+def _warning_source_from_payload(payload: dict[str, Any]) -> str:
+    job = payload.get("job")
+    return str(job) if isinstance(job, str) and job else "worker"
 
 
 if __name__ == "__main__":

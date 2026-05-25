@@ -318,3 +318,25 @@ def diagnostic_warning_from_dict(data: dict) -> DiagnosticWarning:
         impact=data.get("impact"),
         suggested_action=data.get("suggested_action"),
     )
+
+
+def diagnostic_warnings_from_strings(
+    warnings: list[str],
+    *,
+    source: str,
+    code: str = "unstructured_warning",
+    severity: ValidationSeverity = ValidationSeverity.WARNING,
+    suggested_action: str | None = None,
+) -> RunDiagnostics:
+    structured_warnings = [
+        DiagnosticWarning(
+            severity=severity,
+            source=source,
+            code=code,
+            impact=warning,
+            suggested_action=suggested_action,
+        )
+        for warning in warnings
+        if warning
+    ]
+    return {"warnings": structured_warnings} if structured_warnings else {}

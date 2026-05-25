@@ -51,6 +51,7 @@ from eeg_core.domain import (  # noqa: E402
     ValidationIssue,
     ValidationReport,
     ValidationSeverity,
+    diagnostic_warnings_from_strings,
     validate_ingestion_dataset,
 )
 from eeg_processing import (  # noqa: E402
@@ -1037,25 +1038,29 @@ def cancel_preprocessing_run(run_id: str) -> PreprocessingRunResponse:
 
     if run.status == PreprocessingRunStatus.PENDING:
         cancelled_at = _utc_now_iso()
+        warnings = [*run.warnings, "Run cancelled before preprocessing started."]
         cancelled_run = replace(
             run,
             status=PreprocessingRunStatus.CANCELLED,
             finished_at_utc=cancelled_at,
             cancel_requested_at_utc=run.cancel_requested_at_utc or cancelled_at,
-            warnings=[*run.warnings, "Run cancelled before preprocessing started."],
+            warnings=warnings,
+            diagnostics=_diagnostics_from_warnings(warnings, "preprocessing"),
         )
         run_repository.save_preprocessing_run(cancelled_run)
         return _preprocessing_run_response(cancelled_run)
 
     if run.status == PreprocessingRunStatus.RUNNING:
+        warnings = [
+            *run.warnings,
+            "Cancellation requested; preprocessing will stop at the next checkpoint.",
+        ]
         cancelling_run = replace(
             run,
             status=PreprocessingRunStatus.CANCELLING,
             cancel_requested_at_utc=run.cancel_requested_at_utc or _utc_now_iso(),
-            warnings=[
-                *run.warnings,
-                "Cancellation requested; preprocessing will stop at the next checkpoint.",
-            ],
+            warnings=warnings,
+            diagnostics=_diagnostics_from_warnings(warnings, "preprocessing"),
         )
         run_repository.save_preprocessing_run(cancelling_run)
         return _preprocessing_run_response(cancelling_run)
@@ -1127,6 +1132,7 @@ def create_epoch_run(
             recording=recording,
         ),
         warnings=config_warnings,
+        diagnostics=_diagnostics_from_warnings(config_warnings, "epoch"),
     )
     run_repository.save_epoch_run(run)
     epoch_worker.enqueue(run_id)
@@ -1198,6 +1204,7 @@ def create_erp_run(
         output_path=str(output_path),
         output_metadata=_erp_input_provenance(epoch_run),
         warnings=config_warnings,
+        diagnostics=_diagnostics_from_warnings(config_warnings, "erp"),
     )
     run_repository.save_erp_run(run)
     erp_worker.enqueue(run_id)
@@ -2177,6 +2184,7 @@ def _execute_preprocessing_run(run_id: str) -> None:
             },
         )
         output_file_path = Path(output_path)
+        completed_warnings = [str(warning) for warning in metadata.get("warnings", [])]
         completed_run = replace(
             completed_run_base,
             status=PreprocessingRunStatus.COMPLETED,
@@ -2186,21 +2194,30 @@ def _execute_preprocessing_run(run_id: str) -> None:
                 output_path=output_file_path,
                 processing_metadata=metadata,
             ),
-            warnings=[str(warning) for warning in metadata.get("warnings", [])],
+            warnings=completed_warnings,
+            diagnostics=_diagnostics_from_warnings(
+                completed_warnings,
+                "preprocessing",
+            ),
         )
         current_run = run_repository.get_preprocessing_run(run_id)
         if current_run and current_run.status == PreprocessingRunStatus.CANCELLING:
+            cancelled_warnings = _dedupe_strings(
+                [
+                    *current_run.warnings,
+                    *completed_run.warnings,
+                    "Run cancelled after preprocessing completed; output was retained.",
+                ]
+            )
             cancelled_run = replace(
                 completed_run,
                 status=PreprocessingRunStatus.CANCELLED,
                 finished_at_utc=_utc_now_iso(),
                 cancel_requested_at_utc=current_run.cancel_requested_at_utc,
-                warnings=_dedupe_strings(
-                    [
-                        *current_run.warnings,
-                        *completed_run.warnings,
-                        "Run cancelled after preprocessing completed; output was retained.",
-                    ]
+                warnings=cancelled_warnings,
+                diagnostics=_diagnostics_from_warnings(
+                    cancelled_warnings,
+                    "preprocessing",
                 ),
             )
             run_repository.save_preprocessing_run(cancelled_run)
@@ -2218,6 +2235,7 @@ def _execute_preprocessing_run(run_id: str) -> None:
             if current_run and current_run.status == PreprocessingRunStatus.CANCELLING
             else PreprocessingRunStatus.FAILED
         )
+        failed_warnings = _dedupe_strings([*current_warnings, *exc.processing_warnings])
         failed_run = replace(
             running_run,
             status=next_status,
@@ -2225,7 +2243,11 @@ def _execute_preprocessing_run(run_id: str) -> None:
             cancel_requested_at_utc=(
                 current_run.cancel_requested_at_utc if current_run else None
             ),
-            warnings=_dedupe_strings([*current_warnings, *exc.processing_warnings]),
+            warnings=failed_warnings,
+            diagnostics=_diagnostics_from_warnings(
+                failed_warnings,
+                "preprocessing",
+            ),
             errors=[str(exc)],
             output_metadata=failed_output_metadata,
         )
@@ -2525,6 +2547,12 @@ def _execute_epoch_run(run_id: str) -> None:
             },
         )
         output_file_path = Path(run.output_path)
+        completed_warnings = _dedupe_strings(
+            [
+                *running_run.warnings,
+                *[str(warning) for warning in metadata.get("warnings", [])],
+            ]
+        )
         completed_run = replace(
             completed_run_base,
             status=EpochRunStatus.COMPLETED,
@@ -2534,27 +2562,25 @@ def _execute_epoch_run(run_id: str) -> None:
                 output_path=output_file_path,
                 processing_metadata=metadata,
             ),
-            warnings=_dedupe_strings(
-                [
-                    *running_run.warnings,
-                    *[str(warning) for warning in metadata.get("warnings", [])],
-                ]
-            ),
+            warnings=completed_warnings,
+            diagnostics=_diagnostics_from_warnings(completed_warnings, "epoch"),
         )
         current_run = run_repository.get_epoch_run(run_id)
         if current_run and current_run.status == EpochRunStatus.CANCELLING:
+            cancelled_warnings = _dedupe_strings(
+                [
+                    *current_run.warnings,
+                    *completed_run.warnings,
+                    "Run cancelled after epoching completed; output was retained.",
+                ]
+            )
             cancelled_run = replace(
                 completed_run,
                 status=EpochRunStatus.CANCELLED,
                 finished_at_utc=_utc_now_iso(),
                 cancel_requested_at_utc=current_run.cancel_requested_at_utc,
-                warnings=_dedupe_strings(
-                    [
-                        *current_run.warnings,
-                        *completed_run.warnings,
-                        "Run cancelled after epoching completed; output was retained.",
-                    ]
-                ),
+                warnings=cancelled_warnings,
+                diagnostics=_diagnostics_from_warnings(cancelled_warnings, "epoch"),
             )
             run_repository.save_epoch_run(cancelled_run)
         else:
@@ -2571,6 +2597,7 @@ def _execute_epoch_run(run_id: str) -> None:
             if current_run and current_run.status == EpochRunStatus.CANCELLING
             else EpochRunStatus.FAILED
         )
+        failed_warnings = _dedupe_strings([*current_warnings, *exc.processing_warnings])
         failed_run = replace(
             running_run,
             status=next_status,
@@ -2578,7 +2605,8 @@ def _execute_epoch_run(run_id: str) -> None:
             cancel_requested_at_utc=(
                 current_run.cancel_requested_at_utc if current_run else None
             ),
-            warnings=_dedupe_strings([*current_warnings, *exc.processing_warnings]),
+            warnings=failed_warnings,
+            diagnostics=_diagnostics_from_warnings(failed_warnings, "epoch"),
             errors=[str(exc)],
             output_metadata=failed_output_metadata,
         )
@@ -2719,6 +2747,12 @@ def _execute_erp_run(run_id: str) -> None:
                 "worker_exit_code": worker_exit_code,
             },
         )
+        completed_warnings = _dedupe_strings(
+            [
+                *running_run.warnings,
+                *[str(warning) for warning in metadata.get("warnings", [])],
+            ]
+        )
         completed_run = replace(
             completed_run_base,
             status=ErpRunStatus.COMPLETED,
@@ -2728,27 +2762,25 @@ def _execute_erp_run(run_id: str) -> None:
                 output_path=output_path,
                 processing_metadata=metadata,
             ),
-            warnings=_dedupe_strings(
-                [
-                    *running_run.warnings,
-                    *[str(warning) for warning in metadata.get("warnings", [])],
-                ]
-            ),
+            warnings=completed_warnings,
+            diagnostics=_diagnostics_from_warnings(completed_warnings, "erp"),
         )
         current_run = run_repository.get_erp_run(run_id)
         if current_run and current_run.status == ErpRunStatus.CANCELLING:
+            cancelled_warnings = _dedupe_strings(
+                [
+                    *current_run.warnings,
+                    *completed_run.warnings,
+                    "Run cancelled after ERP generation completed; output was retained.",
+                ]
+            )
             cancelled_run = replace(
                 completed_run,
                 status=ErpRunStatus.CANCELLED,
                 finished_at_utc=_utc_now_iso(),
                 cancel_requested_at_utc=current_run.cancel_requested_at_utc,
-                warnings=_dedupe_strings(
-                    [
-                        *current_run.warnings,
-                        *completed_run.warnings,
-                        "Run cancelled after ERP generation completed; output was retained.",
-                    ]
-                ),
+                warnings=cancelled_warnings,
+                diagnostics=_diagnostics_from_warnings(cancelled_warnings, "erp"),
             )
             run_repository.save_erp_run(cancelled_run)
         else:
@@ -2765,6 +2797,7 @@ def _execute_erp_run(run_id: str) -> None:
             if current_run and current_run.status == ErpRunStatus.CANCELLING
             else ErpRunStatus.FAILED
         )
+        failed_warnings = _dedupe_strings([*current_warnings, *exc.processing_warnings])
         failed_run = replace(
             running_run,
             status=next_status,
@@ -2772,7 +2805,8 @@ def _execute_erp_run(run_id: str) -> None:
             cancel_requested_at_utc=(
                 current_run.cancel_requested_at_utc if current_run else None
             ),
-            warnings=_dedupe_strings([*current_warnings, *exc.processing_warnings]),
+            warnings=failed_warnings,
+            diagnostics=_diagnostics_from_warnings(failed_warnings, "erp"),
             errors=[str(exc)],
             output_metadata=failed_output_metadata,
         )
@@ -3188,6 +3222,10 @@ def _dedupe_strings(values: list[str]) -> list[str]:
             seen.add(value)
             deduped.append(value)
     return deduped
+
+
+def _diagnostics_from_warnings(warnings: list[str], source: str) -> dict:
+    return diagnostic_warnings_from_strings(warnings, source=source)
 
 
 def _store_upload_file(file: UploadFile, destination_directory: Path) -> Path:

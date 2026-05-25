@@ -426,6 +426,11 @@ def test_erp_worker_persists_failed_execution(tmp_path, monkeypatch):
     assert "erp_metadata_path" not in payload["output_metadata"]
     assert payload["output_metadata"]["worker_schema_version"] == 1
     assert payload["output_metadata"]["worker_exit_code"] is None
+    stored_run = api_main.run_repository.get_erp_run(payload["run_id"])
+    assert stored_run is not None
+    assert stored_run.diagnostics["warnings"][0].source == "erp"
+    assert stored_run.diagnostics["warnings"][0].code == "unstructured_warning"
+    assert stored_run.diagnostics["warnings"][0].impact == "captured ERP warning"
 
 
 def test_erp_subprocess_failure_preserves_worker_artifacts(tmp_path, monkeypatch):

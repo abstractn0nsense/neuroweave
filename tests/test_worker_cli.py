@@ -61,6 +61,7 @@ def test_run_payload_completes_preprocessing(monkeypatch, tmp_path):
         "status": "completed",
         "metadata": metadata,
         "warnings": [],
+        "diagnostics": {"warnings": []},
         "error": None,
     }
 
@@ -94,6 +95,13 @@ def test_run_payload_returns_failed_result_for_preprocessing_error(monkeypatch, 
     assert result["status"] == "failed"
     assert result["metadata"] == {}
     assert result["warnings"] == ["missing channel"]
+    assert result["diagnostics"]["warnings"][0] == {
+        "severity": "warning",
+        "source": "preprocessing",
+        "code": "unstructured_warning",
+        "impact": "missing channel",
+        "suggested_action": None,
+    }
     assert result["error"] == "bad input"
 
 
@@ -184,6 +192,7 @@ def test_run_payload_completes_epoching(monkeypatch, tmp_path):
         "status": "completed",
         "metadata": metadata,
         "warnings": [],
+        "diagnostics": {"warnings": []},
         "error": None,
     }
 
@@ -220,6 +229,8 @@ def test_run_payload_returns_failed_result_for_epoching_error(monkeypatch, tmp_p
     assert result["run_id"] == "epoch-003"
     assert result["status"] == "failed"
     assert result["warnings"] == ["event warning"]
+    assert result["diagnostics"]["warnings"][0]["source"] == "epoching"
+    assert result["diagnostics"]["warnings"][0]["impact"] == "event warning"
     assert result["error"] == "epoch failed"
 
 
@@ -285,6 +296,7 @@ def test_run_payload_completes_erp(monkeypatch, tmp_path):
         "status": "completed",
         "metadata": metadata,
         "warnings": [],
+        "diagnostics": {"warnings": []},
         "error": None,
     }
 
@@ -319,6 +331,8 @@ def test_run_payload_returns_failed_result_for_erp_error(monkeypatch, tmp_path):
     assert result["run_id"] == "erp-003"
     assert result["status"] == "failed"
     assert result["warnings"] == ["plot warning"]
+    assert result["diagnostics"]["warnings"][0]["source"] == "erp"
+    assert result["diagnostics"]["warnings"][0]["impact"] == "plot warning"
     assert result["error"] == "erp failed"
 
 
@@ -365,6 +379,7 @@ def test_main_writes_result_json(monkeypatch, tmp_path):
         "status": "completed",
         "metadata": {"ok": True},
         "warnings": [],
+        "diagnostics": {"warnings": []},
         "error": None,
     }
 
