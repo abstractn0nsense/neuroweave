@@ -3,10 +3,10 @@
 This is the Phase A10 Electron shell MVP. It opens the existing NeuroWeave web UI
 inside a desktop app window and manages the local FastAPI backend process.
 
-This package does not create an installer or updater yet. In development mode it
-starts the repository FastAPI backend from `apps/api/.venv`, waits for `/health`,
-then loads the existing Vite web UI. In packaged mode it loads the React
-production build from Electron resources and starts the bundled backend
+This package creates a Windows installer with Electron Builder. In development
+mode it starts the repository FastAPI backend from `apps/api/.venv`, waits for
+`/health`, then loads the existing Vite web UI. In packaged mode it loads the
+React production build from Electron resources and starts the bundled backend
 executable from Electron resources.
 
 ## Development
@@ -103,6 +103,12 @@ Build the PyInstaller backend executable:
 npm run build:backend
 ```
 
+Generate the Windows app icon:
+
+```powershell
+npm run build:icon
+```
+
 Create an unpacked Windows Electron app directory:
 
 ```powershell
@@ -113,6 +119,35 @@ The packaged app is written to `apps/desktop/dist-app-unpacked/win-unpacked/`.
 This is not an installer; it is the app directory used to verify bundled
 resources before the installer phase. The A11 directory build keeps `asar`
 disabled so repeated local packaging and resource inspection are straightforward.
+
+Create the Windows installer:
+
+```powershell
+npm run package:win
+```
+
+The installer is written to:
+
+```text
+apps/desktop/dist-installer/NeuroWeave-Setup-0.1.0.exe
+```
+
+Installer behavior:
+
+- creates a Desktop shortcut named `NeuroWeave`
+- creates a Start Menu shortcut named `NeuroWeave`
+- registers Windows uninstall metadata as `NeuroWeave`
+- keeps user research data on uninstall by default
+
+Silent install smoke example:
+
+```powershell
+$installer = ".\dist-installer\NeuroWeave-Setup-0.1.0.exe"
+$installDir = "$env:LOCALAPPDATA\Programs\NeuroWeaveSmoke"
+& $installer /S "/D=$installDir"
+& "$installDir\NeuroWeave.exe"
+& "$installDir\Uninstall NeuroWeave.exe" /S
+```
 
 ## Checks
 

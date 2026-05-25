@@ -142,12 +142,18 @@ Packaging checks:
 ```powershell
 cd apps/desktop
 npm run package:dir
+npm run package:win
 ```
 
 The unpacked Windows app uses `resources/web/` for the React build and
 `resources/backend/neuroweave-api.exe` for the backend. Packaged logs and local
 research data live under Electron `userData`, not inside the installation
 directory.
+
+The Windows installer is written to `apps/desktop/dist-installer/` and creates
+Desktop and Start Menu shortcuts named `NeuroWeave`. Windows uninstall metadata
+is registered by the NSIS installer, while user research data is preserved on
+uninstall by default.
 
 ### Phase 0 Quickstart
 

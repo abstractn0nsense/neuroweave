@@ -22,6 +22,7 @@ data/
 test-results/
 playwright-report/
 apps/desktop/dist-app*/
+apps/desktop/dist-installer/
 
 # Logs
 *.log

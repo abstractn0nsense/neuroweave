@@ -79,6 +79,15 @@ it in packaged mode. Runtime logs and research data are written to Electron
 `userData`, while development builds continue using the repository `data/`
 directory.
 
+Generate the desktop installer icon with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_desktop_icon.ps1
+```
+
+The Electron installer build uses `dist/desktop/icon/neuroweave.ico` for the app,
+Desktop shortcut, Start Menu shortcut, and uninstall entry.
+
 Run the lifecycle smoke before desktop packaging changes:
 
 ```powershell
