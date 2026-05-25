@@ -275,6 +275,13 @@ type ComparisonSummaryResponse = {
   erp_run: ErpRun;
 };
 
+type AnalysisReportResponse = {
+  report: Record<string, unknown>;
+  erp_run: ErpRun;
+  report_url: string;
+  report_path: string;
+};
+
 type QcSummaryResponse = {
   dataset_id: string;
   run_id: string;
@@ -1298,6 +1305,46 @@ function App() {
     });
   }
 
+  async function generateErpAnalysisReport(run: ErpRun) {
+    if (!isErpExportReady(run)) {
+      setNotice({
+        tone: "error",
+        message: "Report is available after a completed ERP run writes artifacts.",
+      });
+      return;
+    }
+
+    await runAction(`report-${run.run_id}`, async () => {
+      const response = await postJson<AnalysisReportResponse>(
+        `/erp-runs/${encodeURIComponent(run.run_id)}/analysis-report`,
+        {},
+      );
+      setErpRuns((current) => ({
+        status: "success",
+        data: (current.data ?? []).map((item) =>
+          item.run_id === response.erp_run.run_id ? response.erp_run : item,
+        ),
+        error: null,
+      }));
+      setNotice({
+        tone: "ok",
+        message: `Analysis report generated for ${run.run_id}.`,
+      });
+    });
+  }
+
+  function openErpAnalysisReport(run: ErpRun) {
+    const reportUrl = run.output_metadata.analysis_report_url;
+    if (typeof reportUrl !== "string" || !reportUrl) {
+      setNotice({
+        tone: "error",
+        message: "Generate the analysis report before opening it.",
+      });
+      return;
+    }
+    window.open(`${API_BASE_URL}${reportUrl}`, "_blank", "noopener,noreferrer");
+  }
+
   async function cancelPreprocessingRun(runId: string) {
     await runAction(`cancel-${runId}`, async () => {
       const run = await requestJson<PreprocessingRun>(
@@ -1825,6 +1872,8 @@ function App() {
                   onComparisonConfigChange={setComparisonConfig}
                   onDownloadErpExportBundle={downloadErpExportBundle}
                   onErpConfigChange={setErpConfig}
+                  onGenerateErpAnalysisReport={generateErpAnalysisReport}
+                  onOpenErpAnalysisReport={openErpAnalysisReport}
                   onStartComparisonSummary={beginComparisonSummary}
                   onStartErpRun={beginErpRun}
                 />
@@ -3001,6 +3050,8 @@ function ErpSection({
   onComparisonConfigChange,
   onDownloadErpExportBundle,
   onErpConfigChange,
+  onGenerateErpAnalysisReport,
+  onOpenErpAnalysisReport,
   onStartComparisonSummary,
   onStartErpRun,
 }: {
@@ -3014,6 +3065,8 @@ function ErpSection({
   onComparisonConfigChange: (config: typeof DEFAULT_COMPARISON_CONFIG) => void;
   onDownloadErpExportBundle: (run: ErpRun) => void;
   onErpConfigChange: (config: typeof DEFAULT_ERP_CONFIG) => void;
+  onGenerateErpAnalysisReport: (run: ErpRun) => void;
+  onOpenErpAnalysisReport: (run: ErpRun) => void;
   onStartComparisonSummary: () => void;
   onStartErpRun: () => void;
 }) {
@@ -3132,6 +3185,8 @@ function ErpSection({
       <ErpRunList
         busyAction={busyAction}
         onDownloadExportBundle={onDownloadErpExportBundle}
+        onGenerateAnalysisReport={onGenerateErpAnalysisReport}
+        onOpenAnalysisReport={onOpenErpAnalysisReport}
         runs={erpRuns}
       />
       <ComparisonSection
@@ -3148,10 +3203,14 @@ function ErpSection({
 function ErpRunList({
   busyAction,
   onDownloadExportBundle,
+  onGenerateAnalysisReport,
+  onOpenAnalysisReport,
   runs,
 }: {
   busyAction: string | null;
   onDownloadExportBundle: (run: ErpRun) => void;
+  onGenerateAnalysisReport: (run: ErpRun) => void;
+  onOpenAnalysisReport: (run: ErpRun) => void;
   runs: LoadState<ErpRun[]>;
 }) {
   if (runs.status === "loading" || runs.status === "idle") {
@@ -3172,6 +3231,10 @@ function ErpRunList({
       {runData.map((run) => {
         const exportReady = isErpExportReady(run);
         const exportBusy = busyAction === `export-${run.run_id}`;
+        const reportBusy = busyAction === `report-${run.run_id}`;
+        const reportReady =
+          typeof run.output_metadata.analysis_report_url === "string" &&
+          run.output_metadata.analysis_report_url.length > 0;
         return (
           <div className="run-row" key={run.run_id}>
             <div>
@@ -3184,6 +3247,34 @@ function ErpRunList({
                 <span>{formatErpMetadata(run.output_metadata)}</span>
                 <span>{run.config.plot_mode}</span>
               </div>
+              <button
+                className="secondary-button compact-button"
+                data-testid={`report-erp-run-${run.run_id}`}
+                disabled={!exportReady || reportBusy}
+                onClick={() => onGenerateAnalysisReport(run)}
+                title={
+                  exportReady
+                    ? "Generate analysis report"
+                    : "Report is available after completed artifacts are ready"
+                }
+                type="button"
+              >
+                {reportBusy ? "Preparing..." : "Generate Report"}
+              </button>
+              <button
+                className="secondary-button compact-button"
+                data-testid={`open-report-erp-run-${run.run_id}`}
+                disabled={!reportReady}
+                onClick={() => onOpenAnalysisReport(run)}
+                title={
+                  reportReady
+                    ? "Open analysis report"
+                    : "Generate the report before opening it"
+                }
+                type="button"
+              >
+                Open Report
+              </button>
               <button
                 className="secondary-button compact-button"
                 data-testid={`export-erp-run-${run.run_id}`}

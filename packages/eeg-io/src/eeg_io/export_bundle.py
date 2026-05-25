@@ -59,6 +59,8 @@ def build_export_bundle(
 
         used_archive_paths = {entry["archive_path"] for entry in entries}
         for artifact in manifest.artifacts:
+            if artifact.logical_name == "analysis_report":
+                continue
             if not artifact.exists:
                 continue
             archive_path = _artifact_archive_path(artifact)

@@ -21,6 +21,7 @@ def build_analysis_report(
     run_kind: str,
     artifact_manifest_path: Path,
     config_snapshot: dict[str, Any] | None = None,
+    extra_sections: dict[str, Any] | None = None,
     created_at_utc: str | None = None,
 ) -> dict[str, Any]:
     manifest = load_artifact_manifest(artifact_manifest_path)
@@ -32,7 +33,7 @@ def build_analysis_report(
         else _dict_value(provenance, "config_snapshot")
     )
 
-    return {
+    report = {
         "schema_version": ANALYSIS_REPORT_SCHEMA_VERSION,
         "created_at_utc": created_at_utc or _utc_now_iso(),
         "dataset_id": dataset_id,
@@ -76,6 +77,9 @@ def build_analysis_report(
             ],
         },
     }
+    if extra_sections:
+        report.update(extra_sections)
+    return report
 
 
 def write_analysis_report(
@@ -86,6 +90,7 @@ def write_analysis_report(
     run_kind: str,
     artifact_manifest_path: Path,
     config_snapshot: dict[str, Any] | None = None,
+    extra_sections: dict[str, Any] | None = None,
     created_at_utc: str | None = None,
 ) -> Path:
     payload = build_analysis_report(
@@ -94,6 +99,7 @@ def write_analysis_report(
         run_kind=run_kind,
         artifact_manifest_path=artifact_manifest_path,
         config_snapshot=config_snapshot,
+        extra_sections=extra_sections,
         created_at_utc=created_at_utc,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
