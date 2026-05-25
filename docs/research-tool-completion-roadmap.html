@@ -27,9 +27,9 @@
 <main>
 <h1>NeuroWeave Research Tool Completion Roadmap</h1>
 <p>작성일: 2026-05-25</p>
-<p>업데이트: 2026-05-26, <code>main</code> 기준 코드 재검토 및 preprocessing worker CLI subpipeline 머지 반영</p>
+<p>업데이트: 2026-05-26, <code>main</code> 기준 코드 재검토 및 worker CLI preprocessing/epoching/ERP subpipeline 머지 반영</p>
 <h2>현재 판단</h2>
-<p>현재 NeuroWeave는 &quot;실제 데이터로 끝까지 도는 분석 MVP&quot;에서 &quot;research exploration alpha 기반&quot;으로 한 단계 올라왔다. UI hydration/CORS 안정화와 preprocessing worker CLI 분리는 완료되어 <code>main</code>에 머지되었다. 다만 worker CLI는 아직 preprocessing에만 적용되어 있고, epoching/ERP는 기존 multiprocessing worker 경로를 사용한다.</p>
+<p>현재 NeuroWeave는 &quot;실제 데이터로 끝까지 도는 분석 MVP&quot;에서 &quot;research exploration alpha 기반&quot;으로 한 단계 올라왔다. UI hydration/CORS 안정화와 preprocessing/epoching/ERP worker CLI 분리는 완료되어 <code>main</code>에 머지되었다. processing pipeline의 실행 경계는 이제 API process 내부 multiprocessing target이 아니라 worker CLI subprocess로 통일되었다.</p>
 <p>6월 10일까지의 현실적인 목표는 여전히 &quot;논문 결과 산출용 완성판&quot;이 아니라, 실제 공개 EEG 데이터를 반복해서 넣고 검토할 수 있는 내부 연구 탐색용 alpha이다.</p>
 <h2>진행 수준 요약</h2>
 <table><thead><tr>
@@ -48,7 +48,7 @@
 <td>preprocessing worker CLI</td>
 <td>완료</td>
 <td><code>eeg_processing.worker_cli preprocessing</code>, API subprocess 전환, worker artifact 저장, PR #6 머지</td>
-<td>epoching/ERP로 패턴 확장</td>
+<td>유지보수만</td>
 </tr>
 <tr>
 <td>Phase 2/3 browser smoke</td>
@@ -58,21 +58,21 @@
 </tr>
 <tr>
 <td>epoching/ERP worker CLI</td>
-<td>미완료</td>
-<td><code>apps/api/main.py</code>의 epoch/ERP는 아직 <code>multiprocessing.spawn</code> + result queue 기반</td>
-<td>다음 subpipeline 1순위</td>
+<td>완료</td>
+<td><code>eeg_processing.worker_cli epoching/erp</code>, API subprocess 전환, worker artifact/exit code 저장, PR #8 머지</td>
+<td>유지보수만</td>
 </tr>
 <tr>
 <td>BIDS sidecar ingest MVP</td>
 <td>미완료</td>
 <td><code>packages/eeg-io/src/eeg_io/bids_sidecars.py</code> 없음</td>
-<td>worker CLI 확장 후 착수</td>
+<td>다음 subpipeline 1순위</td>
 </tr>
 <tr>
 <td>Event mapping v2</td>
 <td>미완료</td>
 <td>null 처리/row filter/condition preset 모델 없음</td>
-<td>BIDS events와 같이 설계</td>
+<td>BIDS sidecar ingest와 같이 설계</td>
 </tr>
 <tr>
 <td>structured warning/diagnostics</td>
@@ -94,12 +94,12 @@
 </tr>
 </tbody></table>
 <h2>현재 코드 검증 결과</h2>
-<p>검증 기준 시점: 2026-05-26, <code>main</code> 커밋 <code>0965b6d Add preprocessing worker CLI contract</code></p>
+<p>검증 기준 시점: 2026-05-26, <code>main</code> 커밋 <code>afe0df9 Run epoching and ERP through worker CLI</code></p>
 <ul>
 <li>Git 상태: clean, <code>main...origin/main</code></li>
 <li>Python 테스트:</li>
 <li>명령: <code>apps/api/.venv/Scripts/python.exe -m pytest tests --basetemp=data/cache/pytest-tmp -o cache_dir=data/cache/pytest-cache</code></li>
-<li>결과: 111 passed</li>
+<li>결과: 126 passed</li>
 <li>주의: Windows 기본 temp 권한 문제를 피하기 위해 repo 내부 <code>--basetemp</code>를 표준 테스트 명령으로 사용한다.</li>
 <li>Web build:</li>
 <li>명령: <code>C:\Program Files\nodejs\npm.cmd run build</code></li>
@@ -150,7 +150,7 @@
 <ul>
 <li>UI hydration + CORS env화: 완료</li>
 <li>preprocessing worker CLI 분리: 완료</li>
-<li>epoching/ERP worker CLI 분리</li>
+<li>epoching/ERP worker CLI 분리: 완료</li>
 <li>BIDS sidecar ingest MVP</li>
 <li>BIDS event mapping/filter preset MVP</li>
 <li>structured warning/diagnostics MVP</li>
@@ -167,8 +167,29 @@
 <li>대규모 visual regression suite</li>
 <li>multi-subject batch의 완성형 UI</li>
 </ul>
-<h2>다음 subpipeline: epoching/ERP worker CLI 확장</h2>
+<h3>3. epoching/ERP worker CLI</h3>
+<p>완료 범위:</p>
+<ul>
+<li><code>worker_cli.py</code>에 <code>epoching</code>, <code>erp</code> job routing 추가</li>
+<li>epoching payload/result JSON schema v1 정의</li>
+<li>ERP payload/result JSON schema v1 정의</li>
+<li>API epoching 실행을 worker CLI subprocess로 전환</li>
+<li>API ERP 실행을 worker CLI subprocess로 전환</li>
+<li>preprocessing/epoching/ERP 공통 subprocess helper 정리</li>
+<li>worker payload/result/stdout/stderr artifact 저장</li>
+<li>worker exit code와 schema version을 run metadata에 기록</li>
+<li>result JSON 누락, invalid JSON, non-object JSON 실패 테스트 추가</li>
+</ul>
+<p>완료 기준 충족:</p>
+<ul>
+<li>preprocessing -&gt; epoch -&gt; ERP 전체가 CLI worker 경유로 실행됨</li>
+<li>cancellation warning 문구와 기존 API response shape 유지</li>
+<li>ERP preview artifact endpoint와 comparison summary 흐름 유지</li>
+<li>Python 전체 테스트, web build, browser smoke, GitHub CI 통과</li>
+</ul>
+<h2>완료된 subpipeline: epoching/ERP worker CLI 확장</h2>
 <p>목표: preprocessing에서 검증된 worker CLI 계약을 epoching/ERP에도 확장해, 전체 processing pipeline의 실행 경계를 API process 밖으로 통일한다.</p>
+<p>상태: 완료, PR #8 머지.</p>
 <h3>작업 0. Baseline 및 브랜치</h3>
 <ul>
 <li><code>main</code> 최신 상태 확인</li>
@@ -179,7 +200,7 @@
 <p>완료 기준:</p>
 <ul>
 <li>branch clean</li>
-<li>Python tests 111 passed</li>
+<li>Python tests 126 passed</li>
 <li>web build 통과</li>
 <li>browser smoke 통과</li>
 </ul>
@@ -254,49 +275,49 @@
 <h2>이번 주 남은 계획: 5월 27일-5월 31일</h2>
 <h3>5월 27일 수요일</h3>
 <ul>
-<li>epoching/ERP worker CLI 확장 시작</li>
-<li>worker CLI job routing 확장</li>
-<li>epoching API subprocess 전환</li>
+<li>BIDS sidecar ingest 설계 및 모듈 추가</li>
+<li><code>_channels.tsv</code>, <code>_eeg.json</code> 파서 추가</li>
+<li><code>RecordingMetadata</code> optional 확장 지점 확정</li>
 </ul>
 <p>완료 기준:</p>
 <ul>
-<li>epoching run이 API 내부 multiprocessing target 직접 호출 없이 subprocess CLI로 실행됨</li>
-<li>기존 epoch API 테스트 통과</li>
+<li>sidecar 파일이 없어도 기존 ingest 흐름이 깨지지 않음</li>
+<li><code>_channels.tsv</code>의 channel type/status/units 후보를 구조화해서 읽을 수 있음</li>
 </ul>
 <h3>5월 28일 목요일</h3>
 <ul>
-<li>ERP worker CLI 전환</li>
-<li>세 worker job 공통 artifact/exit code 흐름 정리</li>
-<li>전체 <code>e2e:all</code> 통과</li>
+<li><code>_eeg.json</code> metadata 반영</li>
+<li>line frequency, reference, sampling metadata 저장</li>
+<li>OpenNeuro <code>.set</code> 계열 warning을 structured warning 후보로 분류</li>
 </ul>
 <p>완료 기준:</p>
 <ul>
-<li>preprocessing -&gt; epoch -&gt; ERP 전체가 CLI worker 경유</li>
-<li>PR merge 후 <code>main</code> clean</li>
+<li>sidecar metadata가 registry optional field로 보존됨</li>
+<li>기존 JSON registry와 API response backward compatibility 유지</li>
 </ul>
 <h3>5월 29일 금요일</h3>
 <ul>
-<li><code>packages/eeg-io/src/eeg_io/bids_sidecars.py</code> 추가</li>
-<li><code>_channels.tsv</code>, <code>_eeg.json</code> ingest</li>
-<li><code>RecordingMetadata</code> optional 확장</li>
-<li>channel type/status/units, line frequency, reference 반영</li>
+<li>BIDS events normalization 시작</li>
+<li><code>n/a</code>, <code>NA</code>, empty null 처리</li>
+<li>row filter 모델 초안</li>
+<li><code>bids_events</code> preset 초안</li>
 </ul>
 <p>완료 기준:</p>
 <ul>
-<li>OpenNeuro <code>.set</code> 계열 metadata warning을 줄이거나 structured warning 후보로 분류</li>
-<li>registry 기존 JSON 호환성 유지</li>
+<li>BIDS <code>events.tsv</code>를 기존 EventLog 모델로 안정적으로 변환</li>
+<li>condition derivation 입력이 UI/API에서 일관되게 보임</li>
 </ul>
 <h3>5월 30일 토요일</h3>
 <ul>
-<li>BIDS events normalization</li>
-<li><code>n/a</code>, <code>NA</code>, empty null 처리</li>
-<li>row filter 추가</li>
-<li><code>psychopy</code>, <code>bids_events</code>, <code>eeglab_annotations</code> preset 초안</li>
+<li>Event mapping v2 확장</li>
+<li><code>psychopy</code>, <code>eeglab_annotations</code> preset 초안</li>
+<li>raw row/source column 일부 보존</li>
+<li>mapping preview와 validation 메시지 갱신</li>
 </ul>
 <p>완료 기준:</p>
 <ul>
-<li>BIDS <code>events.tsv</code>를 연구용 event log로 안정적으로 변환</li>
-<li>condition derivation이 UI/API에서 일관되게 보임</li>
+<li>null/filter/preset 처리가 API와 UI에서 같은 결과를 낸다</li>
+<li>기존 event upload/mapping API 테스트가 유지된다</li>
 </ul>
 <h3>5월 31일 일요일</h3>
 <ul>
@@ -427,7 +448,7 @@
 <ol>
 <li>UI hydration + CORS env화: 완료</li>
 <li>preprocessing worker CLI 분리: 완료</li>
-<li>epoching/ERP worker CLI 확장: 다음 단계</li>
+<li>epoching/ERP worker CLI 확장: 완료</li>
 <li>BIDS sidecar ingest</li>
 <li>BIDS event mapping/filter preset</li>
 <li>structured warning/diagnostics</li>
@@ -437,7 +458,7 @@
 <li>statistics/reproducibility/collaboration</li>
 </ol>
 <h2>결론</h2>
-<p>현재는 &quot;research exploration alpha 기반&quot;이 확보된 상태다. 다음 단계는 epoching/ERP까지 worker CLI 경계를 통일하는 것이다. 이 작업이 끝나야 BIDS ingest, structured diagnostics, QC, export를 안정적으로 얹을 수 있다.</p>
+<p>현재는 &quot;research exploration alpha 기반&quot;이 확보된 상태다. worker CLI 경계는 preprocessing/epoching/ERP까지 통일되었으므로, 다음 단계는 실제 공개 EEG 데이터 호환성을 높이는 BIDS sidecar ingest와 Event mapping v2이다. 이 작업이 끝나야 structured diagnostics, QC, export를 안정적으로 얹을 수 있다.</p>
 <p>6월 10일까지는 research exploration alpha를 목표로 한다. 즉, 실제 공개 EEG 데이터를 안정적으로 반복 처리하고, mapping/validation/run 상태가 새로고침 후에도 일관되며, worker 실행 경계가 CLI로 분리되어 이후 BIDS ingest, QC, export, 재현성 기능을 얹을 수 있는 기반을 만드는 것이 핵심이다.</p>
 </main>
 </body>
