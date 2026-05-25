@@ -4,6 +4,7 @@ from dataclasses import replace
 import json
 
 from fastapi.testclient import TestClient
+import pytest
 
 from apps.api import main as api_main
 from eeg_core.domain import (
@@ -319,6 +320,64 @@ def test_preprocessing_subprocess_failure_preserves_worker_artifacts(
     result = json.loads(worker_artifacts["result"].read_text(encoding="utf-8"))
     assert result["status"] == "failed"
     assert result["run_id"] == "preprocess-failed"
+
+
+@pytest.mark.parametrize(
+    ("process_label", "error_cls"),
+    [
+        ("Preprocessing", api_main.WorkerSubprocessError),
+        ("Epoching", api_main.EpochWorkerSubprocessError),
+        ("ERP", api_main.ErpWorkerSubprocessError),
+    ],
+)
+def test_worker_result_loader_reports_malformed_results(
+    tmp_path,
+    process_label,
+    error_cls,
+):
+    missing_path = tmp_path / "missing_result.json"
+    with pytest.raises(error_cls) as missing_error:
+        api_main._load_worker_result(
+            result_path=missing_path,
+            returncode=7,
+            stderr="boom",
+            process_label=process_label,
+            error_cls=error_cls,
+        )
+    assert missing_error.value.worker_exit_code == 7
+    assert str(missing_error.value) == (
+        f"{process_label} subprocess exited with code 7. stderr: boom"
+    )
+
+    invalid_path = tmp_path / "invalid_result.json"
+    invalid_path.write_text("{", encoding="utf-8")
+    with pytest.raises(error_cls) as invalid_error:
+        api_main._load_worker_result(
+            result_path=invalid_path,
+            returncode=0,
+            stderr="",
+            process_label=process_label,
+            error_cls=error_cls,
+        )
+    assert invalid_error.value.worker_exit_code == 0
+    assert str(invalid_error.value) == (
+        f"{process_label} subprocess returned invalid JSON."
+    )
+
+    non_object_path = tmp_path / "non_object_result.json"
+    non_object_path.write_text("[]", encoding="utf-8")
+    with pytest.raises(error_cls) as non_object_error:
+        api_main._load_worker_result(
+            result_path=non_object_path,
+            returncode=0,
+            stderr="",
+            process_label=process_label,
+            error_cls=error_cls,
+        )
+    assert non_object_error.value.worker_exit_code == 0
+    assert str(non_object_error.value) == (
+        f"{process_label} subprocess returned a non-object result."
+    )
 
 
 def test_cancel_pending_preprocessing_run_marks_cancelled(tmp_path, monkeypatch):
