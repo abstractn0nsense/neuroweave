@@ -73,6 +73,18 @@ class EventColumnMapping:
 
 
 @dataclass(frozen=True)
+class EventRowFilterCondition:
+    column: str
+    equals: str | None = None
+
+
+@dataclass(frozen=True)
+class EventRowFilter:
+    include: list[EventRowFilterCondition] = field(default_factory=list)
+    exclude: list[EventRowFilterCondition] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class Project:
     project_id: str
     name: str
@@ -151,6 +163,8 @@ class EventLog:
     file_id: str
     mapping: EventColumnMapping
     row_count: int
+    filter_count: int = 0
+    row_filter: EventRowFilter | None = None
     events: list[NormalizedEvent] = field(default_factory=list)
 
 

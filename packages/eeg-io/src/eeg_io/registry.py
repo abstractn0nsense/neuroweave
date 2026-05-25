@@ -20,6 +20,8 @@ from eeg_core.domain import (
     ErpRunStatus,
     EventColumnMapping,
     EventLog,
+    EventRowFilter,
+    EventRowFilterCondition,
     Experiment,
     NormalizedEvent,
     Participant,
@@ -467,10 +469,36 @@ def _event_log_from_json(data: JsonObject) -> EventLog:
         file_id=str(data["file_id"]),
         mapping=EventColumnMapping(**data.get("mapping", {})),
         row_count=int(data["row_count"]),
+        filter_count=int(data.get("filter_count", 0)),
+        row_filter=_event_row_filter_from_json(data.get("row_filter")),
         events=[
             _normalized_event_from_json(event)
             for event in data.get("events", [])
         ],
+    )
+
+
+def _event_row_filter_from_json(data: object) -> EventRowFilter | None:
+    if not isinstance(data, dict):
+        return None
+    return EventRowFilter(
+        include=[
+            _event_row_filter_condition_from_json(condition)
+            for condition in data.get("include", [])
+            if isinstance(condition, dict)
+        ],
+        exclude=[
+            _event_row_filter_condition_from_json(condition)
+            for condition in data.get("exclude", [])
+            if isinstance(condition, dict)
+        ],
+    )
+
+
+def _event_row_filter_condition_from_json(data: JsonObject) -> EventRowFilterCondition:
+    return EventRowFilterCondition(
+        column=str(data["column"]),
+        equals=data.get("equals"),
     )
 
 

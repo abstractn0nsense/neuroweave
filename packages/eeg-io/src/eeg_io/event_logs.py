@@ -1,7 +1,12 @@
 from pathlib import Path
 import csv
 
-from eeg_core.domain import EventColumnMapping, EventLog, NormalizedEvent
+from eeg_core.domain import (
+    EventColumnMapping,
+    EventLog,
+    EventRowFilter,
+    NormalizedEvent,
+)
 
 _NULL_TOKENS = {"", "n/a", "na", "null"}
 EVENT_MAPPING_PRESETS: dict[str, EventColumnMapping] = {
@@ -83,13 +88,16 @@ def normalize_event_log(
     file_id: str,
     path: Path,
     mapping: EventColumnMapping,
+    row_filter: EventRowFilter | None = None,
 ) -> EventLog:
     columns, rows = read_event_log_rows(path)
     _require_column(columns, mapping.onset_seconds, "onset_seconds")
+    _require_filter_columns(columns, row_filter)
+    filtered_rows = _filter_event_rows(rows, row_filter)
 
     events = [
         _normalize_event(row=row, source_row=index, mapping=mapping)
-        for index, row in enumerate(rows, start=1)
+        for index, row in filtered_rows
     ]
     return EventLog(
         event_log_id=event_log_id,
@@ -97,6 +105,8 @@ def normalize_event_log(
         file_id=file_id,
         mapping=mapping,
         row_count=len(rows),
+        filter_count=len(rows) - len(filtered_rows),
+        row_filter=row_filter,
         events=events,
     )
 
@@ -106,6 +116,64 @@ def event_mapping_preset(name: str) -> EventColumnMapping:
         return EVENT_MAPPING_PRESETS[name]
     except KeyError as exc:
         raise EventLogNormalizationError(f"Unknown event mapping preset: {name}") from exc
+
+
+def _filter_event_rows(
+    rows: list[dict[str, str | None]],
+    row_filter: EventRowFilter | None,
+) -> list[tuple[int, dict[str, str | None]]]:
+    indexed_rows = list(enumerate(rows, start=1))
+    if row_filter is None:
+        return indexed_rows
+
+    return [
+        (source_row, row)
+        for source_row, row in indexed_rows
+        if _row_matches_include(row, row_filter) and not _row_matches_exclude(row, row_filter)
+    ]
+
+
+def _require_filter_columns(
+    columns: list[str],
+    row_filter: EventRowFilter | None,
+) -> None:
+    if row_filter is None:
+        return
+    for condition in [*row_filter.include, *row_filter.exclude]:
+        if condition.column not in columns:
+            raise EventLogNormalizationError(
+                f"Row filter column was not found: {condition.column}"
+            )
+
+
+def _row_matches_include(row: dict[str, str | None], row_filter: EventRowFilter) -> bool:
+    return all(
+        _row_value(row, condition.column) == _normalized_filter_value(condition.equals)
+        for condition in row_filter.include
+    )
+
+
+def _row_matches_exclude(row: dict[str, str | None], row_filter: EventRowFilter) -> bool:
+    return any(
+        _row_value(row, condition.column) == _normalized_filter_value(condition.equals)
+        for condition in row_filter.exclude
+    )
+
+
+def _row_value(row: dict[str, str | None], column_name: str) -> str | None:
+    value = row.get(column_name)
+    if value is None:
+        return None
+    return _normalized_filter_value(value)
+
+
+def _normalized_filter_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    if stripped.lower() in _NULL_TOKENS:
+        return None
+    return stripped
 
 
 def _normalize_event(

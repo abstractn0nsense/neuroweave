@@ -14,6 +14,8 @@ from eeg_core.domain import (
     ErpRunStatus,
     EventColumnMapping,
     EventLog,
+    EventRowFilter,
+    EventRowFilterCondition,
     Experiment,
     NormalizedEvent,
     Participant,
@@ -349,6 +351,51 @@ def test_registry_persists_normalized_event_log(tmp_path):
 
     assert repository.get_event_log("dataset-001") == event_log
     assert repository.event_log_path("dataset-001").is_file()
+
+
+def test_registry_persists_filtered_event_log_metadata(tmp_path):
+    repository = JsonRegistryRepository(tmp_path / "uploads")
+    event_log = EventLog(
+        event_log_id="event-log-001",
+        dataset_id="dataset-001",
+        file_id="file-001",
+        mapping=EventColumnMapping(onset_seconds="onset", trial_type="trial_type"),
+        row_count=3,
+        filter_count=2,
+        row_filter=EventRowFilter(
+            include=[EventRowFilterCondition(column="trial_type", equals="target")],
+            exclude=[EventRowFilterCondition(column="status", equals="reject")],
+        ),
+        events=[NormalizedEvent(onset_seconds=1.0, source_row=1, trial_type="target")],
+    )
+
+    repository.save_event_log(event_log)
+
+    assert repository.get_event_log("dataset-001") == event_log
+
+
+def test_registry_loads_legacy_event_log_without_filter_metadata(tmp_path):
+    repository = JsonRegistryRepository(tmp_path / "uploads")
+    repository.save_dataset_files_directory("dataset-001")
+    repository.event_log_path("dataset-001").write_text(
+        json.dumps(
+            {
+                "event_log_id": "event-log-001",
+                "dataset_id": "dataset-001",
+                "file_id": "file-001",
+                "mapping": {"onset_seconds": "onset"},
+                "row_count": 1,
+                "events": [{"onset_seconds": 1.0, "source_row": 1}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    event_log = repository.get_event_log("dataset-001")
+
+    assert event_log is not None
+    assert event_log.filter_count == 0
+    assert event_log.row_filter is None
 
 
 def test_run_repository_persists_preprocessing_runs(tmp_path):

@@ -40,6 +40,8 @@ from eeg_core.domain import (  # noqa: E402
     ErpRunStatus,
     EventColumnMapping,
     EventLog,
+    EventRowFilter,
+    EventRowFilterCondition,
     Experiment,
     Participant,
     PreprocessingConfig,
@@ -471,7 +473,18 @@ class EventLogResponse(BaseModel):
     file_id: str
     mapping: EventColumnMappingPayload
     row_count: int
+    filter_count: int
     events: list[NormalizedEventResponse]
+
+
+class EventRowFilterConditionPayload(BaseModel):
+    column: str
+    equals: str | None = None
+
+
+class EventRowFilterPayload(BaseModel):
+    include: list[EventRowFilterConditionPayload] = Field(default_factory=list)
+    exclude: list[EventRowFilterConditionPayload] = Field(default_factory=list)
 
 
 class ValidationIssueResponse(BaseModel):
@@ -493,6 +506,7 @@ class ValidationReportResponse(BaseModel):
 class EventMappingRequest(BaseModel):
     mapping: EventColumnMappingPayload | None = None
     preset: Literal["psychopy", "bids_events", "eeglab_annotations"] | None = None
+    row_filter: EventRowFilterPayload | None = None
 
 
 class PreprocessingConfigPayload(BaseModel):
@@ -1006,6 +1020,7 @@ def map_dataset_events(
             file_id=uploaded_file.file_id,
             path=Path(uploaded_file.stored_path),
             mapping=mapping,
+            row_filter=_event_row_filter_from_payload(request.row_filter),
         )
     except (EventLogPreviewError, EventLogNormalizationError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -1530,6 +1545,7 @@ def _event_log_response(event_log: EventLog) -> EventLogResponse:
         file_id=event_log.file_id,
         mapping=EventColumnMappingPayload(**event_log.mapping.__dict__),
         row_count=event_log.row_count,
+        filter_count=event_log.filter_count,
         events=[
             NormalizedEventResponse(
                 onset_seconds=event.onset_seconds,
@@ -3513,6 +3529,23 @@ def _resolve_event_mapping(
     if experiment is None:
         raise HTTPException(status_code=404, detail="Experiment not found")
     return experiment.default_event_mapping
+
+
+def _event_row_filter_from_payload(
+    payload: EventRowFilterPayload | None,
+) -> EventRowFilter | None:
+    if payload is None:
+        return None
+    return EventRowFilter(
+        include=[
+            EventRowFilterCondition(column=condition.column, equals=condition.equals)
+            for condition in payload.include
+        ],
+        exclude=[
+            EventRowFilterCondition(column=condition.column, equals=condition.equals)
+            for condition in payload.exclude
+        ],
+    )
 
 
 def _new_id(prefix: str) -> str:

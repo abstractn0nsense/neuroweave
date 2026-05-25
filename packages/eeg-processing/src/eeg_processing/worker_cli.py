@@ -364,6 +364,7 @@ def _event_log_from_payload(value: Any) -> EventLog:
             ),
         ),
         row_count=int(_required_float(value, "row_count")),
+        filter_count=int(value.get("filter_count", 0)),
         events=[_normalized_event_from_payload(event) for event in events],
     )
 

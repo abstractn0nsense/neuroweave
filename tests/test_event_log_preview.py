@@ -1,6 +1,6 @@
 import pytest
 
-from eeg_core.domain import EventColumnMapping
+from eeg_core.domain import EventColumnMapping, EventRowFilter, EventRowFilterCondition
 from eeg_io.event_logs import (
     EVENT_MAPPING_PRESETS,
     EventLogNormalizationError,
@@ -120,6 +120,59 @@ def test_normalize_event_log_treats_null_tokens_as_none(tmp_path):
     assert second_event.response == "space"
     assert second_event.correct is True
     assert second_event.reaction_time_seconds == 0.42
+
+
+def test_normalize_event_log_applies_include_and_exclude_row_filter(tmp_path):
+    path = tmp_path / "events.tsv"
+    path.write_text(
+        "onset\ttrial_type\tstatus\n"
+        "1.0\ttarget\tkeep\n"
+        "2.0\tstandard\tkeep\n"
+        "3.0\ttarget\treject\n"
+        "4.0\ttarget\tkeep\n",
+        encoding="utf-8",
+    )
+
+    event_log = normalize_event_log(
+        dataset_id="dataset-001",
+        event_log_id="event-log-001",
+        file_id="file-001",
+        path=path,
+        mapping=EventColumnMapping(
+            onset_seconds="onset",
+            trial_type="trial_type",
+        ),
+        row_filter=EventRowFilter(
+            include=[
+                EventRowFilterCondition(column="trial_type", equals="target"),
+            ],
+            exclude=[
+                EventRowFilterCondition(column="status", equals="reject"),
+            ],
+        ),
+    )
+
+    assert event_log.row_count == 4
+    assert event_log.filter_count == 2
+    assert [event.source_row for event in event_log.events] == [1, 4]
+    assert [event.onset_seconds for event in event_log.events] == [1.0, 4.0]
+
+
+def test_normalize_event_log_rejects_unknown_row_filter_column(tmp_path):
+    path = tmp_path / "events.tsv"
+    path.write_text("onset\ttrial_type\n1.0\ttarget\n", encoding="utf-8")
+
+    with pytest.raises(EventLogNormalizationError, match="missing"):
+        normalize_event_log(
+            dataset_id="dataset-001",
+            event_log_id="event-log-001",
+            file_id="file-001",
+            path=path,
+            mapping=EventColumnMapping(onset_seconds="onset"),
+            row_filter=EventRowFilter(
+                include=[EventRowFilterCondition(column="missing", equals="target")],
+            ),
+        )
 
 
 def test_normalize_event_log_requires_onset_mapping(tmp_path):
