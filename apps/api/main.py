@@ -1,6 +1,5 @@
 from pathlib import Path
-from multiprocessing import get_context
-from queue import Empty, Queue
+from queue import Queue
 from threading import Lock, Thread
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
@@ -60,7 +59,6 @@ from eeg_processing import (  # noqa: E402
     ErpError,
     PreprocessingError,
     generate_comparison_summary,
-    run_erp_job,
 )
 from eeg_processing.epoching import SUPPORTED_CONDITION_FIELDS  # noqa: E402
 from eeg_io.datasets import find_eeg_file_by_id, list_eeg_files  # noqa: E402
@@ -163,6 +161,18 @@ class WorkerSubprocessError(PreprocessingError):
 
 
 class EpochWorkerSubprocessError(EpochingError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        worker_exit_code: int | None,
+        processing_warnings: list[str] | None = None,
+    ):
+        super().__init__(message, processing_warnings=processing_warnings)
+        self.worker_exit_code = worker_exit_code
+
+
+class ErpWorkerSubprocessError(ErpError):
     def __init__(
         self,
         message: str,
@@ -2738,10 +2748,13 @@ def _execute_erp_run(run_id: str) -> None:
         run_repository.save_erp_run(failed_run)
         return
 
+    worker_artifacts = _erp_worker_artifact_paths(run_id)
+    worker_metadata = _erp_worker_metadata(worker_artifacts)
     running_run = replace(
         run,
         status=ErpRunStatus.RUNNING,
         started_at_utc=_utc_now_iso(),
+        output_metadata={**run.output_metadata, **worker_metadata},
     )
     run_repository.save_erp_run(running_run)
 
@@ -2755,13 +2768,22 @@ def _execute_erp_run(run_id: str) -> None:
             epochs_path=str(epochs_path),
             output_directory=str(output_path.parent),
             config=run.config,
+            worker_artifacts=worker_artifacts,
+        )
+        worker_exit_code = metadata.pop("_worker_exit_code", None)
+        completed_run_base = replace(
+            running_run,
+            output_metadata={
+                **running_run.output_metadata,
+                "worker_exit_code": worker_exit_code,
+            },
         )
         completed_run = replace(
-            running_run,
+            completed_run_base,
             status=ErpRunStatus.COMPLETED,
             finished_at_utc=_utc_now_iso(),
             output_metadata=_erp_completed_provenance(
-                run=running_run,
+                run=completed_run_base,
                 output_path=output_path,
                 processing_metadata=metadata,
             ),
@@ -2793,6 +2815,10 @@ def _execute_erp_run(run_id: str) -> None:
     except ErpError as exc:
         current_run = run_repository.get_erp_run(run_id)
         current_warnings = current_run.warnings if current_run else []
+        failed_output_metadata = dict(running_run.output_metadata)
+        worker_exit_code = getattr(exc, "worker_exit_code", None)
+        if worker_exit_code is not None:
+            failed_output_metadata["worker_exit_code"] = worker_exit_code
         next_status = (
             ErpRunStatus.CANCELLED
             if current_run and current_run.status == ErpRunStatus.CANCELLING
@@ -2807,6 +2833,7 @@ def _execute_erp_run(run_id: str) -> None:
             ),
             warnings=_dedupe_strings([*current_warnings, *exc.processing_warnings]),
             errors=[str(exc)],
+            output_metadata=failed_output_metadata,
         )
         run_repository.save_erp_run(failed_run)
 
@@ -2816,23 +2843,62 @@ def _run_erp_subprocess(
     epochs_path: str,
     output_directory: str,
     config: ErpConfig,
+    worker_artifacts: dict[str, Path],
 ) -> dict:
-    context = get_context("spawn")
-    result_queue = context.Queue()
-    process = context.Process(
-        target=run_erp_job,
-        args=(epochs_path, output_directory, config, result_queue),
+    payload_path = worker_artifacts["payload"]
+    result_path = worker_artifacts["result"]
+    stdout_path = worker_artifacts["stdout"]
+    stderr_path = worker_artifacts["stderr"]
+    payload_path.parent.mkdir(parents=True, exist_ok=True)
+    payload_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "job": "erp",
+                "run_id": run_id,
+                "epochs_path": epochs_path,
+                "output_directory": output_directory,
+                "config": _erp_config_payload(config),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
     )
-    process.start()
 
-    while process.is_alive():
-        process.join(timeout=0.1)
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "eeg_processing.worker_cli",
+            "erp",
+            "--payload",
+            str(payload_path),
+            "--result",
+            str(result_path),
+        ],
+        cwd=REPO_ROOT,
+        env=_worker_subprocess_env(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    while process.poll() is None:
+        try:
+            process.wait(timeout=0.1)
+        except subprocess.TimeoutExpired:
+            pass
         if _is_erp_cancellation_requested(run_id):
             process.terminate()
-            process.join(timeout=5)
-            if process.is_alive():
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
                 process.kill()
-                process.join()
+                process.wait()
+            stdout, stderr = process.communicate()
+            _write_worker_streams(stdout_path, stderr_path, stdout, stderr)
             raise ErpError(
                 "ERP generation cancelled.",
                 processing_warnings=[
@@ -2840,25 +2906,101 @@ def _run_erp_subprocess(
                 ],
             )
 
-    try:
-        result = result_queue.get_nowait()
-    except Empty as exc:
-        if process.exitcode == 0:
-            raise ErpError("ERP subprocess exited without a result.") from exc
-        raise ErpError(
-            f"ERP subprocess exited with code {process.exitcode}."
-        ) from exc
+    stdout, stderr = process.communicate()
+    _write_worker_streams(stdout_path, stderr_path, stdout, stderr)
+    result = _load_erp_worker_result(
+        result_path=result_path,
+        returncode=process.returncode,
+        stderr=stderr,
+    )
 
     if result.get("status") == "completed":
         metadata = result.get("metadata")
         if isinstance(metadata, dict):
+            metadata["_worker_exit_code"] = process.returncode
             return metadata
         raise ErpError("ERP subprocess returned invalid metadata.")
 
-    raise ErpError(
-        str(result.get("error") or "ERP subprocess failed."),
-        processing_warnings=[str(warning) for warning in result.get("warnings", [])],
+    warnings = result.get("warnings", [])
+    if not isinstance(warnings, list):
+        warnings = []
+    raise ErpWorkerSubprocessError(
+        str(
+            result.get("error")
+            or _erp_worker_process_error(process.returncode, stderr)
+        ),
+        worker_exit_code=process.returncode,
+        processing_warnings=[str(warning) for warning in warnings],
     )
+
+
+def _erp_config_payload(config: ErpConfig) -> dict:
+    return {
+        "epoch_run_id": config.epoch_run_id,
+        "conditions": config.conditions,
+        "picks": config.picks,
+        "method": config.method,
+        "plot_mode": config.plot_mode,
+        "plot_channel": config.plot_channel,
+    }
+
+
+def _erp_worker_artifact_paths(run_id: str) -> dict[str, Path]:
+    run_directory = run_repository.erp_run_directory(run_id)
+    return {
+        "payload": run_directory / "worker_payload.json",
+        "result": run_directory / "worker_result.json",
+        "stdout": run_directory / "worker_stdout.log",
+        "stderr": run_directory / "worker_stderr.log",
+    }
+
+
+def _erp_worker_metadata(
+    worker_artifacts: dict[str, Path],
+) -> dict[str, str | int | None]:
+    return {
+        "worker_schema_version": 1,
+        "worker_payload_path": str(worker_artifacts["payload"]),
+        "worker_result_path": str(worker_artifacts["result"]),
+        "worker_stdout_path": str(worker_artifacts["stdout"]),
+        "worker_stderr_path": str(worker_artifacts["stderr"]),
+        "worker_exit_code": None,
+    }
+
+
+def _load_erp_worker_result(
+    *,
+    result_path: Path,
+    returncode: int | None,
+    stderr: str,
+) -> dict:
+    try:
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ErpWorkerSubprocessError(
+            _erp_worker_process_error(returncode, stderr),
+            worker_exit_code=returncode,
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise ErpWorkerSubprocessError(
+            "ERP subprocess returned invalid JSON.",
+            worker_exit_code=returncode,
+        ) from exc
+
+    if not isinstance(result, dict):
+        raise ErpWorkerSubprocessError(
+            "ERP subprocess returned a non-object result.",
+            worker_exit_code=returncode,
+        )
+    return result
+
+
+def _erp_worker_process_error(returncode: int | None, stderr: str) -> str:
+    message = f"ERP subprocess exited with code {returncode}."
+    stderr = stderr.strip()
+    if stderr:
+        return f"{message} stderr: {stderr}"
+    return message
 
 
 def _is_cancellation_requested(run_id: str) -> bool:

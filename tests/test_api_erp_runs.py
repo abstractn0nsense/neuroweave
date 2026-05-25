@@ -196,17 +196,36 @@ def test_erp_worker_completes_run_and_writes_evoked_artifacts(tmp_path, monkeypa
     assert metadata["preview_plot_filename"] == "erp_standard.png"
     assert metadata["preview_plot_url"].startswith(f"/artifacts/{payload['run_id']}/")
     assert metadata["erp_metadata_available"] is True
+    assert metadata["worker_schema_version"] == 1
+    assert metadata["worker_exit_code"] == 0
 
     erp_metadata_path = Path(str(metadata["erp_metadata_path"]))
     artifact_manifest_path = Path(str(metadata["artifact_manifest_path"]))
+    worker_payload_path = Path(str(metadata["worker_payload_path"]))
+    worker_result_path = Path(str(metadata["worker_result_path"]))
+    worker_stdout_path = Path(str(metadata["worker_stdout_path"]))
+    worker_stderr_path = Path(str(metadata["worker_stderr_path"]))
     assert erp_metadata_path.is_file()
     assert artifact_manifest_path.is_file()
+    assert worker_payload_path.is_file()
+    assert worker_result_path.is_file()
+    assert worker_stdout_path.is_file()
+    assert worker_stderr_path.is_file()
 
     erp_metadata = json.loads(erp_metadata_path.read_text(encoding="utf-8"))
     artifact_manifest = json.loads(artifact_manifest_path.read_text(encoding="utf-8"))
+    worker_payload = json.loads(worker_payload_path.read_text(encoding="utf-8"))
+    worker_result = json.loads(worker_result_path.read_text(encoding="utf-8"))
     conditions = erp_metadata["conditions"]
     assert erp_metadata["run_id"] == payload["run_id"]
     assert erp_metadata["dataset_id"] == "dataset-001"
+    assert worker_payload["schema_version"] == 1
+    assert worker_payload["job"] == "erp"
+    assert worker_payload["run_id"] == payload["run_id"]
+    assert worker_payload["config"]["epoch_run_id"] == epoch_run["run_id"]
+    assert worker_result["schema_version"] == 1
+    assert worker_result["status"] == "completed"
+    assert worker_result["error"] is None
     assert [condition["condition"] for condition in conditions] == [
         "standard",
         "target",
@@ -405,6 +424,41 @@ def test_erp_worker_persists_failed_execution(tmp_path, monkeypatch):
     assert payload["errors"] == ["synthetic ERP failure"]
     assert not Path(payload["output_path"]).exists()
     assert "erp_metadata_path" not in payload["output_metadata"]
+    assert payload["output_metadata"]["worker_schema_version"] == 1
+    assert payload["output_metadata"]["worker_exit_code"] is None
+
+
+def test_erp_subprocess_failure_preserves_worker_artifacts(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _seed_epochable_dataset(tmp_path)
+    epoch_run = _create_completed_epoch_run(client)
+    worker_artifacts = api_main._erp_worker_artifact_paths("erp-failed")
+
+    try:
+        api_main._run_erp_subprocess(
+            run_id="erp-failed",
+            epochs_path=str(epoch_run["output_path"]),
+            output_directory=str(tmp_path / "erp" / "dataset-001" / "erp-failed"),
+            config=api_main.ErpConfig(
+                epoch_run_id=epoch_run["run_id"],
+                conditions=["missing-condition"],
+            ),
+            worker_artifacts=worker_artifacts,
+        )
+    except api_main.ErpWorkerSubprocessError as exc:
+        error = exc
+    else:
+        raise AssertionError("Expected ERP subprocess to fail.")
+
+    assert error.worker_exit_code == 1
+    assert str(error) == "Requested conditions are not available: missing-condition"
+    assert worker_artifacts["payload"].is_file()
+    assert worker_artifacts["result"].is_file()
+    assert worker_artifacts["stdout"].is_file()
+    assert worker_artifacts["stderr"].is_file()
+    result = json.loads(worker_artifacts["result"].read_text(encoding="utf-8"))
+    assert result["status"] == "failed"
+    assert result["run_id"] == "erp-failed"
 
 
 def test_comparison_summary_writes_descriptive_json(tmp_path, monkeypatch):
