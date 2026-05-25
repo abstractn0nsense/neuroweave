@@ -20,6 +20,11 @@ from eeg_io.bids_sidecars import (
     read_channels_tsv,
     read_eeg_json,
 )
+from eeg_io.export_bundle import (
+    EXPORT_BUNDLE_SCHEMA_VERSION,
+    ExportBundleError,
+    build_export_bundle,
+)
 from eeg_io.provenance import (
     PROVENANCE_SCHEMA_VERSION,
     build_event_log_provenance_payload,
@@ -36,11 +41,14 @@ __all__ = [
     "BidsChannel",
     "BidsEegSidecar",
     "BidsSidecarError",
+    "EXPORT_BUNDLE_SCHEMA_VERSION",
+    "ExportBundleError",
     "PROVENANCE_SCHEMA_VERSION",
     "QC_SUMMARY_SCHEMA_VERSION",
     "QcSummaryError",
     "artifact_manifest_from_dict",
     "build_analysis_report",
+    "build_export_bundle",
     "build_provenance_payload",
     "build_event_log_provenance_payload",
     "build_qc_summary",
