@@ -463,6 +463,7 @@ def _recording_from_json(data: JsonObject) -> Recording:
 
 
 def _event_log_from_json(data: JsonObject) -> EventLog:
+    provenance = data.get("provenance", {})
     return EventLog(
         event_log_id=str(data["event_log_id"]),
         dataset_id=str(data["dataset_id"]),
@@ -471,6 +472,7 @@ def _event_log_from_json(data: JsonObject) -> EventLog:
         row_count=int(data["row_count"]),
         filter_count=int(data.get("filter_count", 0)),
         row_filter=_event_row_filter_from_json(data.get("row_filter")),
+        provenance=dict(provenance) if isinstance(provenance, dict) else {},
         events=[
             _normalized_event_from_json(event)
             for event in data.get("events", [])

@@ -89,6 +89,7 @@ def normalize_event_log(
     path: Path,
     mapping: EventColumnMapping,
     row_filter: EventRowFilter | None = None,
+    provenance: dict | None = None,
 ) -> EventLog:
     columns, rows = read_event_log_rows(path)
     _require_column(columns, mapping.onset_seconds, "onset_seconds")
@@ -107,6 +108,7 @@ def normalize_event_log(
         row_count=len(rows),
         filter_count=len(rows) - len(filtered_rows),
         row_filter=row_filter,
+        provenance=provenance or {},
         events=events,
     )
 

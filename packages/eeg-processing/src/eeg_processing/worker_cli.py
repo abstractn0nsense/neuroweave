@@ -344,6 +344,7 @@ def _event_log_from_payload(value: Any) -> EventLog:
     if not isinstance(mapping, dict):
         raise WorkerCliError("Payload event_log.mapping must be a JSON object.")
 
+    provenance = value.get("provenance", {})
     return EventLog(
         event_log_id=_required_string(value, "event_log_id"),
         dataset_id=_required_string(value, "dataset_id"),
@@ -365,6 +366,7 @@ def _event_log_from_payload(value: Any) -> EventLog:
         ),
         row_count=int(_required_float(value, "row_count")),
         filter_count=int(value.get("filter_count", 0)),
+        provenance=dict(provenance) if isinstance(provenance, dict) else {},
         events=[_normalized_event_from_payload(event) for event in events],
     )
 

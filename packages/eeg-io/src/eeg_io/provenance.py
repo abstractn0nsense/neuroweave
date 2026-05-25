@@ -28,3 +28,34 @@ def build_provenance_payload(
         "software_versions": software_versions,
         "artifacts": artifacts,
     }
+
+
+def build_event_log_provenance_payload(
+    *,
+    dataset_id: str,
+    event_log_id: str,
+    event_file: dict[str, Any],
+    preset: str | None,
+    preset_applied: bool,
+    mapping_snapshot: dict[str, Any],
+    row_filter_snapshot: dict[str, Any] | None,
+    created_at_utc: str,
+) -> dict[str, Any]:
+    return {
+        "schema_version": PROVENANCE_SCHEMA_VERSION,
+        "created_at_utc": created_at_utc,
+        "event_log": {
+            "event_log_id": event_log_id,
+            "dataset_id": dataset_id,
+        },
+        "sources": [
+            {
+                "role": "event_file",
+                **event_file,
+            }
+        ],
+        "preset": preset,
+        "preset_applied": preset_applied,
+        "mapping_snapshot": mapping_snapshot,
+        "row_filter_snapshot": row_filter_snapshot,
+    }

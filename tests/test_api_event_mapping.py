@@ -98,6 +98,9 @@ def test_map_dataset_events_accepts_preset(tmp_path, monkeypatch):
     assert payload["mapping"]["correct"] == "key_resp.corr"
     assert payload["events"][0]["trial_type"] == "target"
     assert payload["events"][0]["correct"] is True
+    event_log = repository.get_event_log("dataset-001")
+    assert event_log.provenance["preset"] == "psychopy"
+    assert event_log.provenance["preset_applied"] is True
 
 
 def test_map_dataset_events_mapping_override_takes_precedence_over_preset(
@@ -183,7 +186,16 @@ def test_map_dataset_events_applies_row_filter(tmp_path, monkeypatch):
     assert payload["row_count"] == 3
     assert payload["filter_count"] == 2
     assert [event["source_row"] for event in payload["events"]] == [1]
-    assert repository.get_event_log("dataset-001").filter_count == 2
+    event_log = repository.get_event_log("dataset-001")
+    assert event_log.filter_count == 2
+    assert event_log.provenance["sources"][0]["role"] == "event_file"
+    assert event_log.provenance["sources"][0]["original_filename"] == "events.tsv"
+    assert event_log.provenance["preset"] is None
+    assert event_log.provenance["mapping_snapshot"]["onset_seconds"] == "onset"
+    assert event_log.provenance["row_filter_snapshot"]["include"][0] == {
+        "column": "trial_type",
+        "equals": "target",
+    }
 
 
 def test_map_dataset_events_reports_missing_onset_mapping(tmp_path, monkeypatch):

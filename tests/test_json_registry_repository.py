@@ -366,6 +366,15 @@ def test_registry_persists_filtered_event_log_metadata(tmp_path):
             include=[EventRowFilterCondition(column="trial_type", equals="target")],
             exclude=[EventRowFilterCondition(column="status", equals="reject")],
         ),
+        provenance={
+            "schema_version": 1,
+            "preset": "bids_events",
+            "mapping_snapshot": {"onset_seconds": "onset"},
+            "row_filter_snapshot": {
+                "include": [{"column": "trial_type", "equals": "target"}],
+                "exclude": [{"column": "status", "equals": "reject"}],
+            },
+        },
         events=[NormalizedEvent(onset_seconds=1.0, source_row=1, trial_type="target")],
     )
 
@@ -396,6 +405,7 @@ def test_registry_loads_legacy_event_log_without_filter_metadata(tmp_path):
     assert event_log is not None
     assert event_log.filter_count == 0
     assert event_log.row_filter is None
+    assert event_log.provenance == {}
 
 
 def test_run_repository_persists_preprocessing_runs(tmp_path):

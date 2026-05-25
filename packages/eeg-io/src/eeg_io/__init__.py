@@ -14,7 +14,11 @@ from eeg_io.bids_sidecars import (
     read_channels_tsv,
     read_eeg_json,
 )
-from eeg_io.provenance import PROVENANCE_SCHEMA_VERSION, build_provenance_payload
+from eeg_io.provenance import (
+    PROVENANCE_SCHEMA_VERSION,
+    build_event_log_provenance_payload,
+    build_provenance_payload,
+)
 
 __all__ = [
     "ArtifactManifest",
@@ -26,6 +30,7 @@ __all__ = [
     "PROVENANCE_SCHEMA_VERSION",
     "artifact_manifest_from_dict",
     "build_provenance_payload",
+    "build_event_log_provenance_payload",
     "load_artifact_manifest",
     "read_channels_tsv",
     "read_eeg_json",

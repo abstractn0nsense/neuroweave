@@ -79,7 +79,10 @@ from eeg_io.event_logs import (  # noqa: E402
     normalize_event_log,
     preview_event_log,
 )
-from eeg_io.provenance import build_provenance_payload  # noqa: E402
+from eeg_io.provenance import (  # noqa: E402
+    build_event_log_provenance_payload,
+    build_provenance_payload,
+)
 from eeg_io.registry import JsonRegistryRepository, JsonRunRepository  # noqa: E402
 from eeg_io.readers import EegMetadataReadError, read_eeg_metadata  # noqa: E402
 
@@ -1013,6 +1016,7 @@ def map_dataset_events(
         raise HTTPException(status_code=404, detail="Event file not found")
 
     mapping = _resolve_event_mapping(dataset, request.mapping, request.preset)
+    row_filter = _event_row_filter_from_payload(request.row_filter)
     try:
         event_log = normalize_event_log(
             dataset_id=dataset_id,
@@ -1020,7 +1024,15 @@ def map_dataset_events(
             file_id=uploaded_file.file_id,
             path=Path(uploaded_file.stored_path),
             mapping=mapping,
-            row_filter=_event_row_filter_from_payload(request.row_filter),
+            row_filter=row_filter,
+            provenance=_event_log_provenance(
+                dataset_id=dataset_id,
+                uploaded_file=uploaded_file,
+                preset=request.preset,
+                preset_applied=request.mapping is None and request.preset is not None,
+                mapping=mapping,
+                row_filter=row_filter,
+            ),
         )
     except (EventLogPreviewError, EventLogNormalizationError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -3545,6 +3557,34 @@ def _event_row_filter_from_payload(
             EventRowFilterCondition(column=condition.column, equals=condition.equals)
             for condition in payload.exclude
         ],
+    )
+
+
+def _event_log_provenance(
+    *,
+    dataset_id: str,
+    uploaded_file: IngestionUploadedFile,
+    preset: str | None,
+    preset_applied: bool,
+    mapping: EventColumnMapping,
+    row_filter: EventRowFilter | None,
+) -> dict:
+    return build_event_log_provenance_payload(
+        dataset_id=dataset_id,
+        event_log_id=uploaded_file.file_id,
+        event_file={
+            "file_id": uploaded_file.file_id,
+            "original_filename": uploaded_file.original_filename,
+            "stored_path": uploaded_file.stored_path,
+            "content_type": uploaded_file.content_type,
+            "size_bytes": uploaded_file.size_bytes,
+            "checksum_sha256": uploaded_file.checksum_sha256,
+        },
+        preset=preset,
+        preset_applied=preset_applied,
+        mapping_snapshot=asdict(mapping),
+        row_filter_snapshot=asdict(row_filter) if row_filter is not None else None,
+        created_at_utc=_utc_now_iso(),
     )
 
 

@@ -165,6 +165,7 @@ class EventLog:
     row_count: int
     filter_count: int = 0
     row_filter: EventRowFilter | None = None
+    provenance: dict = field(default_factory=dict)
     events: list[NormalizedEvent] = field(default_factory=list)
 
 
