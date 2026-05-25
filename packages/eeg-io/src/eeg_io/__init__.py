@@ -7,6 +7,12 @@ from eeg_io.artifact_manifest import (
     artifact_manifest_from_dict,
     load_artifact_manifest,
 )
+from eeg_io.analysis_report import (
+    ANALYSIS_REPORT_SCHEMA_VERSION,
+    AnalysisReportError,
+    build_analysis_report,
+    write_analysis_report,
+)
 from eeg_io.bids_sidecars import (
     BidsChannel,
     BidsEegSidecar,
@@ -25,6 +31,8 @@ __all__ = [
     "ArtifactManifest",
     "ArtifactManifestError",
     "ArtifactReference",
+    "ANALYSIS_REPORT_SCHEMA_VERSION",
+    "AnalysisReportError",
     "BidsChannel",
     "BidsEegSidecar",
     "BidsSidecarError",
@@ -32,10 +40,12 @@ __all__ = [
     "QC_SUMMARY_SCHEMA_VERSION",
     "QcSummaryError",
     "artifact_manifest_from_dict",
+    "build_analysis_report",
     "build_provenance_payload",
     "build_event_log_provenance_payload",
     "build_qc_summary",
     "load_artifact_manifest",
     "read_channels_tsv",
     "read_eeg_json",
+    "write_analysis_report",
 ]
