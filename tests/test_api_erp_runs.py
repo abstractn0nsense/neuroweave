@@ -185,7 +185,9 @@ def test_erp_worker_completes_run_and_writes_evoked_artifacts(tmp_path, monkeypa
     metadata = payload["output_metadata"]
     assert metadata["artifact_root"] == str(Path(payload["output_path"]).parent)
     assert metadata["primary_artifact_path"] == payload["output_path"]
-    assert metadata["artifact_count"] == 7
+    assert metadata["artifact_count"] == 8
+    assert metadata["provenance_available"] is True
+    assert metadata["provenance_schema_version"] == 1
     assert metadata["output_path"] == payload["output_path"]
     assert metadata["output_file_format"] == "fif"
     assert metadata["input_epoch_run_id"] == epoch_run["run_id"]
@@ -201,12 +203,14 @@ def test_erp_worker_completes_run_and_writes_evoked_artifacts(tmp_path, monkeypa
 
     erp_metadata_path = Path(str(metadata["erp_metadata_path"]))
     artifact_manifest_path = Path(str(metadata["artifact_manifest_path"]))
+    provenance_path = Path(str(metadata["provenance_path"]))
     worker_payload_path = Path(str(metadata["worker_payload_path"]))
     worker_result_path = Path(str(metadata["worker_result_path"]))
     worker_stdout_path = Path(str(metadata["worker_stdout_path"]))
     worker_stderr_path = Path(str(metadata["worker_stderr_path"]))
     assert erp_metadata_path.is_file()
     assert artifact_manifest_path.is_file()
+    assert provenance_path.is_file()
     assert worker_payload_path.is_file()
     assert worker_result_path.is_file()
     assert worker_stdout_path.is_file()
@@ -214,6 +218,7 @@ def test_erp_worker_completes_run_and_writes_evoked_artifacts(tmp_path, monkeypa
 
     erp_metadata = json.loads(erp_metadata_path.read_text(encoding="utf-8"))
     artifact_manifest = json.loads(artifact_manifest_path.read_text(encoding="utf-8"))
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
     worker_payload = json.loads(worker_payload_path.read_text(encoding="utf-8"))
     worker_result = json.loads(worker_result_path.read_text(encoding="utf-8"))
     conditions = erp_metadata["conditions"]
@@ -241,7 +246,12 @@ def test_erp_worker_completes_run_and_writes_evoked_artifacts(tmp_path, monkeypa
         "svg_standard",
         "svg_target",
         "erp_metadata",
+        "provenance",
     }
+    assert provenance["run"]["run_id"] == payload["run_id"]
+    assert provenance["run"]["run_kind"] == "erp"
+    assert provenance["config_snapshot"]["epoch_run_id"] == epoch_run["run_id"]
+    assert provenance["sources"][0]["role"] == "epoch_run"
     for condition in conditions:
         assert Path(condition["evoked_path"]).is_file()
         assert Path(condition["evoked_path"]).name.endswith("-ave.fif")

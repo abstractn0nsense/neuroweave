@@ -173,7 +173,9 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert metadata["primary_artifact_path"] == payload["output_path"]
     assert metadata["primary_artifact_size_bytes"] > 0
     assert metadata["primary_artifact_checksum_sha256"]
-    assert metadata["artifact_count"] == 4
+    assert metadata["artifact_count"] == 5
+    assert metadata["provenance_available"] is True
+    assert metadata["provenance_schema_version"] == 1
     assert metadata["output_path"] == payload["output_path"]
     assert metadata["output_size_bytes"] > 0
     assert metadata["output_checksum_sha256"]
@@ -191,6 +193,7 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     filter_report_path = Path(str(metadata["filter_report_path"]))
     artifact_summary_path = Path(str(metadata["artifact_summary_path"]))
     artifact_manifest_path = Path(str(metadata["artifact_manifest_path"]))
+    provenance_path = Path(str(metadata["provenance_path"]))
     worker_payload_path = Path(str(metadata["worker_payload_path"]))
     worker_result_path = Path(str(metadata["worker_result_path"]))
     worker_stdout_path = Path(str(metadata["worker_stdout_path"]))
@@ -199,6 +202,7 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert filter_report_path.is_file()
     assert artifact_summary_path.is_file()
     assert artifact_manifest_path.is_file()
+    assert provenance_path.is_file()
     assert worker_payload_path.is_file()
     assert worker_result_path.is_file()
     assert worker_stdout_path.is_file()
@@ -208,6 +212,7 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     filter_report = json.loads(filter_report_path.read_text(encoding="utf-8"))
     artifact_summary = json.loads(artifact_summary_path.read_text(encoding="utf-8"))
     artifact_manifest = json.loads(artifact_manifest_path.read_text(encoding="utf-8"))
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
     worker_payload = json.loads(worker_payload_path.read_text(encoding="utf-8"))
     worker_result = json.loads(worker_result_path.read_text(encoding="utf-8"))
     assert summary["config"]["resample_hz"] == 50.0
@@ -224,7 +229,7 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert worker_result["error"] is None
     assert artifact_manifest["schema_version"] == 1
     assert artifact_manifest["artifact_root"] == str(Path(payload["output_path"]).parent)
-    assert artifact_manifest["artifact_count"] == 4
+    assert artifact_manifest["artifact_count"] == 5
     assert {
         artifact["logical_name"] for artifact in artifact_manifest["artifacts"]
     } == {
@@ -232,7 +237,13 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
         "preprocessing_summary",
         "filter_report",
         "artifact_summary",
+        "provenance",
     }
+    assert provenance["run"]["run_id"] == payload["run_id"]
+    assert provenance["run"]["run_kind"] == "preprocessing"
+    assert provenance["sources"][0]["role"] == "eeg_file"
+    assert provenance["config_snapshot"]["reference"] == "average"
+    assert provenance["software_versions"]["mne"] == metadata["mne_version"]
     for artifact in artifact_manifest["artifacts"]:
         artifact_path = Path(str(artifact["path"])).resolve()
         assert artifact_path.is_relative_to(Path(str(metadata["artifact_root"])).resolve())

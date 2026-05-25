@@ -165,7 +165,9 @@ def test_epoch_worker_completes_run_and_writes_artifacts(tmp_path, monkeypatch):
     assert metadata["primary_artifact_path"] == payload["output_path"]
     assert metadata["primary_artifact_size_bytes"] > 0
     assert metadata["primary_artifact_checksum_sha256"]
-    assert metadata["artifact_count"] == 4
+    assert metadata["artifact_count"] == 5
+    assert metadata["provenance_available"] is True
+    assert metadata["provenance_schema_version"] == 1
     assert metadata["output_path"] == payload["output_path"]
     assert metadata["output_size_bytes"] > 0
     assert metadata["output_checksum_sha256"]
@@ -187,6 +189,7 @@ def test_epoch_worker_completes_run_and_writes_artifacts(tmp_path, monkeypatch):
     condition_counts_path = Path(str(metadata["condition_counts_path"]))
     drop_log_path = Path(str(metadata["drop_log_path"]))
     artifact_manifest_path = Path(str(metadata["artifact_manifest_path"]))
+    provenance_path = Path(str(metadata["provenance_path"]))
     worker_payload_path = Path(str(metadata["worker_payload_path"]))
     worker_result_path = Path(str(metadata["worker_result_path"]))
     worker_stdout_path = Path(str(metadata["worker_stdout_path"]))
@@ -195,6 +198,7 @@ def test_epoch_worker_completes_run_and_writes_artifacts(tmp_path, monkeypatch):
     assert condition_counts_path.is_file()
     assert drop_log_path.is_file()
     assert artifact_manifest_path.is_file()
+    assert provenance_path.is_file()
     assert worker_payload_path.is_file()
     assert worker_result_path.is_file()
     assert worker_stdout_path.is_file()
@@ -204,6 +208,7 @@ def test_epoch_worker_completes_run_and_writes_artifacts(tmp_path, monkeypatch):
     condition_counts = json.loads(condition_counts_path.read_text(encoding="utf-8"))
     drop_log = json.loads(drop_log_path.read_text(encoding="utf-8"))
     artifact_manifest = json.loads(artifact_manifest_path.read_text(encoding="utf-8"))
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
     worker_payload = json.loads(worker_payload_path.read_text(encoding="utf-8"))
     worker_result = json.loads(worker_result_path.read_text(encoding="utf-8"))
     assert summary["run_id"] == payload["run_id"]
@@ -253,10 +258,18 @@ def test_epoch_worker_completes_run_and_writes_artifacts(tmp_path, monkeypatch):
         },
         "entries": [],
     }
-    assert artifact_manifest["artifact_count"] == 4
+    assert artifact_manifest["artifact_count"] == 5
     assert {
         artifact["logical_name"] for artifact in artifact_manifest["artifacts"]
-    } == {"epochs", "epoch_summary", "condition_counts", "drop_log"}
+    } == {"epochs", "epoch_summary", "condition_counts", "drop_log", "provenance"}
+    assert provenance["run"]["run_id"] == payload["run_id"]
+    assert provenance["run"]["run_kind"] == "epoch"
+    assert provenance["config_snapshot"]["preprocessing_run_id"] == "preprocess-001"
+    assert {source["role"] for source in provenance["sources"]} == {
+        "preprocessing_run",
+        "event_log",
+        "recording",
+    }
 
 
 def test_epoch_worker_persists_failed_execution(tmp_path, monkeypatch):

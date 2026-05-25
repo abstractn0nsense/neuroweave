@@ -69,6 +69,7 @@ from eeg_io.event_logs import (  # noqa: E402
     normalize_event_log,
     preview_event_log,
 )
+from eeg_io.provenance import build_provenance_payload  # noqa: E402
 from eeg_io.registry import JsonRegistryRepository, JsonRunRepository  # noqa: E402
 from eeg_io.readers import EegMetadataReadError, read_eeg_metadata  # noqa: E402
 
@@ -1545,33 +1546,52 @@ def _epoch_completed_provenance(
         processing_metadata=processing_metadata,
         run=run,
     )
+    artifact_entries = [
+        _artifact_manifest_entry(
+            logical_name="epochs",
+            path=output_path,
+            artifact_type="primary_fif",
+            output_directory=output_path.parent,
+        ),
+        *[
+            _artifact_manifest_entry(
+                logical_name=logical_name,
+                path=Path(str(path_value)),
+                artifact_type="diagnostic_json",
+                output_directory=output_path.parent,
+            )
+            for logical_name, path_value in (
+                ("epoch_summary", diagnostics_metadata.get("epoch_summary_path")),
+                (
+                    "condition_counts",
+                    diagnostics_metadata.get("condition_counts_path"),
+                ),
+                ("drop_log", diagnostics_metadata.get("drop_log_path")),
+            )
+            if isinstance(path_value, str) and Path(path_value).is_file()
+        ],
+    ]
+    provenance_path = _write_run_provenance(
+        output_directory=output_path.parent,
+        run_id=run.run_id,
+        dataset_id=run.dataset_id,
+        run_kind=run.run_kind.value,
+        config_snapshot=_epoch_config_payload(run.config),
+        sources=_epoch_provenance_sources(run, processing_metadata),
+        artifacts=artifact_entries,
+        software_versions=_software_versions(processing_metadata),
+    )
+    artifact_entries.append(
+        _artifact_manifest_entry(
+            logical_name="provenance",
+            path=provenance_path,
+            artifact_type="provenance_json",
+            output_directory=output_path.parent,
+        )
+    )
     manifest_metadata = _write_artifact_manifest(
         output_directory=output_path.parent,
-        artifacts=[
-            _artifact_manifest_entry(
-                logical_name="epochs",
-                path=output_path,
-                artifact_type="primary_fif",
-                output_directory=output_path.parent,
-            ),
-            *[
-                _artifact_manifest_entry(
-                    logical_name=logical_name,
-                    path=Path(str(path_value)),
-                    artifact_type="diagnostic_json",
-                    output_directory=output_path.parent,
-                )
-                for logical_name, path_value in (
-                    ("epoch_summary", diagnostics_metadata.get("epoch_summary_path")),
-                    (
-                        "condition_counts",
-                        diagnostics_metadata.get("condition_counts_path"),
-                    ),
-                    ("drop_log", diagnostics_metadata.get("drop_log_path")),
-                )
-                if isinstance(path_value, str) and Path(path_value).is_file()
-            ],
-        ],
+        artifacts=artifact_entries,
     )
     output_size_bytes = output_path.stat().st_size
     output_checksum_sha256 = _sha256_file(output_path)
@@ -1583,6 +1603,9 @@ def _epoch_completed_provenance(
         "primary_artifact_checksum_sha256": output_checksum_sha256,
         "artifact_count": manifest_metadata["artifact_count"],
         "artifact_manifest_path": manifest_metadata["artifact_manifest_path"],
+        "provenance_available": True,
+        "provenance_path": str(provenance_path),
+        "provenance_schema_version": 1,
         "output_path": str(output_path),
         "output_size_bytes": output_size_bytes,
         "output_checksum_sha256": output_checksum_sha256,
@@ -1641,18 +1664,37 @@ def _erp_completed_provenance(
         )
         if isinstance(path_value, str) and Path(path_value).is_file()
     ]
+    artifact_entries = [
+        *condition_artifacts,
+        *plot_artifacts,
+        _artifact_manifest_entry(
+            logical_name="erp_metadata",
+            path=metadata_path,
+            artifact_type="metadata_json",
+            output_directory=output_path.parent,
+        ),
+    ]
+    provenance_path = _write_run_provenance(
+        output_directory=output_path.parent,
+        run_id=run.run_id,
+        dataset_id=run.dataset_id,
+        run_kind=run.run_kind.value,
+        config_snapshot=_erp_config_payload(run.config),
+        sources=_erp_provenance_sources(run, processing_metadata),
+        artifacts=artifact_entries,
+        software_versions=_software_versions(processing_metadata),
+    )
+    artifact_entries.append(
+        _artifact_manifest_entry(
+            logical_name="provenance",
+            path=provenance_path,
+            artifact_type="provenance_json",
+            output_directory=output_path.parent,
+        )
+    )
     manifest_metadata = _write_artifact_manifest(
         output_directory=output_path.parent,
-        artifacts=[
-            *condition_artifacts,
-            *plot_artifacts,
-            _artifact_manifest_entry(
-                logical_name="erp_metadata",
-                path=metadata_path,
-                artifact_type="metadata_json",
-                output_directory=output_path.parent,
-            ),
-        ],
+        artifacts=artifact_entries,
     )
     return {
         **run.output_metadata,
@@ -1660,6 +1702,9 @@ def _erp_completed_provenance(
         "primary_artifact_path": str(output_path),
         "artifact_count": manifest_metadata["artifact_count"],
         "artifact_manifest_path": manifest_metadata["artifact_manifest_path"],
+        "provenance_available": True,
+        "provenance_path": str(provenance_path),
+        "provenance_schema_version": 1,
         "output_path": str(output_path),
         "output_file_format": processing_metadata["file_format"],
         "mne_version": processing_metadata["mne_version"],
@@ -1696,6 +1741,112 @@ def _write_erp_metadata(
     }
     _write_json_file(metadata_path, payload)
     return metadata_path
+
+
+def _write_run_provenance(
+    *,
+    output_directory: Path,
+    run_id: str,
+    dataset_id: str,
+    run_kind: str,
+    config_snapshot: dict,
+    sources: list[dict],
+    artifacts: list[dict[str, str | int]],
+    software_versions: dict[str, str],
+) -> Path:
+    provenance_path = output_directory / "provenance.json"
+    payload = build_provenance_payload(
+        run_id=run_id,
+        dataset_id=dataset_id,
+        run_kind=run_kind,
+        config_snapshot=config_snapshot,
+        sources=sources,
+        artifacts=[
+            _provenance_artifact_summary(artifact)
+            for artifact in artifacts
+        ],
+        software_versions=software_versions,
+        created_at_utc=_utc_now_iso(),
+    )
+    _write_json_file(provenance_path, payload)
+    return provenance_path
+
+
+def _preprocessing_provenance_sources(run: PreprocessingRun) -> list[dict]:
+    metadata = run.output_metadata
+    return [
+        {
+            "role": "eeg_file",
+            "file_id": metadata.get("input_file_id"),
+            "original_filename": metadata.get("input_original_filename"),
+            "path": metadata.get("input_path"),
+            "size_bytes": metadata.get("input_size_bytes"),
+            "checksum_sha256": metadata.get("input_checksum_sha256"),
+            "file_format": metadata.get("input_file_format"),
+        }
+    ]
+
+
+def _epoch_provenance_sources(
+    run: EpochRun,
+    processing_metadata: dict,
+) -> list[dict]:
+    metadata = run.output_metadata
+    return [
+        {
+            "role": "preprocessing_run",
+            "run_id": processing_metadata.get("input_preprocessing_run_id")
+            or metadata.get("input_preprocessing_run_id"),
+            "path": metadata.get("input_preprocessed_path"),
+        },
+        {
+            "role": "event_log",
+            "event_log_id": metadata.get("event_log_id"),
+            "event_count": metadata.get("event_count"),
+        },
+        {
+            "role": "recording",
+            "recording_id": metadata.get("recording_id"),
+        },
+    ]
+
+
+def _erp_provenance_sources(
+    run: ErpRun,
+    processing_metadata: dict,
+) -> list[dict]:
+    metadata = run.output_metadata
+    return [
+        {
+            "role": "epoch_run",
+            "run_id": processing_metadata.get("input_epoch_run_id")
+            or metadata.get("input_epoch_run_id"),
+            "path": processing_metadata.get("input_epochs_path")
+            or metadata.get("input_epochs_path"),
+        },
+        {
+            "role": "preprocessing_run",
+            "run_id": metadata.get("input_preprocessing_run_id"),
+        },
+    ]
+
+
+def _software_versions(processing_metadata: dict) -> dict[str, str]:
+    versions = {"python": sys.version.split()[0]}
+    mne_version = processing_metadata.get("mne_version")
+    if isinstance(mne_version, str) and mne_version:
+        versions["mne"] = mne_version
+    return versions
+
+
+def _provenance_artifact_summary(artifact: dict[str, str | int]) -> dict:
+    return {
+        "logical_name": artifact.get("logical_name"),
+        "artifact_type": artifact.get("artifact_type"),
+        "path": artifact.get("path"),
+        "size_bytes": artifact.get("size_bytes"),
+        "checksum_sha256": artifact.get("checksum_sha256"),
+    }
 
 
 def _erp_preview_plot_metadata(
@@ -1862,36 +2013,55 @@ def _preprocessing_completed_provenance(
         output_directory=output_path.parent,
         processing_metadata=processing_metadata,
     )
+    artifact_entries = [
+        _artifact_manifest_entry(
+            logical_name="raw_preprocessed",
+            path=output_path,
+            artifact_type="primary_fif",
+            output_directory=output_path.parent,
+        ),
+        *[
+            _artifact_manifest_entry(
+                logical_name=logical_name,
+                path=Path(str(path_value)),
+                artifact_type="diagnostic_json",
+                output_directory=output_path.parent,
+            )
+            for logical_name, path_value in (
+                (
+                    "preprocessing_summary",
+                    diagnostics_metadata.get("preprocessing_summary_path"),
+                ),
+                ("filter_report", diagnostics_metadata.get("filter_report_path")),
+                (
+                    "artifact_summary",
+                    diagnostics_metadata.get("artifact_summary_path"),
+                ),
+            )
+            if isinstance(path_value, str) and Path(path_value).is_file()
+        ],
+    ]
+    provenance_path = _write_run_provenance(
+        output_directory=output_path.parent,
+        run_id=run.run_id,
+        dataset_id=run.dataset_id,
+        run_kind=run.run_kind.value,
+        config_snapshot=_preprocessing_config_payload(run.config),
+        sources=_preprocessing_provenance_sources(run),
+        artifacts=artifact_entries,
+        software_versions=_software_versions(processing_metadata),
+    )
+    artifact_entries.append(
+        _artifact_manifest_entry(
+            logical_name="provenance",
+            path=provenance_path,
+            artifact_type="provenance_json",
+            output_directory=output_path.parent,
+        )
+    )
     manifest_metadata = _write_artifact_manifest(
         output_directory=output_path.parent,
-        artifacts=[
-            _artifact_manifest_entry(
-                logical_name="raw_preprocessed",
-                path=output_path,
-                artifact_type="primary_fif",
-                output_directory=output_path.parent,
-            ),
-            *[
-                _artifact_manifest_entry(
-                    logical_name=logical_name,
-                    path=Path(str(path_value)),
-                    artifact_type="diagnostic_json",
-                    output_directory=output_path.parent,
-                )
-                for logical_name, path_value in (
-                    (
-                        "preprocessing_summary",
-                        diagnostics_metadata.get("preprocessing_summary_path"),
-                    ),
-                    ("filter_report", diagnostics_metadata.get("filter_report_path")),
-                    (
-                        "artifact_summary",
-                        diagnostics_metadata.get("artifact_summary_path"),
-                    ),
-                )
-                if isinstance(path_value, str) and Path(path_value).is_file()
-            ],
-        ],
+        artifacts=artifact_entries,
     )
     output_size_bytes = output_path.stat().st_size
     output_checksum_sha256 = _sha256_file(output_path)
@@ -1903,6 +2073,9 @@ def _preprocessing_completed_provenance(
         "primary_artifact_checksum_sha256": output_checksum_sha256,
         "artifact_count": manifest_metadata["artifact_count"],
         "artifact_manifest_path": manifest_metadata["artifact_manifest_path"],
+        "provenance_available": True,
+        "provenance_path": str(provenance_path),
+        "provenance_schema_version": 1,
         "output_path": str(output_path),
         "output_size_bytes": output_size_bytes,
         "output_checksum_sha256": output_checksum_sha256,
