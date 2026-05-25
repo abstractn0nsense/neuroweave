@@ -88,6 +88,30 @@ def _path_from_env(name: str, default: Path) -> Path:
     return Path(value).expanduser().resolve()
 
 
+DEFAULT_CORS_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+]
+LOCALHOST_CORS_REGEX = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+
+
+def _cors_origins_from_env() -> list[str]:
+    value = os.environ.get("NEUROWEAVE_CORS_ORIGINS")
+    if value is None:
+        return DEFAULT_CORS_ORIGINS
+    origins = [origin.strip() for origin in value.split(",") if origin.strip()]
+    return origins or DEFAULT_CORS_ORIGINS
+
+
+def _cors_allow_origin_regex_from_env() -> str | None:
+    value = os.environ.get("NEUROWEAVE_CORS_ALLOW_LOCALHOST_PORTS", "")
+    if value.strip().lower() in {"1", "true", "yes", "y", "on"}:
+        return LOCALHOST_CORS_REGEX
+    return None
+
+
 def _preprocessing_output_path(dataset_id: str, run_id: str) -> Path:
     return PROCESSED_DIR / dataset_id / run_id / RAW_PREPROCESSED_FILENAME
 
@@ -568,12 +592,8 @@ app = FastAPI(title="NeuroWeave API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5174",
-    ],
+    allow_origins=_cors_origins_from_env(),
+    allow_origin_regex=_cors_allow_origin_regex_from_env(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

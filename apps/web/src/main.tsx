@@ -231,6 +231,15 @@ type ComparisonSummaryResponse = {
   erp_run: ErpRun;
 };
 
+type DatasetContext = {
+  dataset: Dataset;
+  eventLog: EventLogResponse | null;
+  validation: ValidationReport | null;
+  preprocessingRuns: PreprocessingRun[];
+  epochRuns: EpochRun[];
+  erpRuns: ErpRun[];
+};
+
 type MetadataValue = string | number | boolean | null;
 
 type NoticeState = {
@@ -522,6 +531,8 @@ function App() {
 
   useEffect(() => {
     if (!activeDatasetId) {
+      setEventLog(null);
+      setValidation(null);
       setPreprocessingRuns({ status: "idle", data: null, error: null });
       setEpochRuns({ status: "idle", data: null, error: null });
       setErpRuns({ status: "idle", data: null, error: null });
@@ -529,9 +540,43 @@ function App() {
       return;
     }
 
-    void refreshPreprocessingRuns(activeDatasetId);
-    void refreshEpochRuns(activeDatasetId);
-    void refreshErpRuns(activeDatasetId);
+    let isCurrent = true;
+    setPreprocessingRuns({ status: "loading", data: null, error: null });
+    setEpochRuns({ status: "loading", data: null, error: null });
+    setErpRuns({ status: "loading", data: null, error: null });
+
+    loadDatasetContext(activeDatasetId)
+      .then((context) => {
+        if (!isCurrent) {
+          return;
+        }
+        updateDatasetInState(context.dataset);
+        setEventLog(context.eventLog);
+        setValidation(context.validation);
+        setPreprocessingRuns({
+          status: "success",
+          data: context.preprocessingRuns,
+          error: null,
+        });
+        setEpochRuns({ status: "success", data: context.epochRuns, error: null });
+        setErpRuns({ status: "success", data: context.erpRuns, error: null });
+      })
+      .catch((error: unknown) => {
+        if (!isCurrent) {
+          return;
+        }
+        const message = getErrorMessage(error);
+        setEventLog(null);
+        setValidation(null);
+        setPreprocessingRuns({ status: "error", data: null, error: message });
+        setEpochRuns({ status: "error", data: null, error: message });
+        setErpRuns({ status: "error", data: null, error: message });
+        setNotice({ tone: "error", message });
+      });
+
+    return () => {
+      isCurrent = false;
+    };
   }, [activeDatasetId]);
 
   useEffect(() => {
@@ -1065,6 +1110,38 @@ function App() {
     setDatasets({ status: "success", data: response.datasets, error: null });
   }
 
+  async function loadDatasetContext(datasetId: string): Promise<DatasetContext> {
+    const encodedDatasetId = encodeURIComponent(datasetId);
+    const [
+      dataset,
+      eventLog,
+      validation,
+      preprocessingResponse,
+      epochResponse,
+      erpResponse,
+    ] = await Promise.all([
+      fetchJson<Dataset>(`/datasets/${encodedDatasetId}`),
+      fetchOptionalJson<EventLogResponse>(`/datasets/${encodedDatasetId}/events`),
+      fetchOptionalJson<ValidationReport>(
+        `/datasets/${encodedDatasetId}/validation`,
+      ),
+      fetchJson<PreprocessingRunsResponse>(
+        `/datasets/${encodedDatasetId}/preprocessing-runs`,
+      ),
+      fetchJson<EpochRunsResponse>(`/datasets/${encodedDatasetId}/epoch-runs`),
+      fetchJson<ErpRunsResponse>(`/datasets/${encodedDatasetId}/erp-runs`),
+    ]);
+
+    return {
+      dataset,
+      eventLog,
+      validation,
+      preprocessingRuns: preprocessingResponse.runs,
+      epochRuns: epochResponse.runs,
+      erpRuns: erpResponse.runs,
+    };
+  }
+
   async function refreshPreprocessingRuns(
     datasetId: string,
     options: { silent?: boolean } = {},
@@ -1489,7 +1566,9 @@ function ActiveDatasetSummary({
           >
             <span>{String(index + 1).padStart(2, "0")}</span>
             <strong>{item.label}</strong>
-            <small>{item.value}</small>
+            <small data-testid={`stage-${item.label.toLowerCase()}-value`}>
+              {item.value}
+            </small>
           </div>
         ))}
       </div>
@@ -3024,6 +3103,17 @@ async function fetchJson<T>(path: string): Promise<T> {
   return requestJson<T>(path);
 }
 
+async function fetchOptionalJson<T>(path: string): Promise<T | null> {
+  try {
+    return await requestJson<T>(path);
+  } catch (error: unknown) {
+    if (error instanceof ApiRequestError && error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
 async function postJson<T>(path: string, body: unknown): Promise<T> {
   return requestJson<T>(path, {
     method: "POST",
@@ -3037,10 +3127,23 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const detail = await readErrorDetail(response);
-    throw new Error(detail || `${response.status} ${response.statusText}`);
+    throw new ApiRequestError(
+      response.status,
+      detail || `${response.status} ${response.statusText}`,
+    );
   }
 
   return response.json() as Promise<T>;
+}
+
+class ApiRequestError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ApiRequestError";
+  }
 }
 
 async function readErrorDetail(response: Response): Promise<string> {
