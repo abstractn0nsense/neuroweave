@@ -11,7 +11,9 @@ from eeg_processing.preprocessing import PreprocessingError, preprocess_raw_eeg
 
 SCHEMA_VERSION = 1
 PREPROCESSING_JOB = "preprocessing"
-SUPPORTED_JOBS = {PREPROCESSING_JOB}
+EPOCHING_JOB = "epoching"
+ERP_JOB = "erp"
+SUPPORTED_JOBS = {PREPROCESSING_JOB, EPOCHING_JOB, ERP_JOB}
 
 
 class WorkerCliError(Exception):
@@ -79,15 +81,28 @@ def run_payload(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         )
 
     job = str(payload["job"])
+    return _run_supported_payload(job, payload)
+
+
+def _run_supported_payload(
+    job: str,
+    payload: dict[str, Any],
+) -> tuple[int, dict[str, Any]]:
     if job == PREPROCESSING_JOB:
         return _run_preprocessing_payload(payload)
+    return _unimplemented_job_result(job, payload)
 
+
+def _unimplemented_job_result(
+    job: str,
+    payload: dict[str, Any],
+) -> tuple[int, dict[str, Any]]:
     return (
         1,
         _base_result(
             payload,
             status="failed",
-            error=f"Unsupported worker job: {job}",
+            error=f"Worker job is not implemented yet: {job}",
         ),
     )
 

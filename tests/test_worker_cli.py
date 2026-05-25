@@ -114,14 +114,46 @@ def test_run_payload_rejects_unsupported_job():
     exit_code, result = worker_cli.run_payload(
         {
             "schema_version": 1,
+            "job": "unknown",
+            "run_id": "unknown-001",
+        }
+    )
+
+    assert exit_code == 1
+    assert result["status"] == "failed"
+    assert result["error"] == "Unsupported worker job: unknown"
+
+
+def test_run_payload_accepts_epoching_job_routing():
+    exit_code, result = worker_cli.run_payload(
+        {
+            "schema_version": 1,
             "job": "epoching",
             "run_id": "epoch-001",
         }
     )
 
     assert exit_code == 1
+    assert result["job"] == "epoching"
+    assert result["run_id"] == "epoch-001"
     assert result["status"] == "failed"
-    assert result["error"] == "Unsupported worker job: epoching"
+    assert result["error"] == "Worker job is not implemented yet: epoching"
+
+
+def test_run_payload_accepts_erp_job_routing():
+    exit_code, result = worker_cli.run_payload(
+        {
+            "schema_version": 1,
+            "job": "erp",
+            "run_id": "erp-001",
+        }
+    )
+
+    assert exit_code == 1
+    assert result["job"] == "erp"
+    assert result["run_id"] == "erp-001"
+    assert result["status"] == "failed"
+    assert result["error"] == "Worker job is not implemented yet: erp"
 
 
 def test_main_writes_result_json(monkeypatch, tmp_path):
