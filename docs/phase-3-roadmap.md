@@ -1380,3 +1380,18 @@ metadata and plot status instead of pixel rendering.
 - Prefer additive API response fields over renaming existing fields.
 - Defer SQLite or a generalized workflow engine until JSON run history becomes a
   real bottleneck.
+
+## Current UI Note
+
+The current workbench separates `Setup` from `Analysis`:
+
+- `Setup` owns project, experiment, dataset queue, active-dataset readiness, and
+  sample metadata.
+- `Analysis` owns EEG/event upload, mapping, validation, preprocessing, epoching,
+  ERP preview, comparison prep, QC, and export-oriented review.
+- Dataset Queue selection changes only the active dataset. Users enter analysis
+  explicitly with `Continue Analysis`.
+
+Future UI changes should preserve that explicit handoff. It protects
+reproducibility by making the selected dataset visible before execution and avoids
+mixing study organization with irreversible or long-running processing actions.

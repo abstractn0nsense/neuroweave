@@ -47,6 +47,8 @@ export async function createPreprocessedDataset(
   await page.getByTestId("dataset-session-input").fill(labels.session);
   await page.getByTestId("create-dataset-button").click();
   await expect(page.getByText("Dataset created.")).toBeVisible();
+  await page.getByRole("button", { name: "Continue Analysis" }).click();
+  await expect(page.getByText("Ingestion And Preprocessing")).toBeVisible();
 
   await page.getByTestId("eeg-file-input").setInputFiles(eegFixture);
   await page.getByTestId("upload-eeg-button").click();

@@ -11,6 +11,8 @@ workflow orchestration and collaboration.
 NeuroWeave is currently usable as a local research workflow prototype:
 
 - project, experiment, dataset, EEG file, and event-log intake
+- split Setup and Analysis workspace modes so study organization is separated
+  from execution
 - metadata and event validation
 - MNE-based preprocessing
 - epoch generation
@@ -39,6 +41,9 @@ NeuroWeave should become the workspace where a neuroscience researcher can:
 - Trust before automation: AI suggestions must be grounded in recorded workflow
   state, parameters, warnings, and artifacts.
 - Reproducibility before breadth: add fewer analyses, but make each one repeatable.
+- Explicit transitions before hidden automation: selecting a dataset should not
+  silently launch or advance analysis. Users should confirm when moving from setup
+  into execution.
 - Workflow first, chat second: chat should operate the workflow, not replace it.
 - Local-first before SaaS: prove the research loop locally, then add accounts and
   collaboration.
@@ -57,6 +62,7 @@ Build:
 - artifact manifests for every completed run
 - versioned config snapshots and immutable completed-run records
 - clear dataset readiness gates
+- documented Setup-to-Analysis handoff with user-visible active dataset context
 - robust local app launcher and recovery from interrupted runs
 - sample workflow gallery using public EEG datasets
 
@@ -66,6 +72,7 @@ Acceptance criteria:
 - every completed run can be re-opened with matching files and metadata
 - every failed run remains queryable with actionable errors and warnings
 - one-click local launch works for non-developer users
+- user-facing Korean and English guides remain aligned with the current UI
 
 Suggested product milestone: "NeuroWeave Local Research Preview."
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
 import "./styles.css";
 
@@ -313,10 +313,13 @@ type NoticeState = {
 
 type MappingKey = keyof EventColumnMapping;
 type ThemeMode = "dark" | "light";
+type WorkspaceMode = "setup" | "analysis";
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
 const THEME_STORAGE_KEY = "neuroweave-theme";
+const ACTIVE_DATASET_STORAGE_KEY = "neuroweave-active-dataset";
+const WORKSPACE_MODE_STORAGE_KEY = "neuroweave-workspace-mode";
 
 const MAPPING_FIELDS: { key: MappingKey; label: string; required?: boolean }[] = [
   { key: "onset_seconds", label: "Onset", required: true },
@@ -455,7 +458,7 @@ function App() {
   });
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [selectedExperimentId, setSelectedExperimentId] = useState("");
-  const [activeDatasetId, setActiveDatasetId] = useState("");
+  const [activeDatasetId, setActiveDatasetId] = useState(getInitialActiveDatasetId);
   const [selectedSampleId, setSelectedSampleId] = useState<string | null>(null);
   const [metadata, setMetadata] = useState<LoadState<DatasetMetadata>>({
     status: "idle",
@@ -517,6 +520,9 @@ function App() {
   );
   const [notice, setNotice] = useState<NoticeState>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [workspaceMode, setWorkspaceMode] =
+    useState<WorkspaceMode>(getInitialWorkspaceMode);
+  const workspaceModeChosenRef = useRef(false);
 
   const selectedProject = useMemo(
     () =>
@@ -568,10 +574,27 @@ function App() {
     [erpRuns.data],
   );
 
+  function chooseWorkspaceMode(mode: WorkspaceMode) {
+    workspaceModeChosenRef.current = true;
+    setWorkspaceMode(mode);
+  }
+
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     window.localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
+
+  useEffect(() => {
+    if (activeDatasetId) {
+      window.localStorage.setItem(ACTIVE_DATASET_STORAGE_KEY, activeDatasetId);
+    } else {
+      window.localStorage.removeItem(ACTIVE_DATASET_STORAGE_KEY);
+    }
+  }, [activeDatasetId]);
+
+  useEffect(() => {
+    window.localStorage.setItem(WORKSPACE_MODE_STORAGE_KEY, workspaceMode);
+  }, [workspaceMode]);
 
   useEffect(() => {
     void refreshWorkspace();
@@ -1482,63 +1505,138 @@ function App() {
           <div className={`notice notice-${notice.tone}`}>{notice.message}</div>
         ) : null}
 
-        <div className="workbench-grid">
-          <aside className="workbench-sidebar" aria-label="Study and dataset setup">
-            <section className="panel setup-panel" aria-labelledby="setup-title">
-              <div className="panel-header">
-                <h2 id="setup-title">Study Setup</h2>
-              </div>
-              <StudySetup
-                busyAction={busyAction}
-                experimentForm={experimentForm}
-                experiments={experiments}
-                onCreateExperiment={createExperiment}
-                onCreateProject={createProject}
-                onExperimentFormChange={setExperimentForm}
-                onProjectFormChange={setProjectForm}
-                onSelectExperiment={setSelectedExperimentId}
-                onSelectProject={setSelectedProjectId}
-                projectForm={projectForm}
-                projects={projects}
-                selectedExperimentId={selectedExperimentId}
-                selectedProjectId={selectedProjectId}
-              />
-            </section>
+        <nav className="workspace-mode-tabs" aria-label="Workspace mode">
+          <button
+            aria-pressed={workspaceMode === "setup"}
+            className="workspace-mode-button"
+            onClick={() => chooseWorkspaceMode("setup")}
+            type="button"
+          >
+            Setup
+          </button>
+          <button
+            aria-pressed={workspaceMode === "analysis"}
+            className="workspace-mode-button"
+            onClick={() => chooseWorkspaceMode("analysis")}
+            type="button"
+          >
+            Analysis
+          </button>
+          {workspaceMode === "analysis" ? (
+            <span className="workspace-mode-context">Study Setup</span>
+          ) : null}
+        </nav>
 
-            <section className="panel dataset-panel" aria-labelledby="datasets-title">
-              <div className="panel-header compact-header">
-                <div>
-                  <h2 id="datasets-title">Dataset Queue</h2>
-                  <p className="subtle">
-                    {selectedProject
-                      ? selectedExperiment
-                        ? `${selectedProject.name} / ${selectedExperiment.name}`
-                        : selectedProject.name
-                      : "Select study context"}
-                  </p>
+        {workspaceMode === "setup" ? (
+          <section className="setup-workspace" aria-label="Study and dataset setup">
+            <div className="setup-column">
+              <section className="panel setup-panel" aria-labelledby="setup-title">
+                <div className="panel-header">
+                  <h2 id="setup-title">Study Setup</h2>
                 </div>
-              </div>
-              <DatasetSection
-                activeDatasetId={activeDatasetId}
-                busyAction={busyAction}
-                datasetForm={datasetForm}
-                datasets={datasets}
-                onCreateDataset={createDataset}
-                onDatasetFormChange={setDatasetForm}
-                onSelectDataset={(datasetId) => {
-                  setActiveDatasetId(datasetId);
-                  setEventPreview(null);
-                  setEventLog(null);
-                  setValidation(null);
-                  setEpochConfig(DEFAULT_EPOCH_CONFIG);
-                }}
-                selectedExperimentId={selectedExperimentId}
-                selectedProjectId={selectedProjectId}
-              />
-            </section>
-          </aside>
+                <StudySetup
+                  busyAction={busyAction}
+                  experimentForm={experimentForm}
+                  experiments={experiments}
+                  onCreateExperiment={createExperiment}
+                  onCreateProject={createProject}
+                  onExperimentFormChange={setExperimentForm}
+                  onProjectFormChange={setProjectForm}
+                  onSelectExperiment={setSelectedExperimentId}
+                  onSelectProject={setSelectedProjectId}
+                  projectForm={projectForm}
+                  projects={projects}
+                  selectedExperimentId={selectedExperimentId}
+                  selectedProjectId={selectedProjectId}
+                />
+              </section>
 
-          <section className="workbench-main">
+              <section className="panel dataset-panel" aria-labelledby="datasets-title">
+                <div className="panel-header compact-header">
+                  <div>
+                    <h2 id="datasets-title">Dataset Queue</h2>
+                    <p className="subtle">
+                      {selectedProject
+                        ? selectedExperiment
+                          ? `${selectedProject.name} / ${selectedExperiment.name}`
+                          : selectedProject.name
+                        : "Select study context"}
+                    </p>
+                  </div>
+                </div>
+                <DatasetSection
+                  activeDatasetId={activeDatasetId}
+                  busyAction={busyAction}
+                  datasetForm={datasetForm}
+                  datasets={datasets}
+                  onCreateDataset={createDataset}
+                  onDatasetFormChange={setDatasetForm}
+                  onSelectDataset={(datasetId) => {
+                    setActiveDatasetId(datasetId);
+                    setEventPreview(null);
+                    setEventLog(null);
+                    setValidation(null);
+                    setEpochConfig(DEFAULT_EPOCH_CONFIG);
+                  }}
+                  selectedExperimentId={selectedExperimentId}
+                  selectedProjectId={selectedProjectId}
+                />
+              </section>
+            </div>
+
+            <div className="setup-column">
+              <section
+                className="panel active-context-panel"
+                aria-labelledby="setup-active-context-title"
+              >
+                <div className="panel-header">
+                  <div>
+                    <h2 id="setup-active-context-title">Active Dataset</h2>
+                    <p className="subtle">
+                      {activeDataset
+                        ? `${activeDataset.dataset_id} / ${activeDataset.status}`
+                        : "Create or select a dataset"}
+                    </p>
+                  </div>
+                  {activeDataset ? (
+                    <button
+                      className="primary-button"
+                      onClick={() => chooseWorkspaceMode("analysis")}
+                      type="button"
+                    >
+                      Continue Analysis
+                    </button>
+                  ) : null}
+                </div>
+                <ActiveDatasetSummary
+                  activeDataset={activeDataset}
+                  eventLog={eventLog}
+                  selectedExperiment={selectedExperiment}
+                  selectedProject={selectedProject}
+                  validation={validation}
+                />
+              </section>
+
+              <section className="panel" aria-labelledby="sample-list-title">
+                <div className="panel-header">
+                  <h2 id="sample-list-title">Sample Metadata</h2>
+                  {selectedSample ? (
+                    <span className="file-pill">{selectedSample.filename}</span>
+                  ) : null}
+                </div>
+                <div className="sample-grid">
+                  <SampleList
+                    onSelect={setSelectedSampleId}
+                    samples={samples}
+                    selectedSampleId={selectedSampleId}
+                  />
+                  <MetadataView metadata={metadata} selectedSample={selectedSample} />
+                </div>
+              </section>
+            </div>
+          </section>
+        ) : (
+          <section className="analysis-workspace" aria-label="Analysis workspace">
             <section
               className="panel active-context-panel"
               aria-labelledby="active-context-title"
@@ -1556,7 +1654,15 @@ function App() {
                   <span className={`status-badge badge-${activeDataset.status}`}>
                     {activeDataset.status}
                   </span>
-                ) : null}
+                ) : (
+                  <button
+                    className="secondary-button"
+                    onClick={() => chooseWorkspaceMode("setup")}
+                    type="button"
+                  >
+                    Open Setup
+                  </button>
+                )}
               </div>
               <ActiveDatasetSummary
                 activeDataset={activeDataset}
@@ -1674,26 +1780,9 @@ function App() {
                 </div>
                 <QcDashboard qcSummary={qcSummary} />
               </section>
-
-              <section className="panel" aria-labelledby="sample-list-title">
-                <div className="panel-header">
-                  <h2 id="sample-list-title">Sample Metadata</h2>
-                  {selectedSample ? (
-                    <span className="file-pill">{selectedSample.filename}</span>
-                  ) : null}
-                </div>
-                <div className="sample-grid">
-                  <SampleList
-                    onSelect={setSelectedSampleId}
-                    samples={samples}
-                    selectedSampleId={selectedSampleId}
-                  />
-                  <MetadataView metadata={metadata} selectedSample={selectedSample} />
-                </div>
-              </section>
             </section>
           </section>
-        </div>
+        )}
       </section>
     </main>
   );
@@ -4244,6 +4333,15 @@ function getInitialTheme(): ThemeMode {
   return window.matchMedia("(prefers-color-scheme: light)").matches
     ? "light"
     : "dark";
+}
+
+function getInitialActiveDatasetId(): string {
+  return window.localStorage.getItem(ACTIVE_DATASET_STORAGE_KEY) ?? "";
+}
+
+function getInitialWorkspaceMode(): WorkspaceMode {
+  const storedMode = window.localStorage.getItem(WORKSPACE_MODE_STORAGE_KEY);
+  return storedMode === "analysis" ? "analysis" : "setup";
 }
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

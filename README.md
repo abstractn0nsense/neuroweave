@@ -18,6 +18,10 @@ packages/
 docs/
   architecture.md       Folder boundaries and dependency rules
   eeg-workflow.md       Initial EEG workflow outline
+  user-guide-ko.md      Korean user guide for the current local app
+  user-guide-en.md      English user guide for the current local app
+  neuro-weave-growth-pipeline.md
+                        Product and research-platform growth pipeline
   phase-1-ingestion.md  External experiment upload and event-log plan
   storage.md            Versioned fixture and local data rules
   decisions/            Architecture decision notes
@@ -110,6 +114,19 @@ npm run dev
 Web URL: `http://127.0.0.1:5173`
 
 The Phase 0 web screen displays API health, sample EEG datasets, and selected sample metadata.
+
+### User Guides
+
+Current UI guide:
+
+- Korean: `docs/user-guide-ko.md`
+- English: `docs/user-guide-en.md`
+
+The app is split into `Setup` and `Analysis` workspace modes. Use `Setup` to create
+or select projects, experiments, and datasets. Dataset selection stays in Setup so
+the active dataset can be reviewed first. Use `Continue Analysis` to move into file
+upload, validation, preprocessing, epoching, ERP preview, QC, and export-oriented
+workflows.
 
 ### Smoke Test
 
