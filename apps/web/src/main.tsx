@@ -282,6 +282,38 @@ type AnalysisReportResponse = {
   report_path: string;
 };
 
+type ArtifactIntegrityItem = {
+  logical_name: string;
+  artifact_type: string;
+  path: string;
+  expected_size_bytes: number | null;
+  expected_checksum_sha256: string | null;
+  status: "ok" | "missing" | "mismatch";
+  actual_size_bytes: number | null;
+  actual_checksum_sha256: string | null;
+};
+
+type ArtifactIntegrityPayload = {
+  schema_version: number;
+  manifest_path: string;
+  artifact_root: string;
+  artifact_count: number;
+  status: "ok" | "missing" | "mismatch";
+  status_counts: {
+    ok: number;
+    missing: number;
+    mismatch: number;
+  };
+  artifacts: ArtifactIntegrityItem[];
+};
+
+type ArtifactIntegrityResponse = {
+  run_id: string;
+  dataset_id: string;
+  run_kind: string;
+  integrity: ArtifactIntegrityPayload;
+};
+
 type QcSummaryResponse = {
   dataset_id: string;
   run_id: string;
@@ -532,6 +564,9 @@ function App() {
     data: null,
     error: null,
   });
+  const [artifactIntegrity, setArtifactIntegrity] = useState<
+    Record<string, LoadState<ArtifactIntegrityPayload>>
+  >({});
   const [comparisonConfig, setComparisonConfig] = useState(
     DEFAULT_COMPARISON_CONFIG,
   );
@@ -1345,6 +1380,48 @@ function App() {
     window.open(`${API_BASE_URL}${reportUrl}`, "_blank", "noopener,noreferrer");
   }
 
+  async function checkArtifactIntegrity(run: ErpRun) {
+    if (!isErpExportReady(run)) {
+      setNotice({
+        tone: "error",
+        message: "Artifact integrity check requires a completed run manifest.",
+      });
+      return;
+    }
+
+    setArtifactIntegrity((current) => ({
+      ...current,
+      [run.run_id]: { status: "loading", data: null, error: null },
+    }));
+    try {
+      const response = await requestJson<ArtifactIntegrityResponse>(
+        `/runs/${encodeURIComponent(run.run_id)}/artifact-integrity`,
+      );
+      setArtifactIntegrity((current) => ({
+        ...current,
+        [run.run_id]: {
+          status: "success",
+          data: response.integrity,
+          error: null,
+        },
+      }));
+      setNotice({
+        tone: response.integrity.status === "ok" ? "ok" : "error",
+        message: `Artifact integrity ${response.integrity.status}.`,
+      });
+    } catch (error: unknown) {
+      setArtifactIntegrity((current) => ({
+        ...current,
+        [run.run_id]: {
+          status: "error",
+          data: null,
+          error: getErrorMessage(error),
+        },
+      }));
+      setNotice({ tone: "error", message: getErrorMessage(error) });
+    }
+  }
+
   async function cancelPreprocessingRun(runId: string) {
     await runAction(`cancel-${runId}`, async () => {
       const run = await requestJson<PreprocessingRun>(
@@ -1869,10 +1946,12 @@ function App() {
                   completedErpRuns={completedErpRuns}
                   erpConfig={erpConfig}
                   erpRuns={erpRuns}
+                  artifactIntegrity={artifactIntegrity}
                   onComparisonConfigChange={setComparisonConfig}
                   onDownloadErpExportBundle={downloadErpExportBundle}
                   onErpConfigChange={setErpConfig}
                   onGenerateErpAnalysisReport={generateErpAnalysisReport}
+                  onCheckArtifactIntegrity={checkArtifactIntegrity}
                   onOpenErpAnalysisReport={openErpAnalysisReport}
                   onStartComparisonSummary={beginComparisonSummary}
                   onStartErpRun={beginErpRun}
@@ -3041,6 +3120,7 @@ function ConditionCountSummary({
 
 function ErpSection({
   activeDataset,
+  artifactIntegrity,
   busyAction,
   comparisonConfig,
   completedEpochRuns,
@@ -3051,11 +3131,13 @@ function ErpSection({
   onDownloadErpExportBundle,
   onErpConfigChange,
   onGenerateErpAnalysisReport,
+  onCheckArtifactIntegrity,
   onOpenErpAnalysisReport,
   onStartComparisonSummary,
   onStartErpRun,
 }: {
   activeDataset: Dataset | null;
+  artifactIntegrity: Record<string, LoadState<ArtifactIntegrityPayload>>;
   busyAction: string | null;
   comparisonConfig: typeof DEFAULT_COMPARISON_CONFIG;
   completedEpochRuns: EpochRun[];
@@ -3066,6 +3148,7 @@ function ErpSection({
   onDownloadErpExportBundle: (run: ErpRun) => void;
   onErpConfigChange: (config: typeof DEFAULT_ERP_CONFIG) => void;
   onGenerateErpAnalysisReport: (run: ErpRun) => void;
+  onCheckArtifactIntegrity: (run: ErpRun) => void;
   onOpenErpAnalysisReport: (run: ErpRun) => void;
   onStartComparisonSummary: () => void;
   onStartErpRun: () => void;
@@ -3183,7 +3266,9 @@ function ErpSection({
         </button>
       </section>
       <ErpRunList
+        artifactIntegrity={artifactIntegrity}
         busyAction={busyAction}
+        onCheckArtifactIntegrity={onCheckArtifactIntegrity}
         onDownloadExportBundle={onDownloadErpExportBundle}
         onGenerateAnalysisReport={onGenerateErpAnalysisReport}
         onOpenAnalysisReport={onOpenErpAnalysisReport}
@@ -3201,13 +3286,17 @@ function ErpSection({
 }
 
 function ErpRunList({
+  artifactIntegrity,
   busyAction,
+  onCheckArtifactIntegrity,
   onDownloadExportBundle,
   onGenerateAnalysisReport,
   onOpenAnalysisReport,
   runs,
 }: {
+  artifactIntegrity: Record<string, LoadState<ArtifactIntegrityPayload>>;
   busyAction: string | null;
+  onCheckArtifactIntegrity: (run: ErpRun) => void;
   onDownloadExportBundle: (run: ErpRun) => void;
   onGenerateAnalysisReport: (run: ErpRun) => void;
   onOpenAnalysisReport: (run: ErpRun) => void;
@@ -3236,6 +3325,11 @@ function ErpRunList({
           typeof run.output_metadata.analysis_report_url === "string" &&
           run.output_metadata.analysis_report_url.length > 0;
         const exportStatus = getErpExportStatus(run);
+        const integrity = artifactIntegrity[run.run_id] ?? {
+          status: "idle",
+          data: null,
+          error: null,
+        };
         return (
           <div className="run-row" key={run.run_id}>
             <div>
@@ -3251,6 +3345,21 @@ function ErpRunList({
               <p className="run-action-status" data-ready={exportReady}>
                 {exportStatus}
               </p>
+              <ArtifactIntegritySummary integrity={integrity} />
+              <button
+                className="secondary-button compact-button"
+                data-testid={`integrity-erp-run-${run.run_id}`}
+                disabled={!exportReady || integrity.status === "loading"}
+                onClick={() => onCheckArtifactIntegrity(run)}
+                title={
+                  exportReady
+                    ? "Check artifact existence and checksums"
+                    : "Integrity check requires a completed artifact manifest"
+                }
+                type="button"
+              >
+                {integrity.status === "loading" ? "Checking..." : "Check Artifacts"}
+              </button>
               <button
                 className="secondary-button compact-button"
                 data-testid={`report-erp-run-${run.run_id}`}
@@ -3304,6 +3413,59 @@ function ErpRunList({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function ArtifactIntegritySummary({
+  integrity,
+}: {
+  integrity: LoadState<ArtifactIntegrityPayload>;
+}) {
+  if (integrity.status === "idle") {
+    return (
+      <p className="integrity-status" data-status="idle">
+        Integrity not checked.
+      </p>
+    );
+  }
+
+  if (integrity.status === "loading") {
+    return (
+      <p className="integrity-status" data-status="loading">
+        Checking artifact integrity...
+      </p>
+    );
+  }
+
+  if (integrity.status === "error") {
+    return (
+      <p className="integrity-status" data-status="mismatch">
+        Integrity check failed: {integrity.error}
+      </p>
+    );
+  }
+
+  const payload = integrity.data;
+  if (!payload) {
+    return (
+      <p className="integrity-status" data-status="mismatch">
+        Integrity check returned no data.
+      </p>
+    );
+  }
+
+  return (
+    <div
+      className="integrity-status"
+      data-status={payload.status}
+      data-testid="artifact-integrity-summary"
+    >
+      <strong>{payload.status.toUpperCase()}</strong>
+      <span>
+        OK {payload.status_counts.ok} / missing {payload.status_counts.missing} /
+        mismatch {payload.status_counts.mismatch}
+      </span>
     </div>
   );
 }

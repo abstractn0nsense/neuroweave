@@ -982,6 +982,38 @@ input[type="file"] {
   color: var(--color-success);
 }
 
+.integrity-status {
+  max-width: 340px;
+  margin: 0;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-subtle);
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 7px 9px;
+  text-align: right;
+}
+
+.integrity-status strong,
+.integrity-status span {
+  display: block;
+}
+
+.integrity-status[data-status="ok"] {
+  border-color: var(--color-success);
+  color: var(--color-success);
+}
+
+.integrity-status[data-status="missing"] {
+  border-color: var(--color-warning);
+  color: var(--color-warning);
+}
+
+.integrity-status[data-status="mismatch"] {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
 .run-meta span {
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-control);

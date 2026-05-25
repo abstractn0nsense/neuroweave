@@ -72,7 +72,10 @@ from eeg_io.bids_sidecars import (  # noqa: E402
     read_eeg_json,
 )
 from eeg_io.analysis_report import AnalysisReportError, write_analysis_report  # noqa: E402
-from eeg_io.artifact_manifest import ArtifactManifestError  # noqa: E402
+from eeg_io.artifact_manifest import (  # noqa: E402
+    ArtifactManifestError,
+    check_artifact_integrity,
+)
 from eeg_io.datasets import find_eeg_file_by_id, list_eeg_files  # noqa: E402
 from eeg_io.event_logs import (  # noqa: E402
     EventLogNormalizationError,
@@ -623,6 +626,13 @@ class QcSummaryResponse(BaseModel):
     run_id: str
     run_kind: str
     summary: dict
+
+
+class ArtifactIntegrityResponse(BaseModel):
+    run_id: str
+    dataset_id: str
+    run_kind: str
+    integrity: dict
 
 
 class ComparisonConfigPayload(BaseModel):
@@ -1533,6 +1543,29 @@ def get_run_artifact(run_id: str, filename: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="Artifact not found")
 
     return FileResponse(resolved_artifact_path)
+
+
+@app.get("/runs/{run_id}/artifact-integrity", response_model=ArtifactIntegrityResponse)
+def get_run_artifact_integrity(run_id: str) -> ArtifactIntegrityResponse:
+    run = _find_run_by_id(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    manifest_path = _run_artifact_manifest_path(run)
+    if manifest_path is None:
+        raise HTTPException(status_code=404, detail="Artifact manifest not found")
+
+    try:
+        integrity = check_artifact_integrity(manifest_path)
+    except ArtifactManifestError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return ArtifactIntegrityResponse(
+        run_id=run.run_id,
+        dataset_id=run.dataset_id,
+        run_kind=_run_kind_value(run),
+        integrity=integrity,
+    )
 
 
 @app.get("/datasets/{dataset_id}", response_model=DatasetResponse)
