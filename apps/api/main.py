@@ -27,6 +27,7 @@ for package_src in (
     sys.path.insert(0, str(REPO_ROOT / package_src))
 
 from eeg_core.domain import (  # noqa: E402
+    ChannelMetadata,
     ComparisonConfig,
     Dataset as IngestionDataset,
     DatasetStatus,
@@ -62,6 +63,11 @@ from eeg_processing import (  # noqa: E402
     generate_comparison_summary,
 )
 from eeg_processing.epoching import SUPPORTED_CONDITION_FIELDS  # noqa: E402
+from eeg_io.bids_sidecars import (  # noqa: E402
+    BidsSidecarError,
+    read_channels_tsv,
+    read_eeg_json,
+)
 from eeg_io.datasets import find_eeg_file_by_id, list_eeg_files  # noqa: E402
 from eeg_io.event_logs import (  # noqa: E402
     EventLogNormalizationError,
@@ -345,6 +351,14 @@ class SampleDatasetsResponse(BaseModel):
     samples: list[SampleDataset]
 
 
+class ChannelMetadataPayload(BaseModel):
+    name: str
+    type: str | None = None
+    units: str | None = None
+    status: str | None = None
+    status_description: str | None = None
+
+
 class DatasetMetadata(BaseModel):
     id: str
     format: str
@@ -352,6 +366,9 @@ class DatasetMetadata(BaseModel):
     sampling_rate: float
     duration_seconds: float
     channel_names: list[str]
+    channel_details: list[ChannelMetadataPayload] = Field(default_factory=list)
+    line_frequency_hz: float | None = None
+    reference: str | None = None
 
 
 class CreateDatasetRequest(BaseModel):
@@ -401,6 +418,12 @@ class RecordingResponse(BaseModel):
 
 
 class EegUploadResponse(BaseModel):
+    dataset: DatasetResponse
+    uploaded_file: UploadedFileResponse
+    recording: RecordingResponse
+
+
+class SidecarUploadResponse(BaseModel):
     dataset: DatasetResponse
     uploaded_file: UploadedFileResponse
     recording: RecordingResponse
@@ -791,6 +814,12 @@ def get_sample_dataset_metadata(dataset_id: str) -> DatasetMetadata:
         sampling_rate=metadata.sampling_rate_hz,
         duration_seconds=metadata.duration_seconds,
         channel_names=metadata.channel_names,
+        channel_details=[
+            _channel_metadata_payload(channel)
+            for channel in metadata.channel_details
+        ],
+        line_frequency_hz=metadata.line_frequency_hz,
+        reference=metadata.reference,
     )
 
 
@@ -848,6 +877,53 @@ def upload_dataset_eeg_file(
         dataset=_dataset_response(updated_dataset),
         uploaded_file=_uploaded_file_response(uploaded_file),
         recording=_recording_response(recording),
+    )
+
+
+@app.post(
+    "/datasets/{dataset_id}/files/sidecars",
+    response_model=SidecarUploadResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def upload_dataset_sidecar_file(
+    dataset_id: str,
+    file: UploadFile = File(...),
+) -> SidecarUploadResponse:
+    dataset = registry_repository.get_dataset(dataset_id)
+    if dataset is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    recording = registry_repository.get_recording(dataset_id)
+    if recording is None:
+        raise HTTPException(status_code=409, detail="Recording not found")
+
+    stored_path = _store_upload_file(
+        file=file,
+        destination_directory=registry_repository.metadata_directory(dataset_id),
+    )
+
+    try:
+        enriched_recording = _recording_with_sidecar(recording, stored_path)
+    except BidsSidecarError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    uploaded_file = IngestionUploadedFile(
+        file_id=_new_id("file"),
+        dataset_id=dataset_id,
+        kind=UploadedFileKind.METADATA,
+        original_filename=file.filename or stored_path.name,
+        stored_path=str(stored_path),
+        content_type=file.content_type,
+        size_bytes=stored_path.stat().st_size,
+        checksum_sha256=_sha256_file(stored_path),
+    )
+    registry_repository.save_uploaded_file(uploaded_file)
+    registry_repository.save_recording(enriched_recording)
+
+    return SidecarUploadResponse(
+        dataset=_dataset_response(dataset),
+        uploaded_file=_uploaded_file_response(uploaded_file),
+        recording=_recording_response(enriched_recording),
     )
 
 
@@ -1386,7 +1462,61 @@ def _recording_response(recording: Recording) -> RecordingResponse:
             sampling_rate=recording.metadata.sampling_rate_hz,
             duration_seconds=recording.metadata.duration_seconds,
             channel_names=recording.metadata.channel_names,
+            channel_details=[
+                _channel_metadata_payload(channel)
+                for channel in recording.metadata.channel_details
+            ],
+            line_frequency_hz=recording.metadata.line_frequency_hz,
+            reference=recording.metadata.reference,
         ),
+    )
+
+
+def _recording_with_sidecar(recording: Recording, sidecar_path: Path) -> Recording:
+    filename = sidecar_path.name.lower()
+    metadata = recording.metadata
+    if filename.endswith("_channels.tsv"):
+        channels = read_channels_tsv(sidecar_path)
+        return replace(
+            recording,
+            metadata=replace(
+                metadata,
+                channel_details=[
+                    ChannelMetadata(
+                        name=channel.name,
+                        type=channel.type,
+                        units=channel.units,
+                        status=channel.status,
+                        status_description=channel.status_description,
+                    )
+                    for channel in channels
+                ],
+            ),
+        )
+
+    if filename.endswith("_eeg.json"):
+        sidecar = read_eeg_json(sidecar_path)
+        return replace(
+            recording,
+            metadata=replace(
+                metadata,
+                line_frequency_hz=sidecar.line_frequency_hz,
+                reference=sidecar.reference,
+            ),
+        )
+
+    raise BidsSidecarError(
+        "Unsupported BIDS sidecar filename; expected *_channels.tsv or *_eeg.json."
+    )
+
+
+def _channel_metadata_payload(channel: ChannelMetadata) -> ChannelMetadataPayload:
+    return ChannelMetadataPayload(
+        name=channel.name,
+        type=channel.type,
+        units=channel.units,
+        status=channel.status,
+        status_description=channel.status_description,
     )
 
 

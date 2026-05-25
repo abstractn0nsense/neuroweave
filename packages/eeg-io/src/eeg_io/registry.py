@@ -159,6 +159,7 @@ class JsonRegistryRepository:
         dataset_directory.mkdir(parents=True, exist_ok=True)
         self.eeg_directory(dataset.dataset_id).mkdir(parents=True, exist_ok=True)
         self.events_directory(dataset.dataset_id).mkdir(parents=True, exist_ok=True)
+        self.metadata_directory(dataset.dataset_id).mkdir(parents=True, exist_ok=True)
         _write_json(self.dataset_metadata_path(dataset.dataset_id), asdict(dataset))
         return dataset
 
@@ -191,6 +192,9 @@ class JsonRegistryRepository:
 
     def events_directory(self, dataset_id: str) -> Path:
         return self.dataset_directory(dataset_id) / "events"
+
+    def metadata_directory(self, dataset_id: str) -> Path:
+        return self.dataset_directory(dataset_id) / "metadata"
 
     def dataset_metadata_path(self, dataset_id: str) -> Path:
         return self.dataset_directory(dataset_id) / "metadata.json"
@@ -263,6 +267,7 @@ class JsonRegistryRepository:
         self.dataset_directory(dataset_id).mkdir(parents=True, exist_ok=True)
         self.eeg_directory(dataset_id).mkdir(parents=True, exist_ok=True)
         self.events_directory(dataset_id).mkdir(parents=True, exist_ok=True)
+        self.metadata_directory(dataset_id).mkdir(parents=True, exist_ok=True)
 
     def uploaded_files_path(self, dataset_id: str) -> Path:
         return self.dataset_directory(dataset_id) / "uploaded_files.json"

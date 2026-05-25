@@ -150,3 +150,154 @@ def test_upload_eeg_file_does_not_overwrite_existing_filename(tmp_path, monkeypa
     assert Path(stored_paths[1]).name == "sample_resting-1_raw.fif"
     assert Path(stored_paths[0]).is_file()
     assert Path(stored_paths[1]).is_file()
+
+
+def test_upload_channels_sidecar_enriches_recording_metadata(tmp_path, monkeypatch):
+    repository = JsonRegistryRepository(tmp_path / "uploads")
+    monkeypatch.setattr(api_main, "registry_repository", repository)
+    client = TestClient(api_main.app)
+    _create_dataset(client)
+    _upload_fixture_eeg(client)
+
+    sidecar_path = Path("tests/fixtures/bids/sub-001_task-oddball_channels.tsv")
+    with sidecar_path.open("rb") as sidecar_file:
+        response = client.post(
+            "/datasets/dataset-001/files/sidecars",
+            files={
+                "file": (
+                    sidecar_path.name,
+                    sidecar_file,
+                    "text/tab-separated-values",
+                )
+            },
+        )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["uploaded_file"]["kind"] == "metadata"
+    assert payload["uploaded_file"]["original_filename"].endswith("_channels.tsv")
+    assert payload["recording"]["metadata"]["channel_details"] == [
+        {
+            "name": "Fp1",
+            "type": "EEG",
+            "units": "uV",
+            "status": "good",
+            "status_description": None,
+        },
+        {
+            "name": "Fp2",
+            "type": "EEG",
+            "units": "uV",
+            "status": "bad",
+            "status_description": "noisy electrode",
+        },
+        {
+            "name": "EOG1",
+            "type": "EOG",
+            "units": None,
+            "status": None,
+            "status_description": None,
+        },
+    ]
+    stored_recording = repository.get_recording("dataset-001")
+    assert stored_recording is not None
+    assert stored_recording.metadata.channel_details[1].status == "bad"
+
+
+def test_upload_eeg_json_sidecar_enriches_line_frequency_and_reference(
+    tmp_path,
+    monkeypatch,
+):
+    repository = JsonRegistryRepository(tmp_path / "uploads")
+    monkeypatch.setattr(api_main, "registry_repository", repository)
+    client = TestClient(api_main.app)
+    _create_dataset(client)
+    _upload_fixture_eeg(client)
+
+    sidecar_path = Path("tests/fixtures/bids/sub-001_task-oddball_eeg.json")
+    with sidecar_path.open("rb") as sidecar_file:
+        response = client.post(
+            "/datasets/dataset-001/files/sidecars",
+            files={
+                "file": (
+                    sidecar_path.name,
+                    sidecar_file,
+                    "application/json",
+                )
+            },
+        )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["uploaded_file"]["kind"] == "metadata"
+    assert payload["recording"]["metadata"]["line_frequency_hz"] == 60.0
+    assert payload["recording"]["metadata"]["reference"] == "Cz"
+    stored_recording = repository.get_recording("dataset-001")
+    assert stored_recording is not None
+    assert stored_recording.metadata.line_frequency_hz == 60.0
+    assert stored_recording.metadata.reference == "Cz"
+
+
+def test_upload_sidecar_requires_recording(tmp_path, monkeypatch):
+    repository = JsonRegistryRepository(tmp_path / "uploads")
+    monkeypatch.setattr(api_main, "registry_repository", repository)
+    client = TestClient(api_main.app)
+    _create_dataset(client)
+
+    response = client.post(
+        "/datasets/dataset-001/files/sidecars",
+        files={"file": ("sub-001_task-rest_eeg.json", b"{}")},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Recording not found"
+
+
+def test_upload_sidecar_rejects_unsupported_filename(tmp_path, monkeypatch):
+    repository = JsonRegistryRepository(tmp_path / "uploads")
+    monkeypatch.setattr(api_main, "registry_repository", repository)
+    client = TestClient(api_main.app)
+    _create_dataset(client)
+    _upload_fixture_eeg(client)
+
+    response = client.post(
+        "/datasets/dataset-001/files/sidecars",
+        files={"file": ("participants.tsv", b"participant_id\nsub-001\n")},
+    )
+
+    assert response.status_code == 422
+    assert "expected *_channels.tsv or *_eeg.json" in response.json()["detail"]
+
+
+def _create_dataset(client: TestClient) -> None:
+    client.post("/projects", json={"project_id": "project-001", "name": "Memory EEG"})
+    client.post(
+        "/projects/project-001/experiments",
+        json={"experiment_id": "experiment-001", "name": "Oddball task"},
+    )
+    client.post(
+        "/datasets",
+        json={
+            "dataset_id": "dataset-001",
+            "project_id": "project-001",
+            "experiment_id": "experiment-001",
+            "participant_label": "sub-001",
+            "session_label": "ses-001",
+        },
+    )
+
+
+def _upload_fixture_eeg(client: TestClient) -> None:
+    fixture_path = Path("tests/fixtures/eeg/sample_resting_raw.fif")
+    with fixture_path.open("rb") as eeg_file:
+        response = client.post(
+            "/datasets/dataset-001/files/eeg",
+            files={
+                "file": (
+                    "sample_resting_raw.fif",
+                    eeg_file,
+                    "application/octet-stream",
+                )
+            },
+        )
+    assert response.status_code == 201

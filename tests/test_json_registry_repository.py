@@ -90,6 +90,7 @@ def test_registry_persists_dataset_metadata_and_file_directories(tmp_path):
     assert repository.list_datasets(project_id="project-001") == [dataset]
     assert repository.eeg_directory("dataset-001").is_dir()
     assert repository.events_directory("dataset-001").is_dir()
+    assert repository.metadata_directory("dataset-001").is_dir()
 
     metadata = json.loads(
         repository.dataset_metadata_path("dataset-001").read_text(encoding="utf-8")
