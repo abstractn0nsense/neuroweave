@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="NeuroWeave placeholder icon">
+  <rect width="256" height="256" rx="48" fill="#0f141a"/>
+  <path d="M44 143c21-58 46-58 67 0s46 58 67 0 34-43 34-43" fill="none" stroke="#66d9ef" stroke-width="16" stroke-linecap="round"/>
+  <path d="M44 113c21 58 46 58 67 0s46-58 67 0 34 43 34 43" fill="none" stroke="#f6c453" stroke-width="16" stroke-linecap="round"/>
+  <circle cx="128" cy="128" r="18" fill="#ffffff"/>
+</svg>

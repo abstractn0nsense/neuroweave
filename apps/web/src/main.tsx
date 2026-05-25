@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
 import "./styles.css";
 
@@ -275,6 +275,45 @@ type ComparisonSummaryResponse = {
   erp_run: ErpRun;
 };
 
+type AnalysisReportResponse = {
+  report: Record<string, unknown>;
+  erp_run: ErpRun;
+  report_url: string;
+  report_path: string;
+};
+
+type ArtifactIntegrityItem = {
+  logical_name: string;
+  artifact_type: string;
+  path: string;
+  expected_size_bytes: number | null;
+  expected_checksum_sha256: string | null;
+  status: "ok" | "missing" | "mismatch";
+  actual_size_bytes: number | null;
+  actual_checksum_sha256: string | null;
+};
+
+type ArtifactIntegrityPayload = {
+  schema_version: number;
+  manifest_path: string;
+  artifact_root: string;
+  artifact_count: number;
+  status: "ok" | "missing" | "mismatch";
+  status_counts: {
+    ok: number;
+    missing: number;
+    mismatch: number;
+  };
+  artifacts: ArtifactIntegrityItem[];
+};
+
+type ArtifactIntegrityResponse = {
+  run_id: string;
+  dataset_id: string;
+  run_kind: string;
+  integrity: ArtifactIntegrityPayload;
+};
+
 type QcSummaryResponse = {
   dataset_id: string;
   run_id: string;
@@ -313,10 +352,17 @@ type NoticeState = {
 
 type MappingKey = keyof EventColumnMapping;
 type ThemeMode = "dark" | "light";
+type WorkspaceMode = "setup" | "analysis";
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
 const THEME_STORAGE_KEY = "neuroweave-theme";
+const ACTIVE_DATASET_STORAGE_KEY = "neuroweave-active-dataset";
+const WORKSPACE_MODE_STORAGE_KEY = "neuroweave-workspace-mode";
+const SUPPORTED_EEG_EXTENSIONS = [".fif", ".edf", ".bdf", ".set", ".vhdr"];
+const SUPPORTED_EVENT_EXTENSIONS = [".csv", ".tsv"];
+const EEG_EXAMPLE_PATH = "tests/fixtures/eeg/sample_resting_raw.fif";
+const EVENT_EXAMPLE_PATH = "tests/fixtures/events/psychopy_minimal.csv";
 
 const MAPPING_FIELDS: { key: MappingKey; label: string; required?: boolean }[] = [
   { key: "onset_seconds", label: "Onset", required: true },
@@ -455,7 +501,7 @@ function App() {
   });
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [selectedExperimentId, setSelectedExperimentId] = useState("");
-  const [activeDatasetId, setActiveDatasetId] = useState("");
+  const [activeDatasetId, setActiveDatasetId] = useState(getInitialActiveDatasetId);
   const [selectedSampleId, setSelectedSampleId] = useState<string | null>(null);
   const [metadata, setMetadata] = useState<LoadState<DatasetMetadata>>({
     status: "idle",
@@ -477,6 +523,12 @@ function App() {
   });
   const [eegFile, setEegFile] = useState<File | null>(null);
   const [eventFile, setEventFile] = useState<File | null>(null);
+  const [uploadedEegFilename, setUploadedEegFilename] = useState<string | null>(
+    null,
+  );
+  const [uploadedEventFilename, setUploadedEventFilename] = useState<string | null>(
+    null,
+  );
   const [eventPreview, setEventPreview] = useState<EventPreview | null>(null);
   const [mapping, setMapping] = useState<Record<MappingKey, string>>(EMPTY_MAPPING);
   const [eventMappingPreset, setEventMappingPreset] =
@@ -512,11 +564,17 @@ function App() {
     data: null,
     error: null,
   });
+  const [artifactIntegrity, setArtifactIntegrity] = useState<
+    Record<string, LoadState<ArtifactIntegrityPayload>>
+  >({});
   const [comparisonConfig, setComparisonConfig] = useState(
     DEFAULT_COMPARISON_CONFIG,
   );
   const [notice, setNotice] = useState<NoticeState>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [workspaceMode, setWorkspaceMode] =
+    useState<WorkspaceMode>(getInitialWorkspaceMode);
+  const workspaceModeChosenRef = useRef(false);
 
   const selectedProject = useMemo(
     () =>
@@ -568,10 +626,27 @@ function App() {
     [erpRuns.data],
   );
 
+  function chooseWorkspaceMode(mode: WorkspaceMode) {
+    workspaceModeChosenRef.current = true;
+    setWorkspaceMode(mode);
+  }
+
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     window.localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
+
+  useEffect(() => {
+    if (activeDatasetId) {
+      window.localStorage.setItem(ACTIVE_DATASET_STORAGE_KEY, activeDatasetId);
+    } else {
+      window.localStorage.removeItem(ACTIVE_DATASET_STORAGE_KEY);
+    }
+  }, [activeDatasetId]);
+
+  useEffect(() => {
+    window.localStorage.setItem(WORKSPACE_MODE_STORAGE_KEY, workspaceMode);
+  }, [workspaceMode]);
 
   useEffect(() => {
     void refreshWorkspace();
@@ -963,6 +1038,8 @@ function App() {
       setActiveDatasetId(dataset.dataset_id);
       setEventPreview(null);
       setEventLog(null);
+      setUploadedEegFilename(null);
+      setUploadedEventFilename(null);
       setValidation(null);
       setQcSummary({ status: "success", data: null, error: null });
       setPreprocessingRuns({ status: "success", data: [], error: null });
@@ -976,13 +1053,45 @@ function App() {
     });
   }
 
+  function chooseEegFile(file: File | null) {
+    if (file && !hasSupportedExtension(file, SUPPORTED_EEG_EXTENSIONS)) {
+      setEegFile(null);
+      setNotice({
+        tone: "error",
+        message:
+          "Unsupported EEG file. Choose a FIF, EDF, BDF, SET, or BrainVision VHDR file.",
+      });
+      return;
+    }
+
+    setEegFile(file);
+  }
+
+  function chooseEventFile(file: File | null) {
+    if (file && !hasSupportedExtension(file, SUPPORTED_EVENT_EXTENSIONS)) {
+      setEventFile(null);
+      setNotice({
+        tone: "error",
+        message: "Unsupported event log. Choose a CSV or TSV file.",
+      });
+      return;
+    }
+
+    setEventFile(file);
+  }
+
   async function uploadEegFile() {
     if (!activeDatasetId || !eegFile) {
-      setNotice({ tone: "error", message: "Select a dataset and EEG file." });
+      setNotice({
+        tone: "error",
+        message:
+          "Select an active dataset and choose a supported EEG file before uploading.",
+      });
       return;
     }
 
     await runAction("eeg-upload", async () => {
+      const uploadedFilename = eegFile.name;
       const formData = new FormData();
       formData.append("file", eegFile);
       const response = await requestJson<{ dataset: Dataset }>(
@@ -993,6 +1102,7 @@ function App() {
         },
       );
       setEegFile(null);
+      setUploadedEegFilename(uploadedFilename);
       updateDatasetInState(response.dataset);
       setValidation(null);
       setNotice({ tone: "ok", message: "EEG file uploaded." });
@@ -1001,11 +1111,16 @@ function App() {
 
   async function uploadEventFile() {
     if (!activeDatasetId || !eventFile) {
-      setNotice({ tone: "error", message: "Select a dataset and event file." });
+      setNotice({
+        tone: "error",
+        message:
+          "Select an active dataset and choose a CSV or TSV event log before uploading.",
+      });
       return;
     }
 
     await runAction("event-upload", async () => {
+      const uploadedFilename = eventFile.name;
       const formData = new FormData();
       formData.append("file", eventFile);
       const response = await requestJson<EventUploadResponse>(
@@ -1016,6 +1131,7 @@ function App() {
         },
       );
       setEventFile(null);
+      setUploadedEventFilename(uploadedFilename);
       setEventPreview(response.preview);
       setEventLog(null);
       setValidation(null);
@@ -1222,6 +1338,88 @@ function App() {
         message: `Export bundle downloaded for ${run.run_id}.`,
       });
     });
+  }
+
+  async function generateErpAnalysisReport(run: ErpRun) {
+    if (!isErpExportReady(run)) {
+      setNotice({
+        tone: "error",
+        message: "Report is available after a completed ERP run writes artifacts.",
+      });
+      return;
+    }
+
+    await runAction(`report-${run.run_id}`, async () => {
+      const response = await postJson<AnalysisReportResponse>(
+        `/erp-runs/${encodeURIComponent(run.run_id)}/analysis-report`,
+        {},
+      );
+      setErpRuns((current) => ({
+        status: "success",
+        data: (current.data ?? []).map((item) =>
+          item.run_id === response.erp_run.run_id ? response.erp_run : item,
+        ),
+        error: null,
+      }));
+      setNotice({
+        tone: "ok",
+        message: `Analysis report generated for ${run.run_id}.`,
+      });
+    });
+  }
+
+  function openErpAnalysisReport(run: ErpRun) {
+    const reportUrl = run.output_metadata.analysis_report_url;
+    if (typeof reportUrl !== "string" || !reportUrl) {
+      setNotice({
+        tone: "error",
+        message: "Generate the analysis report before opening it.",
+      });
+      return;
+    }
+    window.open(`${API_BASE_URL}${reportUrl}`, "_blank", "noopener,noreferrer");
+  }
+
+  async function checkArtifactIntegrity(run: ErpRun) {
+    if (!isErpExportReady(run)) {
+      setNotice({
+        tone: "error",
+        message: "Artifact integrity check requires a completed run manifest.",
+      });
+      return;
+    }
+
+    setArtifactIntegrity((current) => ({
+      ...current,
+      [run.run_id]: { status: "loading", data: null, error: null },
+    }));
+    try {
+      const response = await requestJson<ArtifactIntegrityResponse>(
+        `/runs/${encodeURIComponent(run.run_id)}/artifact-integrity`,
+      );
+      setArtifactIntegrity((current) => ({
+        ...current,
+        [run.run_id]: {
+          status: "success",
+          data: response.integrity,
+          error: null,
+        },
+      }));
+      setNotice({
+        tone: response.integrity.status === "ok" ? "ok" : "error",
+        message: `Artifact integrity ${response.integrity.status}.`,
+      });
+    } catch (error: unknown) {
+      setArtifactIntegrity((current) => ({
+        ...current,
+        [run.run_id]: {
+          status: "error",
+          data: null,
+          error: getErrorMessage(error),
+        },
+      }));
+      setNotice({ tone: "error", message: getErrorMessage(error) });
+    }
   }
 
   async function cancelPreprocessingRun(runId: string) {
@@ -1482,63 +1680,148 @@ function App() {
           <div className={`notice notice-${notice.tone}`}>{notice.message}</div>
         ) : null}
 
-        <div className="workbench-grid">
-          <aside className="workbench-sidebar" aria-label="Study and dataset setup">
-            <section className="panel setup-panel" aria-labelledby="setup-title">
-              <div className="panel-header">
-                <h2 id="setup-title">Study Setup</h2>
-              </div>
-              <StudySetup
-                busyAction={busyAction}
-                experimentForm={experimentForm}
-                experiments={experiments}
-                onCreateExperiment={createExperiment}
-                onCreateProject={createProject}
-                onExperimentFormChange={setExperimentForm}
-                onProjectFormChange={setProjectForm}
-                onSelectExperiment={setSelectedExperimentId}
-                onSelectProject={setSelectedProjectId}
-                projectForm={projectForm}
-                projects={projects}
-                selectedExperimentId={selectedExperimentId}
-                selectedProjectId={selectedProjectId}
-              />
-            </section>
+        <nav className="workspace-mode-tabs" aria-label="Workspace mode">
+          <button
+            aria-pressed={workspaceMode === "setup"}
+            className="workspace-mode-button"
+            onClick={() => chooseWorkspaceMode("setup")}
+            type="button"
+          >
+            Setup
+          </button>
+          <button
+            aria-pressed={workspaceMode === "analysis"}
+            className="workspace-mode-button"
+            onClick={() => chooseWorkspaceMode("analysis")}
+            type="button"
+          >
+            Analysis
+          </button>
+          {workspaceMode === "analysis" ? (
+            <span className="workspace-mode-context">Study Setup</span>
+          ) : null}
+        </nav>
 
-            <section className="panel dataset-panel" aria-labelledby="datasets-title">
-              <div className="panel-header compact-header">
-                <div>
-                  <h2 id="datasets-title">Dataset Queue</h2>
-                  <p className="subtle">
-                    {selectedProject
-                      ? selectedExperiment
-                        ? `${selectedProject.name} / ${selectedExperiment.name}`
-                        : selectedProject.name
-                      : "Select study context"}
-                  </p>
+        {workspaceMode === "setup" ? (
+          <section
+            className="setup-workspace"
+            aria-label="Study and dataset setup"
+            data-testid="setup-workspace"
+          >
+            <div className="setup-column">
+              <section className="panel setup-panel" aria-labelledby="setup-title">
+                <div className="panel-header">
+                  <h2 id="setup-title">Study Setup</h2>
                 </div>
-              </div>
-              <DatasetSection
-                activeDatasetId={activeDatasetId}
-                busyAction={busyAction}
-                datasetForm={datasetForm}
-                datasets={datasets}
-                onCreateDataset={createDataset}
-                onDatasetFormChange={setDatasetForm}
-                onSelectDataset={(datasetId) => {
-                  setActiveDatasetId(datasetId);
-                  setEventPreview(null);
-                  setEventLog(null);
-                  setValidation(null);
-                  setEpochConfig(DEFAULT_EPOCH_CONFIG);
-                }}
-                selectedExperimentId={selectedExperimentId}
-                selectedProjectId={selectedProjectId}
-              />
-            </section>
-          </aside>
+                <StudySetup
+                  busyAction={busyAction}
+                  experimentForm={experimentForm}
+                  experiments={experiments}
+                  onCreateExperiment={createExperiment}
+                  onCreateProject={createProject}
+                  onExperimentFormChange={setExperimentForm}
+                  onProjectFormChange={setProjectForm}
+                  onSelectExperiment={setSelectedExperimentId}
+                  onSelectProject={setSelectedProjectId}
+                  projectForm={projectForm}
+                  projects={projects}
+                  selectedExperimentId={selectedExperimentId}
+                  selectedProjectId={selectedProjectId}
+                />
+              </section>
 
-          <section className="workbench-main">
+              <section className="panel dataset-panel" aria-labelledby="datasets-title">
+                <div className="panel-header compact-header">
+                  <div>
+                    <h2 id="datasets-title">Dataset Queue</h2>
+                    <p className="subtle">
+                      {selectedProject
+                        ? selectedExperiment
+                          ? `${selectedProject.name} / ${selectedExperiment.name}`
+                          : selectedProject.name
+                        : "Select study context"}
+                    </p>
+                  </div>
+                </div>
+                <DatasetSection
+                  activeDatasetId={activeDatasetId}
+                  busyAction={busyAction}
+                  datasetForm={datasetForm}
+                  datasets={datasets}
+                  onCreateDataset={createDataset}
+                  onDatasetFormChange={setDatasetForm}
+                  onSelectDataset={(datasetId) => {
+                    setActiveDatasetId(datasetId);
+                    setEventPreview(null);
+                    setEventLog(null);
+                    setUploadedEegFilename(null);
+                    setUploadedEventFilename(null);
+                    setValidation(null);
+                    setEpochConfig(DEFAULT_EPOCH_CONFIG);
+                  }}
+                  selectedExperimentId={selectedExperimentId}
+                  selectedProjectId={selectedProjectId}
+                />
+              </section>
+            </div>
+
+            <div className="setup-column">
+              <section
+                className="panel active-context-panel"
+                aria-labelledby="setup-active-context-title"
+              >
+                <div className="panel-header">
+                  <div>
+                    <h2 id="setup-active-context-title">Active Dataset</h2>
+                    <p className="subtle">
+                      {activeDataset
+                        ? `${activeDataset.dataset_id} / ${activeDataset.status}`
+                        : "Create or select a dataset"}
+                    </p>
+                  </div>
+                  {activeDataset ? (
+                    <button
+                      className="primary-button"
+                      onClick={() => chooseWorkspaceMode("analysis")}
+                      type="button"
+                    >
+                      Continue Analysis
+                    </button>
+                  ) : null}
+                </div>
+                <ActiveDatasetSummary
+                  activeDataset={activeDataset}
+                  eventLog={eventLog}
+                  selectedExperiment={selectedExperiment}
+                  selectedProject={selectedProject}
+                  validation={validation}
+                />
+              </section>
+
+              <section className="panel" aria-labelledby="sample-list-title">
+                <div className="panel-header">
+                  <h2 id="sample-list-title">Sample Metadata</h2>
+                  {selectedSample ? (
+                    <span className="file-pill">{selectedSample.filename}</span>
+                  ) : null}
+                </div>
+                <div className="sample-grid">
+                  <SampleList
+                    onSelect={setSelectedSampleId}
+                    samples={samples}
+                    selectedSampleId={selectedSampleId}
+                  />
+                  <MetadataView metadata={metadata} selectedSample={selectedSample} />
+                </div>
+              </section>
+            </div>
+          </section>
+        ) : (
+          <section
+            className="analysis-workspace"
+            aria-label="Analysis workspace"
+            data-testid="analysis-workspace"
+          >
             <section
               className="panel active-context-panel"
               aria-labelledby="active-context-title"
@@ -1556,7 +1839,15 @@ function App() {
                   <span className={`status-badge badge-${activeDataset.status}`}>
                     {activeDataset.status}
                   </span>
-                ) : null}
+                ) : (
+                  <button
+                    className="secondary-button"
+                    onClick={() => chooseWorkspaceMode("setup")}
+                    type="button"
+                  >
+                    Open Setup
+                  </button>
+                )}
               </div>
               <ActiveDatasetSummary
                 activeDataset={activeDataset}
@@ -1590,8 +1881,8 @@ function App() {
                   eventRowFilter={eventRowFilter}
                   mapping={mapping}
                   onBeginPreprocessing={beginPreprocessingHandoff}
-                  onEegFileChange={setEegFile}
-                  onEventFileChange={setEventFile}
+                  onEegFileChange={chooseEegFile}
+                  onEventFileChange={chooseEventFile}
                   onEventMappingPresetChange={(preset) => {
                     setEventMappingPreset(preset);
                     if (preset && eventPreview) {
@@ -1608,6 +1899,8 @@ function App() {
                   onValidate={validateDataset}
                   preprocessingConfig={preprocessingConfig}
                   preprocessingRuns={preprocessingRuns}
+                  uploadedEegFilename={uploadedEegFilename}
+                  uploadedEventFilename={uploadedEventFilename}
                   validation={validation}
                 />
               </section>
@@ -1653,9 +1946,13 @@ function App() {
                   completedErpRuns={completedErpRuns}
                   erpConfig={erpConfig}
                   erpRuns={erpRuns}
+                  artifactIntegrity={artifactIntegrity}
                   onComparisonConfigChange={setComparisonConfig}
                   onDownloadErpExportBundle={downloadErpExportBundle}
                   onErpConfigChange={setErpConfig}
+                  onGenerateErpAnalysisReport={generateErpAnalysisReport}
+                  onCheckArtifactIntegrity={checkArtifactIntegrity}
+                  onOpenErpAnalysisReport={openErpAnalysisReport}
                   onStartComparisonSummary={beginComparisonSummary}
                   onStartErpRun={beginErpRun}
                 />
@@ -1674,26 +1971,9 @@ function App() {
                 </div>
                 <QcDashboard qcSummary={qcSummary} />
               </section>
-
-              <section className="panel" aria-labelledby="sample-list-title">
-                <div className="panel-header">
-                  <h2 id="sample-list-title">Sample Metadata</h2>
-                  {selectedSample ? (
-                    <span className="file-pill">{selectedSample.filename}</span>
-                  ) : null}
-                </div>
-                <div className="sample-grid">
-                  <SampleList
-                    onSelect={setSelectedSampleId}
-                    samples={samples}
-                    selectedSampleId={selectedSampleId}
-                  />
-                  <MetadataView metadata={metadata} selectedSample={selectedSample} />
-                </div>
-              </section>
             </section>
           </section>
-        </div>
+        )}
       </section>
     </main>
   );
@@ -2044,6 +2324,7 @@ function DatasetSection({
           <button
             className="dataset-row"
             data-active={dataset.dataset_id === activeDatasetId}
+            data-testid={`dataset-row-${dataset.dataset_id}`}
             key={dataset.dataset_id}
             onClick={() => onSelectDataset(dataset.dataset_id)}
             type="button"
@@ -2087,6 +2368,8 @@ function IntakeSection({
   onValidate,
   preprocessingConfig,
   preprocessingRuns,
+  uploadedEegFilename,
+  uploadedEventFilename,
   validation,
 }: {
   activeDataset: Dataset | null;
@@ -2114,11 +2397,29 @@ function IntakeSection({
   onValidate: () => void;
   preprocessingConfig: typeof DEFAULT_PREPROCESSING_CONFIG;
   preprocessingRuns: LoadState<PreprocessingRun[]>;
+  uploadedEegFilename: string | null;
+  uploadedEventFilename: string | null;
   validation: ValidationReport | null;
 }) {
   const disabled = !activeDataset;
   const canContinue = validation?.valid === true || activeDataset?.status === "valid";
   const configError = getPreprocessingConfigError(preprocessingConfig);
+  const eegStatus = getUploadStatus({
+    disabled,
+    selectedFilename: eegFile?.name ?? null,
+    uploadedFilename: uploadedEegFilename,
+    uploadedId: activeDataset?.recording_id ?? null,
+    emptyText: "No EEG file selected",
+    uploadedText: "EEG recording uploaded",
+  });
+  const eventStatus = getUploadStatus({
+    disabled,
+    selectedFilename: eventFile?.name ?? null,
+    uploadedFilename: uploadedEventFilename,
+    uploadedId: activeDataset?.event_log_id ?? null,
+    emptyText: "No event log selected",
+    uploadedText: "Event log uploaded",
+  });
 
   return (
     <div className="intake-stack">
@@ -2129,13 +2430,28 @@ function IntakeSection({
         </div>
         <div className="upload-grid">
           <div className="upload-group">
-            <h4>EEG Recording</h4>
+            <div className="upload-heading">
+              <h4>EEG Recording</h4>
+              <span className="upload-state" data-state={eegStatus.state}>
+                {eegStatus.label}
+              </span>
+            </div>
+            <p className="upload-help">
+              Supported formats: FIF, EDF, BDF, EEGLAB SET, BrainVision VHDR.
+            </p>
+            <p className="upload-example">
+              Example: <code>{EEG_EXAMPLE_PATH}</code>
+            </p>
             <input
+              accept={SUPPORTED_EEG_EXTENSIONS.join(",")}
               data-testid="eeg-file-input"
               disabled={disabled}
               onChange={(event) => onEegFileChange(event.target.files?.[0] ?? null)}
               type="file"
             />
+            <p className="upload-status" data-testid="eeg-upload-status">
+              {eegStatus.detail}
+            </p>
             <button
               className="secondary-button"
               data-testid="upload-eeg-button"
@@ -2145,9 +2461,24 @@ function IntakeSection({
             >
               Upload EEG
             </button>
+            <p className="upload-next-step">
+              Next: upload the matching event log, then review event mapping.
+            </p>
           </div>
           <div className="upload-group">
-            <h4>Event Log</h4>
+            <div className="upload-heading">
+              <h4>Event Log</h4>
+              <span className="upload-state" data-state={eventStatus.state}>
+                {eventStatus.label}
+              </span>
+            </div>
+            <p className="upload-help">
+              Supported formats: CSV or TSV. Include an onset column plus optional
+              duration, trial_type, response, correct, and reaction time columns.
+            </p>
+            <p className="upload-example">
+              Example: <code>{EVENT_EXAMPLE_PATH}</code>
+            </p>
             <input
               accept=".csv,.tsv,text/csv,text/tab-separated-values"
               data-testid="event-file-input"
@@ -2155,6 +2486,9 @@ function IntakeSection({
               onChange={(event) => onEventFileChange(event.target.files?.[0] ?? null)}
               type="file"
             />
+            <p className="upload-status" data-testid="event-upload-status">
+              {eventStatus.detail}
+            </p>
             <button
               className="secondary-button"
               data-testid="upload-events-button"
@@ -2164,6 +2498,9 @@ function IntakeSection({
             >
               Upload Events
             </button>
+            <p className="upload-next-step">
+              Next: confirm the previewed columns and save the event mapping.
+            </p>
           </div>
         </div>
       </section>
@@ -2482,13 +2819,16 @@ function RunWarnings({
   diagnostics,
   warnings,
 }: {
-  diagnostics: RunDiagnostics | Record<string, never>;
-  warnings: string[];
+  diagnostics?: RunDiagnostics | Record<string, never> | null;
+  warnings?: string[];
 }) {
   const structuredWarnings =
-    "warnings" in diagnostics && Array.isArray(diagnostics.warnings)
+    diagnostics &&
+    "warnings" in diagnostics &&
+    Array.isArray(diagnostics.warnings)
       ? diagnostics.warnings
       : [];
+  const unstructuredWarnings = Array.isArray(warnings) ? warnings : [];
 
   if (structuredWarnings.length > 0) {
     return (
@@ -2509,10 +2849,10 @@ function RunWarnings({
     );
   }
 
-  if (warnings.length === 0) {
+  if (unstructuredWarnings.length === 0) {
     return null;
   }
-  return <p className="muted">{warnings.join(" ")}</p>;
+  return <p className="muted">{unstructuredWarnings.join(" ")}</p>;
 }
 
 function EpochSection({
@@ -2780,6 +3120,7 @@ function ConditionCountSummary({
 
 function ErpSection({
   activeDataset,
+  artifactIntegrity,
   busyAction,
   comparisonConfig,
   completedEpochRuns,
@@ -2789,10 +3130,14 @@ function ErpSection({
   onComparisonConfigChange,
   onDownloadErpExportBundle,
   onErpConfigChange,
+  onGenerateErpAnalysisReport,
+  onCheckArtifactIntegrity,
+  onOpenErpAnalysisReport,
   onStartComparisonSummary,
   onStartErpRun,
 }: {
   activeDataset: Dataset | null;
+  artifactIntegrity: Record<string, LoadState<ArtifactIntegrityPayload>>;
   busyAction: string | null;
   comparisonConfig: typeof DEFAULT_COMPARISON_CONFIG;
   completedEpochRuns: EpochRun[];
@@ -2802,6 +3147,9 @@ function ErpSection({
   onComparisonConfigChange: (config: typeof DEFAULT_COMPARISON_CONFIG) => void;
   onDownloadErpExportBundle: (run: ErpRun) => void;
   onErpConfigChange: (config: typeof DEFAULT_ERP_CONFIG) => void;
+  onGenerateErpAnalysisReport: (run: ErpRun) => void;
+  onCheckArtifactIntegrity: (run: ErpRun) => void;
+  onOpenErpAnalysisReport: (run: ErpRun) => void;
   onStartComparisonSummary: () => void;
   onStartErpRun: () => void;
 }) {
@@ -2918,8 +3266,12 @@ function ErpSection({
         </button>
       </section>
       <ErpRunList
+        artifactIntegrity={artifactIntegrity}
         busyAction={busyAction}
+        onCheckArtifactIntegrity={onCheckArtifactIntegrity}
         onDownloadExportBundle={onDownloadErpExportBundle}
+        onGenerateAnalysisReport={onGenerateErpAnalysisReport}
+        onOpenAnalysisReport={onOpenErpAnalysisReport}
         runs={erpRuns}
       />
       <ComparisonSection
@@ -2934,12 +3286,20 @@ function ErpSection({
 }
 
 function ErpRunList({
+  artifactIntegrity,
   busyAction,
+  onCheckArtifactIntegrity,
   onDownloadExportBundle,
+  onGenerateAnalysisReport,
+  onOpenAnalysisReport,
   runs,
 }: {
+  artifactIntegrity: Record<string, LoadState<ArtifactIntegrityPayload>>;
   busyAction: string | null;
+  onCheckArtifactIntegrity: (run: ErpRun) => void;
   onDownloadExportBundle: (run: ErpRun) => void;
+  onGenerateAnalysisReport: (run: ErpRun) => void;
+  onOpenAnalysisReport: (run: ErpRun) => void;
   runs: LoadState<ErpRun[]>;
 }) {
   if (runs.status === "loading" || runs.status === "idle") {
@@ -2960,6 +3320,16 @@ function ErpRunList({
       {runData.map((run) => {
         const exportReady = isErpExportReady(run);
         const exportBusy = busyAction === `export-${run.run_id}`;
+        const reportBusy = busyAction === `report-${run.run_id}`;
+        const reportReady =
+          typeof run.output_metadata.analysis_report_url === "string" &&
+          run.output_metadata.analysis_report_url.length > 0;
+        const exportStatus = getErpExportStatus(run);
+        const integrity = artifactIntegrity[run.run_id] ?? {
+          status: "idle",
+          data: null,
+          error: null,
+        };
         return (
           <div className="run-row" key={run.run_id}>
             <div>
@@ -2972,6 +3342,52 @@ function ErpRunList({
                 <span>{formatErpMetadata(run.output_metadata)}</span>
                 <span>{run.config.plot_mode}</span>
               </div>
+              <p className="run-action-status" data-ready={exportReady}>
+                {exportStatus}
+              </p>
+              <ArtifactIntegritySummary integrity={integrity} />
+              <button
+                className="secondary-button compact-button"
+                data-testid={`integrity-erp-run-${run.run_id}`}
+                disabled={!exportReady || integrity.status === "loading"}
+                onClick={() => onCheckArtifactIntegrity(run)}
+                title={
+                  exportReady
+                    ? "Check artifact existence and checksums"
+                    : "Integrity check requires a completed artifact manifest"
+                }
+                type="button"
+              >
+                {integrity.status === "loading" ? "Checking..." : "Check Artifacts"}
+              </button>
+              <button
+                className="secondary-button compact-button"
+                data-testid={`report-erp-run-${run.run_id}`}
+                disabled={!exportReady || reportBusy}
+                onClick={() => onGenerateAnalysisReport(run)}
+                title={
+                  exportReady
+                    ? "Generate or refresh analysis_report.json"
+                    : exportStatus
+                }
+                type="button"
+              >
+                {reportBusy ? "Preparing..." : "Generate Report"}
+              </button>
+              <button
+                className="secondary-button compact-button"
+                data-testid={`open-report-erp-run-${run.run_id}`}
+                disabled={!reportReady}
+                onClick={() => onOpenAnalysisReport(run)}
+                title={
+                  reportReady
+                    ? "Open analysis report"
+                    : "Generate the report before opening it"
+                }
+                type="button"
+              >
+                Open Report
+              </button>
               <button
                 className="secondary-button compact-button"
                 data-testid={`export-erp-run-${run.run_id}`}
@@ -2979,8 +3395,10 @@ function ErpRunList({
                 onClick={() => onDownloadExportBundle(run)}
                 title={
                   exportReady
-                    ? "Download export bundle"
-                    : "Export is available after completed artifacts are ready"
+                    ? reportReady
+                      ? "Download ZIP with report, manifest, provenance, diagnostics, plots, and artifacts"
+                      : "Download ZIP; report will be generated first"
+                    : exportStatus
                 }
                 type="button"
               >
@@ -2995,6 +3413,59 @@ function ErpRunList({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function ArtifactIntegritySummary({
+  integrity,
+}: {
+  integrity: LoadState<ArtifactIntegrityPayload>;
+}) {
+  if (integrity.status === "idle") {
+    return (
+      <p className="integrity-status" data-status="idle">
+        Integrity not checked.
+      </p>
+    );
+  }
+
+  if (integrity.status === "loading") {
+    return (
+      <p className="integrity-status" data-status="loading">
+        Checking artifact integrity...
+      </p>
+    );
+  }
+
+  if (integrity.status === "error") {
+    return (
+      <p className="integrity-status" data-status="mismatch">
+        Integrity check failed: {integrity.error}
+      </p>
+    );
+  }
+
+  const payload = integrity.data;
+  if (!payload) {
+    return (
+      <p className="integrity-status" data-status="mismatch">
+        Integrity check returned no data.
+      </p>
+    );
+  }
+
+  return (
+    <div
+      className="integrity-status"
+      data-status={payload.status}
+      data-testid="artifact-integrity-summary"
+    >
+      <strong>{payload.status.toUpperCase()}</strong>
+      <span>
+        OK {payload.status_counts.ok} / missing {payload.status_counts.missing} /
+        mismatch {payload.status_counts.mismatch}
+      </span>
     </div>
   );
 }
@@ -3450,27 +3921,93 @@ function EventPreviewTable({ preview }: { preview: EventPreview }) {
 }
 
 function ValidationPanel({ report }: { report: ValidationReport }) {
+  const hasErrors = report.errors.length > 0;
+  const hasWarnings = report.warnings.length > 0;
+
   return (
-    <div className={`validation-panel ${report.valid ? "valid" : "invalid"}`}>
+    <div
+      className={`validation-panel ${report.valid ? "valid" : "invalid"}`}
+      data-testid="validation-panel"
+    >
       <div className="validation-heading">
-        <strong>{report.valid ? "Valid" : "Invalid"}</strong>
+        <div>
+          <strong>{report.valid ? "Valid" : "Invalid"}</strong>
+          <p>
+            {report.valid
+              ? "Preprocessing is available once EEG recording and mapped events are present."
+              : "Resolve blocking errors before preprocessing can start."}
+          </p>
+        </div>
         <span>
           {report.errors.length} errors / {report.warnings.length} warnings
         </span>
       </div>
-      {report.issues.length === 0 ? (
-        <p className="muted">Dataset is ready for preprocessing.</p>
+      {report.valid ? (
+        <p className="validation-ready" data-testid="validation-ready-message">
+          Dataset is ready for preprocessing. Configure filters below and start a
+          preprocessing run.
+        </p>
+      ) : null}
+      <ValidationIssueSection
+        emptyText="No blocking errors."
+        issues={report.errors}
+        severity="error"
+        title="Errors"
+      />
+      <ValidationIssueSection
+        emptyText="No warnings."
+        issues={report.warnings}
+        severity="warning"
+        title="Warnings"
+      />
+      {!hasErrors && !hasWarnings ? (
+        <p className="muted">All required validation checks passed.</p>
+      ) : null}
+    </div>
+  );
+}
+
+function ValidationIssueSection({
+  emptyText,
+  issues,
+  severity,
+  title,
+}: {
+  emptyText: string;
+  issues: ValidationIssue[];
+  severity: ValidationIssue["severity"];
+  title: string;
+}) {
+  return (
+    <section
+      className="validation-issue-section"
+      data-testid={`validation-${severity}s`}
+    >
+      <div className="validation-section-heading">
+        <h4>{title}</h4>
+        <span>{issues.length}</span>
+      </div>
+      {issues.length === 0 ? (
+        <p className="muted">{emptyText}</p>
       ) : (
         <ul className="issue-list">
-          {report.issues.map((issue) => (
-            <li key={`${issue.severity}-${issue.code}-${issue.field ?? ""}`}>
-              <strong>{issue.code}</strong>
-              <span>{issue.message}</span>
+          {issues.map((issue) => (
+            <li
+              data-severity={issue.severity}
+              key={`${issue.severity}-${issue.code}-${issue.field ?? ""}`}
+            >
+              <div className="issue-meta">
+                <span>{issue.severity}</span>
+                <code>{issue.code}</code>
+                <small>{issue.field ?? "dataset"}</small>
+              </div>
+              <strong>{issue.message}</strong>
+              <p>{getValidationActionHint(issue)}</p>
             </li>
           ))}
         </ul>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -4204,6 +4741,28 @@ function isErpExportReady(run: ErpRun): boolean {
   );
 }
 
+function getErpExportStatus(run: ErpRun): string {
+  if (run.status !== "completed") {
+    return `Export unavailable: run is ${run.status}.`;
+  }
+
+  if (
+    typeof run.output_metadata.artifact_manifest_path !== "string" ||
+    run.output_metadata.artifact_manifest_path.length === 0
+  ) {
+    return "Export unavailable: artifact manifest is not ready.";
+  }
+
+  if (
+    typeof run.output_metadata.analysis_report_url === "string" &&
+    run.output_metadata.analysis_report_url.length > 0
+  ) {
+    return "Export ready: report, manifest, plots, provenance, diagnostics, and artifacts.";
+  }
+
+  return "Export ready: report will be generated before ZIP download.";
+}
+
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Request failed";
 }
@@ -4241,6 +4800,115 @@ function getInitialTheme(): ThemeMode {
   return window.matchMedia("(prefers-color-scheme: light)").matches
     ? "light"
     : "dark";
+}
+
+function getInitialActiveDatasetId(): string {
+  return window.localStorage.getItem(ACTIVE_DATASET_STORAGE_KEY) ?? "";
+}
+
+function getInitialWorkspaceMode(): WorkspaceMode {
+  const storedMode = window.localStorage.getItem(WORKSPACE_MODE_STORAGE_KEY);
+  return storedMode === "analysis" ? "analysis" : "setup";
+}
+
+function hasSupportedExtension(file: File, extensions: string[]): boolean {
+  const filename = file.name.toLowerCase();
+  return extensions.some((extension) => filename.endsWith(extension));
+}
+
+function getUploadStatus({
+  disabled,
+  selectedFilename,
+  uploadedFilename,
+  uploadedId,
+  emptyText,
+  uploadedText,
+}: {
+  disabled: boolean;
+  selectedFilename: string | null;
+  uploadedFilename: string | null;
+  uploadedId: string | null;
+  emptyText: string;
+  uploadedText: string;
+}) {
+  if (disabled) {
+    return {
+      state: "waiting",
+      label: "Waiting",
+      detail: "Create or select a dataset before uploading.",
+    };
+  }
+
+  if (selectedFilename) {
+    return {
+      state: "ready",
+      label: "Ready",
+      detail: `Selected: ${selectedFilename}`,
+    };
+  }
+
+  if (uploadedFilename) {
+    return {
+      state: "uploaded",
+      label: "Uploaded",
+      detail: `${uploadedText}: ${uploadedFilename}`,
+    };
+  }
+
+  if (uploadedId) {
+    return {
+      state: "uploaded",
+      label: "Uploaded",
+      detail: uploadedText,
+    };
+  }
+
+  return {
+    state: "waiting",
+    label: "Required",
+    detail: emptyText,
+  };
+}
+
+function getValidationActionHint(issue: ValidationIssue): string {
+  const actionByCode: Record<string, string> = {
+    recording_missing:
+      "Upload a supported EEG recording, then run validation again.",
+    event_log_missing:
+      "Upload a CSV or TSV event log, save the event mapping, then revalidate.",
+    participant_label_missing:
+      "Add a participant label in Setup so exports can identify this dataset.",
+    session_label_missing:
+      "Add a session label in Setup if the study has repeated sessions.",
+    sampling_rate_invalid:
+      "Check that the EEG file is readable and contains valid sampling metadata.",
+    duration_invalid:
+      "Check the EEG recording duration before continuing with preprocessing.",
+    channels_missing:
+      "Use an EEG recording with channel names and at least one valid channel.",
+    event_log_empty:
+      "Review event mapping and row filters so at least one event is normalized.",
+    event_onset_out_of_range:
+      "Align event onset units/timing with the EEG recording duration.",
+    event_duration_missing:
+      "Continue if fixed epoch windows are intended, or map a duration column.",
+    event_response_missing:
+      "Continue if response analysis is not required, or map a response column.",
+    event_correct_missing:
+      "Continue if accuracy is not needed, or map a correct/accuracy column.",
+    event_reaction_time_missing:
+      "Continue if reaction-time analysis is not needed, or map an RT column.",
+  };
+
+  if (actionByCode[issue.code]) {
+    return `Next action: ${actionByCode[issue.code]}`;
+  }
+
+  if (issue.severity === "error") {
+    return "Next action: Fix this blocking issue and run validation again.";
+  }
+
+  return "Next action: Review whether this warning affects the analysis plan.";
 }
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

@@ -1,0 +1,71 @@
+{
+  "name": "@neuroweave/desktop",
+  "private": true,
+  "version": "0.1.0",
+  "author": "NeuroWeave",
+  "description": "Electron shell for the local NeuroWeave web UI.",
+  "homepage": "https://github.com/abstractn0nsense/neuroweave",
+  "main": "src/main.cjs",
+  "scripts": {
+    "build:icon": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/build_desktop_icon.ps1",
+    "build:web": "npm --prefix ../web run build",
+    "build:backend": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/build_backend_exe.ps1",
+    "clean:package": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"if (Test-Path dist-app-unpacked) { Remove-Item -LiteralPath dist-app-unpacked -Recurse -Force }\"",
+    "clean:installer": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"if (Test-Path dist-installer) { Remove-Item -LiteralPath dist-installer -Recurse -Force }\"",
+    "package:dir": "npm run clean:package && npm run build:icon && npm run build:web && npm run build:backend && electron-builder --dir --win",
+    "package:win": "npm run clean:installer && npm run build:icon && npm run build:web && npm run build:backend && electron-builder --win nsis --config.directories.output=dist-installer --config.win.target=nsis",
+    "dev": "electron .",
+    "dev:external-backend": "set NEUROWEAVE_DESKTOP_SKIP_BACKEND=1&& electron .",
+    "smoke:backend": "set NEUROWEAVE_DESKTOP_QUIT_AFTER_BACKEND_HEALTH=1&& electron .",
+    "start": "electron .",
+    "check": "node --check src/main.cjs && node --check scripts/ensure-electron.cjs",
+    "postinstall": "node scripts/ensure-electron.cjs"
+  },
+  "devDependencies": {
+    "electron": "^42.2.0",
+    "electron-builder": "^26.8.1"
+  },
+  "build": {
+    "appId": "org.neuroweave.desktop",
+    "productName": "NeuroWeave",
+    "copyright": "Copyright 2026 NeuroWeave",
+    "directories": {
+      "output": "dist-app-unpacked"
+    },
+    "asar": false,
+    "artifactName": "${productName}-Setup-${version}.${ext}",
+    "files": [
+      "assets/**/*",
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../web/dist",
+        "to": "web"
+      },
+      {
+        "from": "../../dist/desktop/backend",
+        "to": "backend"
+      }
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "icon": "../../dist/desktop/icon/neuroweave.ico",
+      "target": [
+        "dir"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "NeuroWeave",
+      "uninstallDisplayName": "NeuroWeave",
+      "deleteAppDataOnUninstall": false
+    }
+  }
+}

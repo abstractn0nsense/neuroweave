@@ -5,6 +5,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$runtimeDir = Join-Path $repoRoot "data\runtime"
 
 function Write-Status {
     param([string]$Message)
@@ -37,6 +38,50 @@ function Stop-NeuroWeavePort {
         else {
             Write-Status "Skipped PID $processId on port $Port because it does not appear to belong to this checkout."
         }
+    }
+}
+
+function Stop-RuntimeMarkerProcess {
+    param([System.IO.FileInfo]$MarkerFile)
+
+    try {
+        $marker = Get-Content -Path $MarkerFile.FullName -Raw | ConvertFrom-Json
+    }
+    catch {
+        Write-Status "Removing unreadable runtime marker $($MarkerFile.Name)."
+        Remove-Item -LiteralPath $MarkerFile.FullName -Force
+        return
+    }
+
+    $processId = [int]$marker.pid
+    if ($processId -le 0) {
+        Remove-Item -LiteralPath $MarkerFile.FullName -Force
+        return
+    }
+
+    $processInfo = Get-CimInstance Win32_Process -Filter "ProcessId = $processId" -ErrorAction SilentlyContinue
+    if ($null -eq $processInfo) {
+        Write-Status "Runtime marker $($MarkerFile.Name) points to a stopped process."
+        Remove-Item -LiteralPath $MarkerFile.FullName -Force
+        return
+    }
+
+    $commandLine = if ($processInfo.CommandLine) { $processInfo.CommandLine.ToLowerInvariant() } else { "" }
+    $normalizedRepoRoot = $repoRoot.ToLowerInvariant()
+    if ($commandLine.Contains($normalizedRepoRoot)) {
+        Stop-Process -Id $processId -Force
+        Write-Status "Stopped runtime marker PID $processId ($($MarkerFile.BaseName))."
+    }
+    else {
+        Write-Status "Skipped marker PID $processId because it does not appear to belong to this checkout."
+    }
+
+    Remove-Item -LiteralPath $MarkerFile.FullName -Force
+}
+
+if (Test-Path $runtimeDir) {
+    Get-ChildItem -Path $runtimeDir -Filter "*.json" -File | ForEach-Object {
+        Stop-RuntimeMarkerProcess -MarkerFile $_
     }
 }
 

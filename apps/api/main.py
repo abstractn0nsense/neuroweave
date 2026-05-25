@@ -19,7 +19,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+if getattr(sys, "frozen", False):
+    REPO_ROOT = Path(os.environ.get("NEUROWEAVE_APP_ROOT", Path(sys.executable).parent)).resolve()
+else:
+    REPO_ROOT = Path(__file__).resolve().parents[2]
 for package_src in (
     "packages/eeg-core/src",
     "packages/eeg-io/src",
@@ -72,7 +75,10 @@ from eeg_io.bids_sidecars import (  # noqa: E402
     read_eeg_json,
 )
 from eeg_io.analysis_report import AnalysisReportError, write_analysis_report  # noqa: E402
-from eeg_io.artifact_manifest import ArtifactManifestError  # noqa: E402
+from eeg_io.artifact_manifest import (  # noqa: E402
+    ArtifactManifestError,
+    check_artifact_integrity,
+)
 from eeg_io.datasets import find_eeg_file_by_id, list_eeg_files  # noqa: E402
 from eeg_io.event_logs import (  # noqa: E402
     EventLogNormalizationError,
@@ -221,6 +227,9 @@ class LocalPreprocessingWorker:
             )
             self._thread.start()
 
+    def is_alive(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
     def enqueue(self, run_id: str) -> None:
         self.start()
         with self._lock:
@@ -268,6 +277,9 @@ class LocalEpochWorker:
                 daemon=True,
             )
             self._thread.start()
+
+    def is_alive(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
 
     def enqueue(self, run_id: str) -> None:
         self.start()
@@ -317,6 +329,9 @@ class LocalErpWorker:
             )
             self._thread.start()
 
+    def is_alive(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
     def enqueue(self, run_id: str) -> None:
         self.start()
         with self._lock:
@@ -350,6 +365,8 @@ erp_worker = LocalErpWorker()
 class HealthResponse(BaseModel):
     status: str
     service: str
+    workers: dict[str, bool] = Field(default_factory=dict)
+    data_directories: dict[str, str] = Field(default_factory=dict)
 
 
 class SampleDataset(BaseModel):
@@ -625,6 +642,13 @@ class QcSummaryResponse(BaseModel):
     summary: dict
 
 
+class ArtifactIntegrityResponse(BaseModel):
+    run_id: str
+    dataset_id: str
+    run_kind: str
+    integrity: dict
+
+
 class ComparisonConfigPayload(BaseModel):
     condition_a: str
     condition_b: str
@@ -638,6 +662,13 @@ class ComparisonConfigPayload(BaseModel):
 class ComparisonSummaryResponse(BaseModel):
     summary: dict
     erp_run: ErpRunResponse
+
+
+class AnalysisReportResponse(BaseModel):
+    report: dict
+    erp_run: ErpRunResponse
+    report_url: str
+    report_path: str
 
 
 class CreateProjectRequest(BaseModel):
@@ -706,7 +737,23 @@ app.add_middleware(
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
-    return HealthResponse(status="ok", service="neuroweave-api")
+    return HealthResponse(
+        status="ok",
+        service="neuroweave-api",
+        workers={
+            "preprocessing": preprocessing_worker.is_alive(),
+            "epoch": epoch_worker.is_alive(),
+            "erp": erp_worker.is_alive(),
+        },
+        data_directories={
+            "samples": str(SAMPLE_DATASET_DIR),
+            "uploads": str(UPLOADS_DIR),
+            "runs": str(RUNS_DIR),
+            "processed": str(PROCESSED_DIR),
+            "epochs": str(EPOCHS_DIR),
+            "erp": str(ERP_DIR),
+        },
+    )
 
 
 @app.post(
@@ -1428,6 +1475,31 @@ def get_erp_run_export_bundle(run_id: str) -> FileResponse:
 
 
 @app.post(
+    "/erp-runs/{run_id}/analysis-report",
+    response_model=AnalysisReportResponse,
+)
+def create_erp_analysis_report(run_id: str) -> AnalysisReportResponse:
+    run = run_repository.get_erp_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="ERP run not found")
+    if _run_status_value(run) != "completed":
+        raise HTTPException(status_code=409, detail="Run is not completed")
+
+    try:
+        report, completed_run, report_path = _generate_run_analysis_report(run)
+    except (AnalysisReportError, ArtifactManifestError, QcSummaryError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    run_repository.save_erp_run(completed_run)
+    return AnalysisReportResponse(
+        report=report,
+        erp_run=_erp_run_response(completed_run),
+        report_url=f"/artifacts/{completed_run.run_id}/{report_path.name}",
+        report_path=str(report_path),
+    )
+
+
+@app.post(
     "/erp-runs/{run_id}/comparison-summary",
     response_model=ComparisonSummaryResponse,
 )
@@ -1501,6 +1573,29 @@ def get_run_artifact(run_id: str, filename: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="Artifact not found")
 
     return FileResponse(resolved_artifact_path)
+
+
+@app.get("/runs/{run_id}/artifact-integrity", response_model=ArtifactIntegrityResponse)
+def get_run_artifact_integrity(run_id: str) -> ArtifactIntegrityResponse:
+    run = _find_run_by_id(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    manifest_path = _run_artifact_manifest_path(run)
+    if manifest_path is None:
+        raise HTTPException(status_code=404, detail="Artifact manifest not found")
+
+    try:
+        integrity = check_artifact_integrity(manifest_path)
+    except ArtifactManifestError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return ArtifactIntegrityResponse(
+        run_id=run.run_id,
+        dataset_id=run.dataset_id,
+        run_kind=_run_kind_value(run),
+        integrity=integrity,
+    )
 
 
 @app.get("/datasets/{dataset_id}", response_model=DatasetResponse)
@@ -2545,23 +2640,235 @@ def _run_artifact_manifest_path(
     return None
 
 
-def _export_bundle_response(run: PreprocessingRun | EpochRun | ErpRun) -> FileResponse:
+def _generate_run_analysis_report(
+    run: ErpRun,
+) -> tuple[dict, ErpRun, Path]:
     manifest_path = _run_artifact_manifest_path(run)
     if manifest_path is None:
         raise HTTPException(status_code=404, detail="Artifact manifest not found")
 
     output_directory = manifest_path.parent
-    analysis_report_path = output_directory / "analysis_report.json"
+    report_path = output_directory / "analysis_report.json"
+    extra_sections = _erp_analysis_report_sections(run)
+    write_analysis_report(
+        report_path,
+        dataset_id=run.dataset_id,
+        run_id=run.run_id,
+        run_kind=run.run_kind.value,
+        artifact_manifest_path=manifest_path,
+        config_snapshot=_erp_config_payload(run.config),
+        extra_sections=extra_sections,
+    )
+    manifest_metadata = _append_artifact_manifest_entry(
+        output_directory=output_directory,
+        entry=_artifact_manifest_entry(
+            logical_name="analysis_report",
+            path=report_path,
+            artifact_type="analysis_report_json",
+            output_directory=output_directory,
+        ),
+    )
+    manifest_path = Path(str(manifest_metadata["artifact_manifest_path"]))
+    write_analysis_report(
+        report_path,
+        dataset_id=run.dataset_id,
+        run_id=run.run_id,
+        run_kind=run.run_kind.value,
+        artifact_manifest_path=manifest_path,
+        config_snapshot=_erp_config_payload(run.config),
+        extra_sections=extra_sections,
+    )
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    completed_run = replace(
+        run,
+        output_metadata={
+            **run.output_metadata,
+            "artifact_count": manifest_metadata["artifact_count"],
+            "artifact_manifest_path": manifest_metadata["artifact_manifest_path"],
+            "analysis_report_available": True,
+            "analysis_report_path": str(report_path),
+            "analysis_report_url": f"/artifacts/{run.run_id}/{report_path.name}",
+        },
+    )
+    return report, completed_run, report_path
+
+
+def _erp_analysis_report_sections(run: ErpRun) -> dict:
+    dataset = registry_repository.get_dataset(run.dataset_id)
+    recording = registry_repository.get_recording(run.dataset_id)
+    event_log = registry_repository.get_event_log(run.dataset_id)
+    epoch_run = run_repository.get_epoch_run(run.config.epoch_run_id)
+    preprocessing_run = _preprocessing_run_for_erp_report(run, epoch_run)
+    comparison_summary = _read_optional_json_path(
+        run.output_metadata.get("comparison_summary_path")
+    )
+
+    return {
+        "dataset_metadata": _report_dataset_metadata(dataset, recording),
+        "event_summary": _report_event_summary(event_log),
+        "preprocessing_config": asdict(preprocessing_run.config)
+        if preprocessing_run is not None
+        else None,
+        "epoch_config": asdict(epoch_run.config) if epoch_run is not None else None,
+        "erp_config": _erp_config_payload(run.config),
+        "warnings": _report_warning_summary(
+            preprocessing_run=preprocessing_run,
+            epoch_run=epoch_run,
+            erp_run=run,
+        ),
+        "preview_plot": {
+            "url": run.output_metadata.get("preview_plot_url"),
+            "path": run.output_metadata.get("preview_plot_path"),
+            "condition": run.output_metadata.get("preview_plot_condition"),
+            "mode": run.output_metadata.get("preview_plot_mode"),
+            "channel": run.output_metadata.get("preview_plot_channel"),
+        },
+        "comparison_summary": comparison_summary,
+    }
+
+
+def _preprocessing_run_for_erp_report(
+    run: ErpRun,
+    epoch_run: EpochRun | None,
+) -> PreprocessingRun | None:
+    run_id = run.output_metadata.get("input_preprocessing_run_id")
+    if not isinstance(run_id, str) and epoch_run is not None:
+        run_id = epoch_run.output_metadata.get("input_preprocessing_run_id")
+    if isinstance(run_id, str) and run_id:
+        return run_repository.get_preprocessing_run(run_id)
+    return None
+
+
+def _report_dataset_metadata(
+    dataset: IngestionDataset | None,
+    recording: Recording | None,
+) -> dict:
+    metadata = dataset.metadata if dataset is not None else {}
+    recording_metadata = recording.metadata if recording is not None else None
+    return {
+        "dataset_id": dataset.dataset_id if dataset is not None else None,
+        "project_id": dataset.project_id if dataset is not None else None,
+        "experiment_id": dataset.experiment_id if dataset is not None else None,
+        "participant_label": metadata.get("participant_label"),
+        "participant_group": metadata.get("participant_group"),
+        "session_label": metadata.get("session_label"),
+        "status": dataset.status.value if dataset is not None else None,
+        "recording": {
+            "recording_id": recording.recording_id if recording is not None else None,
+            "sampling_rate_hz": recording_metadata.sampling_rate_hz
+            if recording_metadata is not None
+            else None,
+            "duration_seconds": recording_metadata.duration_seconds
+            if recording_metadata is not None
+            else None,
+            "channel_count": recording_metadata.channel_count
+            if recording_metadata is not None
+            else None,
+            "file_format": recording_metadata.file_format
+            if recording_metadata is not None
+            else None,
+        },
+    }
+
+
+def _report_event_summary(event_log: EventLog | None) -> dict:
+    if event_log is None:
+        return {
+            "event_log_id": None,
+            "row_count": 0,
+            "filter_count": 0,
+            "event_count": 0,
+            "condition_counts": {},
+            "mapping": {},
+        }
+
+    condition_counts: dict[str, int] = {}
+    for event in event_log.events:
+        label = event.trial_type or "unlabeled"
+        condition_counts[label] = condition_counts.get(label, 0) + 1
+
+    return {
+        "event_log_id": event_log.event_log_id,
+        "row_count": event_log.row_count,
+        "filter_count": event_log.filter_count,
+        "event_count": len(event_log.events),
+        "condition_counts": condition_counts,
+        "mapping": event_log.mapping.__dict__,
+    }
+
+
+def _report_warning_summary(
+    *,
+    preprocessing_run: PreprocessingRun | None,
+    epoch_run: EpochRun | None,
+    erp_run: ErpRun,
+) -> dict:
+    return {
+        "preprocessing": _run_warning_payload(preprocessing_run),
+        "epoch": _run_warning_payload(epoch_run),
+        "erp": _run_warning_payload(erp_run),
+    }
+
+
+def _run_warning_payload(
+    run: PreprocessingRun | EpochRun | ErpRun | None,
+) -> dict:
+    if run is None:
+        return {"run_id": None, "warnings": [], "diagnostics": {}}
+    return {
+        "run_id": run.run_id,
+        "warnings": run.warnings,
+        "diagnostics": _diagnostics_report_payload(run.diagnostics),
+    }
+
+
+def _diagnostics_report_payload(diagnostics: dict) -> dict:
+    payload = _run_diagnostics_response(diagnostics)
+    if isinstance(payload, RunDiagnosticsResponse):
+        return payload.model_dump()
+    return payload if isinstance(payload, dict) else {}
+
+
+def _read_optional_json_path(value: object) -> dict | None:
+    if not isinstance(value, str) or not value:
+        return None
+    path = Path(value)
+    if not path.is_file():
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return payload if isinstance(payload, dict) else None
+
+
+def _export_bundle_response(run: PreprocessingRun | EpochRun | ErpRun) -> FileResponse:
+    if isinstance(run, ErpRun):
+        _, completed_run, analysis_report_path = _generate_run_analysis_report(run)
+        run = completed_run
+        run_repository.save_erp_run(completed_run)
+        manifest_path = _run_artifact_manifest_path(completed_run)
+    else:
+        manifest_path = _run_artifact_manifest_path(run)
+        if manifest_path is None:
+            raise HTTPException(status_code=404, detail="Artifact manifest not found")
+        output_directory = manifest_path.parent
+        analysis_report_path = output_directory / "analysis_report.json"
+        try:
+            write_analysis_report(
+                analysis_report_path,
+                dataset_id=run.dataset_id,
+                run_id=run.run_id,
+                run_kind=_run_kind_value(run),
+                artifact_manifest_path=manifest_path,
+                config_snapshot=asdict(run.config),
+            )
+        except (AnalysisReportError, ArtifactManifestError, QcSummaryError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if manifest_path is None:
+        raise HTTPException(status_code=404, detail="Artifact manifest not found")
+
+    output_directory = manifest_path.parent
     export_bundle_path = output_directory / "export_bundle.zip"
     try:
-        write_analysis_report(
-            analysis_report_path,
-            dataset_id=run.dataset_id,
-            run_id=run.run_id,
-            run_kind=_run_kind_value(run),
-            artifact_manifest_path=manifest_path,
-            config_snapshot=asdict(run.config),
-        )
         build_export_bundle(
             artifact_manifest_path=manifest_path,
             analysis_report_path=analysis_report_path,
@@ -2915,6 +3222,40 @@ def _worker_subprocess_env() -> dict[str, str]:
     return env
 
 
+def _worker_cli_command(job: str, payload_path: Path, result_path: Path) -> list[str]:
+    worker_command = os.environ.get("NEUROWEAVE_WORKER_COMMAND")
+    if worker_command:
+        return [
+            worker_command,
+            "worker",
+            job,
+            "--payload",
+            str(payload_path),
+            "--result",
+            str(result_path),
+        ]
+    if getattr(sys, "frozen", False):
+        return [
+            sys.executable,
+            "worker",
+            job,
+            "--payload",
+            str(payload_path),
+            "--result",
+            str(result_path),
+        ]
+    return [
+        sys.executable,
+        "-m",
+        "eeg_processing.worker_cli",
+        job,
+        "--payload",
+        str(payload_path),
+        "--result",
+        str(result_path),
+    ]
+
+
 def _run_worker_cli_subprocess(
     *,
     job: str,
@@ -2932,16 +3273,7 @@ def _run_worker_cli_subprocess(
     _write_worker_payload(payload_path, payload)
 
     process = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "eeg_processing.worker_cli",
-            job,
-            "--payload",
-            str(payload_path),
-            "--result",
-            str(result_path),
-        ],
+        _worker_cli_command(job, payload_path, result_path),
         cwd=REPO_ROOT,
         env=_worker_subprocess_env(),
         stdout=subprocess.PIPE,

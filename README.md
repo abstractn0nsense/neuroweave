@@ -7,6 +7,7 @@ NeuroWeave is being prepared as a neuroscience and EEG workflow project.
 ```text
 apps/
   api/                  Server/API entrypoint for EEG workflows
+  desktop/              Electron shell for app-window development
   web/                  Web UI for EEG workflow setup and review
 packages/
   eeg-core/             EEG domain models and pipeline contracts
@@ -18,6 +19,15 @@ packages/
 docs/
   architecture.md       Folder boundaries and dependency rules
   eeg-workflow.md       Initial EEG workflow outline
+  user-guide-ko.md      Korean user guide for the current local app
+  user-guide-en.md      English user guide for the current local app
+  public-demo-physionet-eegmmi.md
+                        Opt-in public EEGMMI demo workflow
+  local-research-preview-release-checklist.md
+                        Release checklist for the installable local preview
+  export-bundle.md      ZIP export structure and diagnostics contract
+  neuro-weave-growth-pipeline.md
+                        Product and research-platform growth pipeline
   phase-1-ingestion.md  External experiment upload and event-log plan
   storage.md            Versioned fixture and local data rules
   decisions/            Architecture decision notes
@@ -68,6 +78,7 @@ Do not commit `data/` contents or add `data/.gitkeep`. Scripts and app startup c
 Phase 0 uses local per-app environments:
 
 - API: Python `.venv` inside `apps/api`
+- Desktop: npm dependencies inside `apps/desktop/node_modules`
 - Web: npm dependencies inside `apps/web/node_modules`
 
 Use CPython 3.12 or 3.13 for the API environment. Python 3.14 mingw builds may not have compatible wheels for the Phase 0 dependencies yet. On Windows, prefer the setup script because `python` may resolve to MSYS Python instead of CPython.
@@ -76,7 +87,21 @@ Use CPython 3.12 or 3.13 for the API environment. Python 3.14 mingw builds may n
 
 On Windows, double-click `Start NeuroWeave.bat` from the repository root. The launcher starts the API and web servers, waits until both respond, writes logs under `data/logs/`, and opens `http://127.0.0.1:5173`.
 
-If the servers are already running, the launcher reuses them instead of starting duplicates. To stop repository-owned listeners on the default ports, double-click `Stop NeuroWeave.bat`.
+If the servers are already running from this checkout, the launcher reuses them
+instead of starting duplicates. If a stale repo-owned listener is found, the
+launcher stops it before starting a fresh process. If another application owns
+the requested port, startup fails instead of killing an unrelated process.
+
+Runtime files:
+
+```text
+data/logs/       API, web, setup, and install logs
+data/runtime/    repo-owned process marker files
+```
+
+To stop repository-owned listeners on the default ports, double-click
+`Stop NeuroWeave.bat`. The stop script checks process command lines and runtime
+markers so it does not terminate unrelated listeners.
 
 For an app-like entrypoint, install Windows shortcuts:
 
@@ -85,6 +110,52 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install_neuroweave_shortcut.p
 ```
 
 This creates Desktop and Start Menu shortcuts with a NeuroWeave icon. The shortcut hides runtime server windows and opens only the browser once the local app is ready.
+
+### Desktop Shell MVP
+
+A minimal Electron shell is available under `apps/desktop`. In development mode
+it starts the local FastAPI backend, waits for `/health`, then opens the local
+Vite web UI in an app window. In packaged mode it loads the React production
+build and bundled PyInstaller backend executable from Electron resources.
+
+Start the web dev server first:
+
+```powershell
+cd apps/web
+npm install
+npm run dev
+```
+
+Then run the desktop shell:
+
+```powershell
+cd apps/desktop
+npm install
+npm run dev
+```
+
+The default web target is `http://127.0.0.1:5173` and the default API health
+target is `http://127.0.0.1:8000/health`. Override them with
+`NEUROWEAVE_WEB_URL`, `NEUROWEAVE_API_PORT`, or `NEUROWEAVE_API_HEALTH_URL` for
+alternate dev ports. See `apps/desktop/README.md`.
+
+Packaging checks:
+
+```powershell
+cd apps/desktop
+npm run package:dir
+npm run package:win
+```
+
+The unpacked Windows app uses `resources/web/` for the React build and
+`resources/backend/neuroweave-api.exe` for the backend. Packaged logs and local
+research data live under Electron `userData`, not inside the installation
+directory.
+
+The Windows installer is written to `apps/desktop/dist-installer/` and creates
+Desktop and Start Menu shortcuts named `NeuroWeave`. Windows uninstall metadata
+is registered by the NSIS installer, while user research data is preserved on
+uninstall by default.
 
 ### Phase 0 Quickstart
 
@@ -111,6 +182,19 @@ Web URL: `http://127.0.0.1:5173`
 
 The Phase 0 web screen displays API health, sample EEG datasets, and selected sample metadata.
 
+### User Guides
+
+Current UI guide:
+
+- Korean: `docs/user-guide-ko.md`
+- English: `docs/user-guide-en.md`
+
+The app is split into `Setup` and `Analysis` workspace modes. Use `Setup` to create
+or select projects, experiments, and datasets. Dataset selection stays in Setup so
+the active dataset can be reviewed first. Use `Continue Analysis` to move into file
+upload, validation, preprocessing, epoching, ERP preview, QC, and export-oriented
+workflows.
+
 ### Smoke Test
 
 Run this after dependency setup or before committing Phase 0 changes:
@@ -120,6 +204,16 @@ powershell -ExecutionPolicy Bypass -File .\scripts\smoke_phase0.ps1
 ```
 
 The smoke test generates sample EEG files, runs API/package tests, checks sample API endpoints, and builds the web app.
+
+Lifecycle smoke for desktop-packaging readiness:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\smoke_lifecycle.ps1
+```
+
+This starts the local API and web app, verifies `/health`, runs start a second
+time to check idempotency, checks logs/runtime markers, then stops only
+repo-owned processes.
 
 ### API Checks
 
@@ -145,6 +239,20 @@ Generate deterministic Phase 0 sample EEG files:
 ```
 
 This writes committed test fixtures to `tests/fixtures/eeg/` and local app samples to `data/raw/samples/`.
+
+### Public PhysioNet Demo
+
+Prepare a real public EDF demo from PhysioNet EEGMMI `S001R03`:
+
+```powershell
+.\apps\api\.venv\Scripts\python.exe .\scripts\prepare_physionet_eegmmi_demo.py
+```
+
+This downloads `S001R03.edf` and writes `S001R03_events.csv` under
+`data/raw/public-samples/`. The `data/` directory is ignored by git, so the
+public recording is never committed. Follow
+`docs/public-demo-physionet-eegmmi.md` to upload the files and run
+preprocessing, epoching, and ERP preview.
 
 ## Product Pipeline
 

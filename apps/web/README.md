@@ -14,6 +14,24 @@ The development server runs on `http://127.0.0.1:5173`.
 
 Copy `.env.example` to `.env` when local API URL overrides are needed.
 
+## Workspace Modes
+
+The browser UI is split into two modes:
+
+- `Setup`: project, experiment, dataset queue, active-dataset readiness, and sample metadata.
+- `Analysis`: EEG/event upload, event mapping, validation, preprocessing, epoching,
+  ERP preview, comparison prep, and QC summary.
+
+Dataset Queue selection does not automatically switch modes. The user stays in
+Setup, reviews the selected active dataset, and clicks `Continue Analysis` when
+ready. This keeps study setup and analysis work separate while preserving the same
+active dataset across refreshes.
+
+Detailed guides:
+
+- Korean: `../../docs/user-guide-ko.md`
+- English: `../../docs/user-guide-en.md`
+
 Phase 0 UI checks:
 
 - API health status
@@ -25,6 +43,7 @@ Phase 1 ingestion checks:
 
 - project and experiment creation or selection
 - participant/session dataset creation
+- active dataset review in Setup before entering Analysis
 - EEG recording upload
 - event CSV/TSV upload and preview
 - event column mapping

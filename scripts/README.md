@@ -20,6 +20,23 @@ The script selects a supported CPython 3.12 or 3.13 interpreter and creates `app
 
 The script writes small deterministic FIF files to `tests/fixtures/eeg/` and local app samples to `data/raw/samples/`.
 
+## Public PhysioNet Demo
+
+```powershell
+.\apps\api\.venv\Scripts\python.exe .\scripts\prepare_physionet_eegmmi_demo.py
+```
+
+This opt-in script downloads PhysioNet EEGMMI `S001R03.edf` to
+`data/raw/public-samples/` and creates `S001R03_events.csv` from the EDF+
+annotations. The generated files stay under the ignored `data/` directory and
+must not be committed.
+
+If the EDF already exists locally, regenerate only the CSV with:
+
+```powershell
+.\apps\api\.venv\Scripts\python.exe .\scripts\prepare_physionet_eegmmi_demo.py --events-only
+```
+
 ## Click-to-Run Launcher
 
 ```powershell
@@ -27,6 +44,11 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start_neuroweave.ps1
 ```
 
 The root `Start NeuroWeave.bat` file calls this script for double-click startup. It starts the API and web servers, waits for `http://127.0.0.1:8000/health` and `http://127.0.0.1:5173`, writes logs to `data/logs/api.log` and `data/logs/web.log`, and opens the browser.
+
+The start script is idempotent for this checkout. It reuses healthy repo-owned
+listeners, stops stale repo-owned listeners, and refuses to take over ports owned
+by unrelated processes. Runtime process markers are written under
+`data/runtime/`.
 
 Create Desktop and Start Menu shortcuts with:
 
@@ -41,6 +63,40 @@ Stop the default local servers with:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\stop_neuroweave.ps1
 ```
+
+The stop script uses both runtime markers and listening ports, and only stops
+processes whose command line points at the current checkout.
+
+## Desktop Packaging Backend
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_backend_exe.ps1
+```
+
+This builds `dist/desktop/backend/neuroweave-api.exe` with PyInstaller. The
+Electron package step copies that executable into `resources/backend/` and starts
+it in packaged mode. Runtime logs and research data are written to Electron
+`userData`, while development builds continue using the repository `data/`
+directory.
+
+Generate the desktop installer icon with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_desktop_icon.ps1
+```
+
+The Electron installer build uses `dist/desktop/icon/neuroweave.ico` for the app,
+Desktop shortcut, Start Menu shortcut, and uninstall entry.
+
+Run the lifecycle smoke before desktop packaging changes:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\smoke_lifecycle.ps1
+```
+
+It starts the app, verifies API health and worker threads, starts again to check
+idempotency, checks `data/logs/` and `data/runtime/`, then stops repo-owned
+processes.
 
 ## Phase 0 Smoke Test
 

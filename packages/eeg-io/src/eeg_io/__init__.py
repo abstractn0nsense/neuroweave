@@ -5,6 +5,7 @@ from eeg_io.artifact_manifest import (
     ArtifactManifestError,
     ArtifactReference,
     artifact_manifest_from_dict,
+    check_artifact_integrity,
     load_artifact_manifest,
 )
 from eeg_io.analysis_report import (
@@ -52,6 +53,7 @@ __all__ = [
     "build_provenance_payload",
     "build_event_log_provenance_payload",
     "build_qc_summary",
+    "check_artifact_integrity",
     "load_artifact_manifest",
     "read_channels_tsv",
     "read_eeg_json",

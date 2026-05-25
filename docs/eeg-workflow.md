@@ -5,7 +5,10 @@ The first product direction is an EEG workflow for neuroscience work.
 ## Initial Flow
 
 ```text
-import dataset
+setup project, experiment, and dataset
+  -> choose active dataset
+  -> continue to analysis
+  -> upload EEG recording and event log
   -> validate metadata
   -> inspect channels and events
   -> preprocess signal
@@ -26,6 +29,34 @@ import dataset
 - Result: derived data, metrics, plots, logs, or exported files.
 - Event Log: stimulus timing, trial condition, response, accuracy, and reaction-time data from tools such as PsychoPy.
 
+## Current App Flow
+
+The current web app intentionally separates setup from analysis:
+
+```text
+Setup
+  -> create/select project
+  -> create/select experiment
+  -> create/select dataset
+  -> review active dataset readiness
+  -> Continue Analysis
+
+Analysis
+  -> upload EEG recording
+  -> upload event log
+  -> save event mapping
+  -> validate dataset
+  -> run preprocessing
+  -> run epoching
+  -> generate ERP preview
+  -> prepare descriptive comparison
+  -> review QC/export artifacts
+```
+
+Dataset Queue selection should only change the active dataset. It should not move
+the user into Analysis by itself. This keeps study organization separate from
+processing actions and reduces accidental workflow execution.
+
 ## Phase Direction
 
 ```text
@@ -38,6 +69,10 @@ Phase 5: plots, tables, PDF/CSV/ZIP export
 Phase 6: end-to-end UI polish
 Phase 7: chat or assistant layer over the workflow
 ```
+
+Near-term hardening should preserve reproducibility by keeping run configs
+immutable, storing artifact manifests, validating event timing before processing,
+and making every failed run queryable with warnings and errors.
 
 ## Future Chat Role
 

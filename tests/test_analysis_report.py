@@ -81,6 +81,24 @@ def test_build_analysis_report_allows_config_snapshot_override(tmp_path):
     assert report["config_snapshot"] == {"condition_field": "override"}
 
 
+def test_build_analysis_report_includes_extra_sections(tmp_path):
+    manifest_path = _copy_epoch_fixture_with_provenance(tmp_path)
+
+    report = build_analysis_report(
+        dataset_id="dataset-1",
+        run_id="epoch-run-1",
+        run_kind="epoch",
+        artifact_manifest_path=manifest_path,
+        extra_sections={
+            "dataset_metadata": {"participant_label": "sub-001"},
+            "event_summary": {"event_count": 12},
+        },
+    )
+
+    assert report["dataset_metadata"] == {"participant_label": "sub-001"}
+    assert report["event_summary"] == {"event_count": 12}
+
+
 def test_build_analysis_report_reports_missing_provenance(tmp_path):
     shutil.copytree(FIXTURE_ROOT / "epoch", tmp_path / "epoch")
 

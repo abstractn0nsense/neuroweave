@@ -1,10 +1,12 @@
 import json
+import hashlib
 
 import pytest
 
 from eeg_io.artifact_manifest import (
     ArtifactManifestError,
     artifact_manifest_from_dict,
+    check_artifact_integrity,
     load_artifact_manifest,
 )
 
@@ -101,6 +103,65 @@ def test_artifact_manifest_rejects_path_escape(tmp_path):
             },
             manifest_path=artifact_root / "artifact_manifest.json",
         )
+
+
+def test_check_artifact_integrity_reports_ok_missing_and_mismatch(tmp_path):
+    artifact_root = tmp_path / "run"
+    artifact_root.mkdir()
+    ok = artifact_root / "ok.json"
+    mismatch = artifact_root / "mismatch.json"
+    missing = artifact_root / "missing.json"
+    ok.write_text("ok", encoding="utf-8")
+    mismatch.write_text("changed", encoding="utf-8")
+    manifest_path = artifact_root / "artifact_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "artifact_root": str(artifact_root),
+                "artifact_count": 3,
+                "artifacts": [
+                    {
+                        "logical_name": "ok",
+                        "artifact_type": "diagnostic_json",
+                        "path": str(ok),
+                        "size_bytes": 2,
+                        "checksum_sha256": hashlib.sha256(b"ok").hexdigest(),
+                    },
+                    {
+                        "logical_name": "mismatch",
+                        "artifact_type": "diagnostic_json",
+                        "path": str(mismatch),
+                        "checksum_sha256": hashlib.sha256(b"original").hexdigest(),
+                    },
+                    {
+                        "logical_name": "missing",
+                        "artifact_type": "diagnostic_json",
+                        "path": str(missing),
+                        "checksum_sha256": hashlib.sha256(b"missing").hexdigest(),
+                    },
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = check_artifact_integrity(manifest_path)
+
+    assert result["status"] == "mismatch"
+    assert result["status_counts"] == {"ok": 1, "missing": 1, "mismatch": 1}
+    assert {
+        item["logical_name"]: item["status"]
+        for item in result["artifacts"]
+    } == {
+        "ok": "ok",
+        "mismatch": "mismatch",
+        "missing": "missing",
+    }
+    assert result["artifacts"][0]["actual_checksum_sha256"] == hashlib.sha256(
+        b"ok"
+    ).hexdigest()
 
 
 def test_artifact_manifest_rejects_count_mismatch(tmp_path):

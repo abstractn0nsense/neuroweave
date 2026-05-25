@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+import hashlib
 import json
 
 
@@ -26,6 +27,31 @@ class ArtifactManifest:
     artifact_count: int
     artifacts: list[ArtifactReference]
     missing_artifacts: list[ArtifactReference]
+
+
+def check_artifact_integrity(path: Path) -> dict[str, Any]:
+    manifest = load_artifact_manifest(path)
+    items = [_integrity_item(artifact) for artifact in manifest.artifacts]
+    status_counts = {
+        "ok": sum(1 for item in items if item["status"] == "ok"),
+        "missing": sum(1 for item in items if item["status"] == "missing"),
+        "mismatch": sum(1 for item in items if item["status"] == "mismatch"),
+    }
+    overall_status = "ok"
+    if status_counts["missing"] > 0:
+        overall_status = "missing"
+    if status_counts["mismatch"] > 0:
+        overall_status = "mismatch"
+
+    return {
+        "schema_version": 1,
+        "manifest_path": str(path.resolve()),
+        "artifact_root": str(manifest.artifact_root),
+        "artifact_count": manifest.artifact_count,
+        "status": overall_status,
+        "status_counts": status_counts,
+        "artifacts": items,
+    }
 
 
 def load_artifact_manifest(path: Path) -> ArtifactManifest:
@@ -93,6 +119,51 @@ def artifact_manifest_from_dict(
         artifacts=artifacts,
         missing_artifacts=missing_artifacts,
     )
+
+
+def _integrity_item(artifact: ArtifactReference) -> dict[str, Any]:
+    if not artifact.exists:
+        return {
+            **_integrity_base(artifact),
+            "status": "missing",
+            "actual_size_bytes": None,
+            "actual_checksum_sha256": None,
+        }
+
+    actual_checksum = _sha256_file(artifact.path)
+    actual_size = artifact.path.stat().st_size
+    expected_checksum = artifact.checksum_sha256
+    checksum_matches = (
+        expected_checksum is None
+        or expected_checksum.lower() == actual_checksum.lower()
+    )
+    size_matches = artifact.size_bytes is None or artifact.size_bytes == actual_size
+    status = "ok" if checksum_matches and size_matches else "mismatch"
+
+    return {
+        **_integrity_base(artifact),
+        "status": status,
+        "actual_size_bytes": actual_size,
+        "actual_checksum_sha256": actual_checksum,
+    }
+
+
+def _integrity_base(artifact: ArtifactReference) -> dict[str, Any]:
+    return {
+        "logical_name": artifact.logical_name,
+        "artifact_type": artifact.artifact_type,
+        "path": str(artifact.path),
+        "expected_size_bytes": artifact.size_bytes,
+        "expected_checksum_sha256": artifact.checksum_sha256,
+    }
+
+
+def _sha256_file(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 
 def _artifact_reference_from_dict(

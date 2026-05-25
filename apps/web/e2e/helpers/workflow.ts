@@ -1,4 +1,5 @@
 import { expect, type Page } from "@playwright/test";
+import { Buffer } from "node:buffer";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -33,7 +34,7 @@ export async function createPreprocessedDataset(
   labels: WorkflowLabels,
 ) {
   await page.goto("/");
-  await expect(page.getByText("Study Setup")).toBeVisible();
+  await expect(page.getByTestId("setup-workspace")).toBeVisible();
 
   await page.getByTestId("project-name-input").fill(labels.project);
   await page.getByTestId("create-project-button").click();
@@ -48,13 +49,88 @@ export async function createPreprocessedDataset(
   await page.getByTestId("create-dataset-button").click();
   await expect(page.getByText("Dataset created.")).toBeVisible();
 
+  const activeDatasetId = (
+    await page.getByTestId("stage-dataset-value").textContent()
+  )?.trim();
+  expect(activeDatasetId).toBeTruthy();
+
+  await expect(page.getByTestId("setup-workspace")).toBeVisible();
+  await expect(page.getByTestId("analysis-workspace")).toHaveCount(0);
+  await page.getByTestId(`dataset-row-${activeDatasetId}`).click();
+  await expect(page.getByTestId("setup-workspace")).toBeVisible();
+  await expect(page.getByTestId("analysis-workspace")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Continue Analysis" }).click();
+  await expect(page.getByTestId("analysis-workspace")).toBeVisible();
+  await expect(page.getByTestId("analysis-workspace")).toContainText(
+    activeDatasetId ?? "",
+  );
+  await expect(page.getByText("Ingestion And Preprocessing")).toBeVisible();
+  await expect(page.getByText("Supported formats: FIF, EDF, BDF")).toBeVisible();
+  await expect(
+    page.getByText("tests/fixtures/eeg/sample_resting_raw.fif"),
+  ).toBeVisible();
+  await expect(page.getByText("Supported formats: CSV or TSV")).toBeVisible();
+  await expect(
+    page.getByText("tests/fixtures/events/psychopy_minimal.csv"),
+  ).toBeVisible();
+  await expect(page.getByTestId("eeg-upload-status")).toHaveText(
+    "No EEG file selected",
+  );
+  await expect(page.getByTestId("event-upload-status")).toHaveText(
+    "No event log selected",
+  );
+  await expect(page.getByTestId("upload-eeg-button")).toBeDisabled();
+  await expect(page.getByTestId("upload-events-button")).toBeDisabled();
+
+  await page.getByTestId("event-file-input").setInputFiles({
+    name: "events.xlsx",
+    mimeType:
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    buffer: Buffer.from("not a csv"),
+  });
+  await expect(page.getByText("Unsupported event log.")).toBeVisible();
+  await expect(page.getByTestId("event-upload-status")).toHaveText(
+    "No event log selected",
+  );
+
+  await page.getByTestId("validate-dataset-button").click();
+  await expect(page.getByText("Dataset has blocking errors.")).toBeVisible();
+  await expect(page.getByTestId("validation-errors")).toContainText(
+    "recording_missing",
+  );
+  await expect(page.getByTestId("validation-errors")).toContainText(
+    "recording_id",
+  );
+  await expect(page.getByTestId("validation-errors")).toContainText(
+    "Next action: Upload a supported EEG recording",
+  );
+  await expect(page.getByTestId("validation-errors")).toContainText(
+    "event_log_missing",
+  );
+  await expect(page.getByTestId("validation-warnings")).toContainText(
+    "No warnings.",
+  );
+
   await page.getByTestId("eeg-file-input").setInputFiles(eegFixture);
+  await expect(page.getByTestId("eeg-upload-status")).toContainText(
+    path.basename(eegFixture),
+  );
   await page.getByTestId("upload-eeg-button").click();
   await expect(page.getByText("EEG file uploaded.")).toBeVisible();
+  await expect(page.getByTestId("eeg-upload-status")).toContainText(
+    path.basename(eegFixture),
+  );
 
   await page.getByTestId("event-file-input").setInputFiles(eventFixture);
+  await expect(page.getByTestId("event-upload-status")).toContainText(
+    path.basename(eventFixture),
+  );
   await page.getByTestId("upload-events-button").click();
   await expect(page.getByText("Event log uploaded.")).toBeVisible();
+  await expect(page.getByTestId("event-upload-status")).toContainText(
+    path.basename(eventFixture),
+  );
 
   await expect(page.getByTestId("mapping-onset_seconds-select")).toHaveValue(
     "onset",
@@ -70,14 +146,25 @@ export async function createPreprocessedDataset(
   expect(mappedEventsText).not.toBe("Unmapped");
 
   await page.reload();
-  await expect(page.getByText("Study Setup")).toBeVisible();
+  await expect(page.getByTestId("analysis-workspace")).toBeVisible();
+  await expect(page.getByTestId("analysis-workspace")).toContainText(
+    activeDatasetId ?? "",
+  );
   await expect(page.getByTestId("stage-events-value")).toHaveText(
     mappedEventsText ?? "",
   );
 
   await page.getByTestId("validate-dataset-button").click();
   await expect(page.getByText("Dataset is valid.")).toBeVisible();
-  await expect(page.getByText("Dataset is ready for preprocessing.")).toBeVisible();
+  await expect(page.getByTestId("validation-ready-message")).toContainText(
+    "Dataset is ready for preprocessing.",
+  );
+  await expect(page.getByTestId("validation-panel")).toContainText(
+    "Preprocessing is available",
+  );
+  await expect(page.getByTestId("validation-errors")).toContainText(
+    "No blocking errors.",
+  );
 
   await page.getByTestId("resample-hz-input").fill("50");
   await expect(page.getByTestId("resample-hz-input")).toHaveValue("50");
