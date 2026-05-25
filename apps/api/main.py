@@ -83,6 +83,7 @@ from eeg_io.provenance import (  # noqa: E402
     build_event_log_provenance_payload,
     build_provenance_payload,
 )
+from eeg_io.qc_summary import QcSummaryError, build_qc_summary  # noqa: E402
 from eeg_io.registry import JsonRegistryRepository, JsonRunRepository  # noqa: E402
 from eeg_io.readers import EegMetadataReadError, read_eeg_metadata  # noqa: E402
 
@@ -612,6 +613,13 @@ class ErpRunResponse(BaseModel):
 
 class ErpRunsResponse(BaseModel):
     runs: list[ErpRunResponse]
+
+
+class QcSummaryResponse(BaseModel):
+    dataset_id: str
+    run_id: str
+    run_kind: str
+    summary: dict
 
 
 class ComparisonConfigPayload(BaseModel):
@@ -1358,6 +1366,35 @@ def list_dataset_erp_runs(dataset_id: str) -> ErpRunsResponse:
             _erp_run_response(run)
             for run in run_repository.list_erp_runs(dataset_id=dataset_id)
         ]
+    )
+
+
+@app.get("/datasets/{dataset_id}/qc-summary", response_model=QcSummaryResponse)
+def get_dataset_qc_summary(
+    dataset_id: str,
+    run_id: str | None = None,
+) -> QcSummaryResponse:
+    if registry_repository.get_dataset(dataset_id) is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    run = _resolve_qc_summary_run(dataset_id=dataset_id, run_id=run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Completed QC run not found")
+
+    manifest_path = _run_artifact_manifest_path(run)
+    if manifest_path is None:
+        raise HTTPException(status_code=404, detail="Artifact manifest not found")
+
+    try:
+        summary = build_qc_summary(manifest_path)
+    except QcSummaryError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return QcSummaryResponse(
+        dataset_id=dataset_id,
+        run_id=run.run_id,
+        run_kind=run.run_kind.value,
+        summary=summary,
     )
 
 
@@ -2424,6 +2461,76 @@ def _artifact_root_for_run(run_id: str) -> Path | None:
         if run.output_path:
             return Path(run.output_path).parent
     return None
+
+
+def _resolve_qc_summary_run(
+    *,
+    dataset_id: str,
+    run_id: str | None,
+) -> PreprocessingRun | EpochRun | ErpRun | None:
+    if run_id is not None:
+        run = _find_run_by_id(run_id)
+        if run is None or run.dataset_id != dataset_id:
+            raise HTTPException(status_code=404, detail="Run not found")
+        if _run_status_value(run) != "completed":
+            raise HTTPException(status_code=409, detail="Run is not completed")
+        return run
+
+    completed_runs: list[PreprocessingRun | EpochRun | ErpRun] = [
+        run
+        for run in [
+            *run_repository.list_preprocessing_runs(dataset_id=dataset_id),
+            *run_repository.list_epoch_runs(dataset_id=dataset_id),
+            *run_repository.list_erp_runs(dataset_id=dataset_id),
+        ]
+        if _run_status_value(run) == "completed"
+    ]
+    if not completed_runs:
+        return None
+
+    return max(
+        completed_runs,
+        key=lambda run: (
+            _run_finished_sort_value(run),
+            _qc_run_kind_priority(run),
+        ),
+    )
+
+
+def _find_run_by_id(run_id: str) -> PreprocessingRun | EpochRun | ErpRun | None:
+    return (
+        run_repository.get_preprocessing_run(run_id)
+        or run_repository.get_epoch_run(run_id)
+        or run_repository.get_erp_run(run_id)
+    )
+
+
+def _run_artifact_manifest_path(
+    run: PreprocessingRun | EpochRun | ErpRun,
+) -> Path | None:
+    value = run.output_metadata.get("artifact_manifest_path")
+    if isinstance(value, str) and value.strip():
+        path = Path(value)
+        if path.is_file():
+            return path
+    return None
+
+
+def _run_status_value(run: PreprocessingRun | EpochRun | ErpRun) -> str:
+    return str(run.status.value if hasattr(run.status, "value") else run.status)
+
+
+def _run_finished_sort_value(run: PreprocessingRun | EpochRun | ErpRun) -> str:
+    return run.finished_at_utc or ""
+
+
+def _qc_run_kind_priority(run: PreprocessingRun | EpochRun | ErpRun) -> int:
+    priorities = {
+        RunKind.PREPROCESSING: 0,
+        RunKind.EPOCH: 1,
+        RunKind.ERP: 2,
+    }
+    return priorities.get(run.run_kind, -1)
 
 
 def _resolve_preprocessing_output_path(run: PreprocessingRun) -> Path | None:
