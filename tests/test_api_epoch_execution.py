@@ -180,24 +180,44 @@ def test_epoch_worker_completes_run_and_writes_artifacts(tmp_path, monkeypatch):
     assert metadata["dropped_epoch_count"] == 0
     assert metadata["diagnostics_available"] is True
     assert metadata["diagnostics_file_count"] == 3
+    assert metadata["worker_schema_version"] == 1
+    assert metadata["worker_exit_code"] == 0
 
     summary_path = Path(str(metadata["epoch_summary_path"]))
     condition_counts_path = Path(str(metadata["condition_counts_path"]))
     drop_log_path = Path(str(metadata["drop_log_path"]))
     artifact_manifest_path = Path(str(metadata["artifact_manifest_path"]))
+    worker_payload_path = Path(str(metadata["worker_payload_path"]))
+    worker_result_path = Path(str(metadata["worker_result_path"]))
+    worker_stdout_path = Path(str(metadata["worker_stdout_path"]))
+    worker_stderr_path = Path(str(metadata["worker_stderr_path"]))
     assert summary_path.is_file()
     assert condition_counts_path.is_file()
     assert drop_log_path.is_file()
     assert artifact_manifest_path.is_file()
+    assert worker_payload_path.is_file()
+    assert worker_result_path.is_file()
+    assert worker_stdout_path.is_file()
+    assert worker_stderr_path.is_file()
 
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     condition_counts = json.loads(condition_counts_path.read_text(encoding="utf-8"))
     drop_log = json.loads(drop_log_path.read_text(encoding="utf-8"))
     artifact_manifest = json.loads(artifact_manifest_path.read_text(encoding="utf-8"))
+    worker_payload = json.loads(worker_payload_path.read_text(encoding="utf-8"))
+    worker_result = json.loads(worker_result_path.read_text(encoding="utf-8"))
     assert summary["run_id"] == payload["run_id"]
     assert summary["dataset_id"] == "dataset-001"
     assert summary["events"]["event_id"] == {"standard": 1, "target": 2}
     assert summary["epochs"]["retained"] == 3
+    assert worker_payload["schema_version"] == 1
+    assert worker_payload["job"] == "epoching"
+    assert worker_payload["run_id"] == payload["run_id"]
+    assert worker_payload["config"]["preprocessing_run_id"] == "preprocess-001"
+    assert worker_payload["event_log"]["event_log_id"] == "event-log-001"
+    assert worker_result["schema_version"] == 1
+    assert worker_result["status"] == "completed"
+    assert worker_result["error"] is None
     assert condition_counts["schema_version"] == 1
     assert condition_counts["totals"] == {
         "candidate_event_count": 3,
@@ -261,6 +281,52 @@ def test_epoch_worker_persists_failed_execution(tmp_path, monkeypatch):
     assert "epoch_summary_path" not in payload["output_metadata"]
     assert "condition_counts_path" not in payload["output_metadata"]
     assert "drop_log_path" not in payload["output_metadata"]
+    assert payload["output_metadata"]["worker_schema_version"] == 1
+    assert payload["output_metadata"]["worker_exit_code"] is None
+
+
+def test_epoching_subprocess_failure_preserves_worker_artifacts(
+    tmp_path,
+    monkeypatch,
+):
+    _client(tmp_path, monkeypatch)
+    _seed_epochable_dataset(tmp_path)
+    preprocessing_run = api_main.run_repository.get_preprocessing_run("preprocess-001")
+    event_log = api_main.registry_repository.get_event_log("dataset-001")
+    assert preprocessing_run is not None
+    assert preprocessing_run.output_path is not None
+    assert event_log is not None
+    worker_artifacts = api_main._epoching_worker_artifact_paths("epoch-failed")
+
+    try:
+        api_main._run_epoching_subprocess(
+            run_id="epoch-failed",
+            input_path=preprocessing_run.output_path,
+            output_path=str(tmp_path / "epochs" / "epoch-failed" / "epochs-epo.fif"),
+            event_log=event_log,
+            config=EpochConfig(
+                preprocessing_run_id="preprocess-001",
+                condition_field="reaction_time_seconds",
+                tmin_seconds=-0.1,
+                tmax_seconds=0.3,
+            ),
+            preprocessing_run_id="preprocess-001",
+            worker_artifacts=worker_artifacts,
+        )
+    except api_main.EpochWorkerSubprocessError as exc:
+        error = exc
+    else:
+        raise AssertionError("Expected epoching subprocess to fail.")
+
+    assert error.worker_exit_code == 1
+    assert str(error) == "Unsupported condition field: reaction_time_seconds"
+    assert worker_artifacts["payload"].is_file()
+    assert worker_artifacts["result"].is_file()
+    assert worker_artifacts["stdout"].is_file()
+    assert worker_artifacts["stderr"].is_file()
+    result = json.loads(worker_artifacts["result"].read_text(encoding="utf-8"))
+    assert result["status"] == "failed"
+    assert result["run_id"] == "epoch-failed"
 
 
 def test_epoch_diagnostics_summarize_drop_reasons(tmp_path, monkeypatch):
