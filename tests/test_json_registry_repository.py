@@ -4,6 +4,7 @@ import json
 from eeg_core.domain import (
     Dataset,
     DatasetStatus,
+    DiagnosticWarning,
     EpochConfig,
     EpochRun,
     EpochRunStatus,
@@ -24,6 +25,7 @@ from eeg_core.domain import (
     RunKind,
     UploadedFile,
     UploadedFileKind,
+    ValidationSeverity,
 )
 from eeg_io.registry import JsonRegistryRepository, JsonRunRepository
 
@@ -262,6 +264,17 @@ def test_run_repository_persists_preprocessing_runs(tmp_path):
         output_path="data/processed/dataset-001/preprocess-001/raw_preprocessed_raw.fif",
         output_metadata={"sampling_rate_hz": 128.0},
         warnings=["reference unchanged"],
+        diagnostics={
+            "warnings": [
+                DiagnosticWarning(
+                    severity=ValidationSeverity.WARNING,
+                    source="preprocessing",
+                    code="reference_unchanged",
+                    impact="The original EEG reference was preserved.",
+                    suggested_action="Confirm that this matches the analysis plan.",
+                )
+            ]
+        },
     )
 
     repository.save_preprocessing_run(run)
@@ -277,6 +290,7 @@ def test_run_repository_persists_preprocessing_runs(tmp_path):
     )
     assert stored["run_kind"] == RunKind.PREPROCESSING
     assert stored["schema_version"] == 1
+    assert stored["diagnostics"]["warnings"][0]["code"] == "reference_unchanged"
 
 
 def test_run_repository_persists_epoch_runs(tmp_path):
@@ -418,6 +432,67 @@ def test_run_repository_loads_legacy_preprocessing_runs_without_schema_marker(
     assert run.run_kind == RunKind.PREPROCESSING
     assert run.schema_version == 1
     assert run.output_metadata["legacy_key"] == "legacy-value"
+    assert run.warnings == []
+    assert run.diagnostics == {}
+
+
+def test_run_repository_loads_old_epoch_and_erp_runs_without_diagnostics(
+    tmp_path,
+):
+    repository = JsonRunRepository(tmp_path / "runs")
+    epoch_path = repository.epoch_run_path("epoch-legacy")
+    epoch_path.parent.mkdir(parents=True, exist_ok=True)
+    epoch_path.write_text(
+        json.dumps(
+            {
+                "run_id": "epoch-legacy",
+                "dataset_id": "dataset-001",
+                "run_kind": "epoch",
+                "schema_version": 1,
+                "config": {
+                    "preprocessing_run_id": "preprocess-001",
+                    "condition_field": "trial_type",
+                    "tmin_seconds": -0.2,
+                    "tmax_seconds": 0.8,
+                },
+                "status": "completed",
+                "warnings": ["some events were skipped"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    erp_path = repository.erp_run_path("erp-legacy")
+    erp_path.parent.mkdir(parents=True, exist_ok=True)
+    erp_path.write_text(
+        json.dumps(
+            {
+                "run_id": "erp-legacy",
+                "dataset_id": "dataset-001",
+                "run_kind": "erp",
+                "schema_version": 1,
+                "config": {
+                    "epoch_run_id": "epoch-legacy",
+                    "method": "mean",
+                    "plot_mode": "gfp",
+                },
+                "status": "completed",
+                "warnings": ["plot fallback"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    epoch_run = repository.get_epoch_run("epoch-legacy")
+    erp_run = repository.get_erp_run("erp-legacy")
+
+    assert epoch_run is not None
+    assert epoch_run.warnings == ["some events were skipped"]
+    assert epoch_run.diagnostics == {}
+    assert erp_run is not None
+    assert erp_run.warnings == ["plot fallback"]
+    assert erp_run.diagnostics == {}
 
 
 def test_run_repository_skips_non_preprocessing_run_records(tmp_path):

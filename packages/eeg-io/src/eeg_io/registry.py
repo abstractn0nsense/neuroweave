@@ -11,6 +11,7 @@ import time
 from eeg_core.domain import (
     Dataset,
     DatasetStatus,
+    DiagnosticWarning,
     EpochConfig,
     EpochRun,
     EpochRunStatus,
@@ -30,6 +31,7 @@ from eeg_core.domain import (
     RunKind,
     UploadedFile,
     UploadedFileKind,
+    diagnostic_warning_from_dict,
     recording_metadata_from_dict,
 )
 
@@ -523,6 +525,7 @@ def _preprocessing_run_from_json(data: JsonObject) -> PreprocessingRun:
         output_metadata=dict(data.get("output_metadata", {})),
         warnings=[str(warning) for warning in data.get("warnings", [])],
         errors=[str(error) for error in data.get("errors", [])],
+        diagnostics=_run_diagnostics_from_json(data.get("diagnostics")),
     )
 
 
@@ -541,6 +544,7 @@ def _epoch_run_from_json(data: JsonObject) -> EpochRun:
         output_metadata=dict(data.get("output_metadata", {})),
         warnings=[str(warning) for warning in data.get("warnings", [])],
         errors=[str(error) for error in data.get("errors", [])],
+        diagnostics=_run_diagnostics_from_json(data.get("diagnostics")),
     )
 
 
@@ -559,7 +563,25 @@ def _erp_run_from_json(data: JsonObject) -> ErpRun:
         output_metadata=dict(data.get("output_metadata", {})),
         warnings=[str(warning) for warning in data.get("warnings", [])],
         errors=[str(error) for error in data.get("errors", [])],
+        diagnostics=_run_diagnostics_from_json(data.get("diagnostics")),
     )
+
+
+def _run_diagnostics_from_json(value: Any) -> dict[str, list[DiagnosticWarning]]:
+    if not isinstance(value, dict):
+        return {}
+
+    warnings = value.get("warnings")
+    if not isinstance(warnings, list):
+        return {}
+
+    return {
+        "warnings": [
+            diagnostic_warning_from_dict(warning)
+            for warning in warnings
+            if isinstance(warning, dict)
+        ]
+    }
 
 
 def _run_kind_from_json(data: JsonObject) -> RunKind | None:

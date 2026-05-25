@@ -184,6 +184,9 @@ class DiagnosticWarning:
     suggested_action: str | None = None
 
 
+RunDiagnostics = dict[str, list[DiagnosticWarning]]
+
+
 @dataclass(frozen=True)
 class ValidationReport:
     dataset_id: str
@@ -268,6 +271,7 @@ class PreprocessingRun:
     output_metadata: Metadata = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    diagnostics: RunDiagnostics = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -285,6 +289,7 @@ class EpochRun:
     output_metadata: Metadata = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    diagnostics: RunDiagnostics = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -302,6 +307,7 @@ class ErpRun:
     output_metadata: Metadata = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    diagnostics: RunDiagnostics = field(default_factory=dict)
 
 
 def diagnostic_warning_from_dict(data: dict) -> DiagnosticWarning:

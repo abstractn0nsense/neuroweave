@@ -92,6 +92,7 @@ def test_epoch_run_contract_defaults_to_pending_epoch_run():
     assert payload["schema_version"] == 1
     assert payload["config"]["preprocessing_run_id"] == "preprocess-001"
     assert payload["config"]["condition_field"] == "trial_type"
+    assert payload["diagnostics"] == {}
 
 
 def test_erp_run_contract_defaults_to_pending_erp_run():
@@ -114,6 +115,7 @@ def test_erp_run_contract_defaults_to_pending_erp_run():
     assert payload["config"]["epoch_run_id"] == "epoch-001"
     assert payload["config"]["conditions"] == ["target"]
     assert payload["config"]["plot_mode"] == "gfp"
+    assert payload["diagnostics"] == {}
 
 
 def test_comparison_config_contract_is_descriptive_only():
