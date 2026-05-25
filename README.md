@@ -20,6 +20,8 @@ docs/
   eeg-workflow.md       Initial EEG workflow outline
   user-guide-ko.md      Korean user guide for the current local app
   user-guide-en.md      English user guide for the current local app
+  public-demo-physionet-eegmmi.md
+                        Opt-in public EEGMMI demo workflow
   neuro-weave-growth-pipeline.md
                         Product and research-platform growth pipeline
   phase-1-ingestion.md  External experiment upload and event-log plan
@@ -162,6 +164,20 @@ Generate deterministic Phase 0 sample EEG files:
 ```
 
 This writes committed test fixtures to `tests/fixtures/eeg/` and local app samples to `data/raw/samples/`.
+
+### Public PhysioNet Demo
+
+Prepare a real public EDF demo from PhysioNet EEGMMI `S001R03`:
+
+```powershell
+.\apps\api\.venv\Scripts\python.exe .\scripts\prepare_physionet_eegmmi_demo.py
+```
+
+This downloads `S001R03.edf` and writes `S001R03_events.csv` under
+`data/raw/public-samples/`. The `data/` directory is ignored by git, so the
+public recording is never committed. Follow
+`docs/public-demo-physionet-eegmmi.md` to upload the files and run
+preprocessing, epoching, and ERP preview.
 
 ## Product Pipeline
 

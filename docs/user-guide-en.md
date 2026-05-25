@@ -62,6 +62,12 @@ Event Log:
 C:\neuroweave\data\raw\public-samples\S001R03_events.csv
 ```
 
+Prepare those files first:
+
+```powershell
+.\apps\api\.venv\Scripts\python.exe .\scripts\prepare_physionet_eegmmi_demo.py
+```
+
 Small fixture example:
 
 ```text
@@ -74,6 +80,9 @@ C:\neuroweave\tests\fixtures\events\psychopy_minimal.csv
 
 The PhysioNet file is a real public EDF recording. The fixture files are smaller
 and useful for quick smoke tests.
+
+For the full public demo walkthrough, see
+`docs/public-demo-physionet-eegmmi.md`.
 
 ## 4. Create A Dataset
 
@@ -127,6 +136,13 @@ Important fields:
 - `response`, `correct`, `reaction_time_seconds`: optional behavioral fields.
 
 Review the mapping and click `Save Mapping`.
+
+For the PhysioNet EEGMMI `S001R03` demo event CSV, map:
+
+- `onset_seconds` -> `onset`
+- `duration_seconds` -> `duration`
+- `trial_type` -> `trial_type`
+- `stimulus` -> `stimulus`
 
 ## 7. Validate The Dataset
 

@@ -20,6 +20,23 @@ The script selects a supported CPython 3.12 or 3.13 interpreter and creates `app
 
 The script writes small deterministic FIF files to `tests/fixtures/eeg/` and local app samples to `data/raw/samples/`.
 
+## Public PhysioNet Demo
+
+```powershell
+.\apps\api\.venv\Scripts\python.exe .\scripts\prepare_physionet_eegmmi_demo.py
+```
+
+This opt-in script downloads PhysioNet EEGMMI `S001R03.edf` to
+`data/raw/public-samples/` and creates `S001R03_events.csv` from the EDF+
+annotations. The generated files stay under the ignored `data/` directory and
+must not be committed.
+
+If the EDF already exists locally, regenerate only the CSV with:
+
+```powershell
+.\apps\api\.venv\Scripts\python.exe .\scripts\prepare_physionet_eegmmi_demo.py --events-only
+```
+
 ## Click-to-Run Launcher
 
 ```powershell

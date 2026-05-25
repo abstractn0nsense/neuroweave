@@ -236,3 +236,36 @@ epoch 또는 ERP가 비활성화되어 있으면:
 - ICA와 advanced artifact correction은 향후 단계입니다.
 - 협업, 계정, cloud storage는 아직 local prototype 이후 단계입니다.
 - 현재는 연구 워크플로우 검증과 재현 가능한 artifact 생성에 초점을 둡니다.
+## 15. PhysioNet EEGMMI 공개 데모
+
+실제 공개 EEG 데이터로 NeuroWeave를 시험하려면 저장소 루트에서 다음을
+실행합니다.
+
+```powershell
+.\apps\api\.venv\Scripts\python.exe .\scripts\prepare_physionet_eegmmi_demo.py
+```
+
+이 스크립트는 PhysioNet EEG Motor Movement/Imagery Dataset의 `S001R03.edf`를
+`data/raw/public-samples/` 아래에 다운로드하고, EDF+ annotation을 읽어
+`S001R03_events.csv`를 만듭니다. `data/` 폴더는 git에서 제외되어 있으므로
+공개 EDF와 생성된 CSV는 커밋하지 않습니다.
+
+업로드할 파일:
+
+```text
+EEG Recording:
+C:\neuroweave\data\raw\public-samples\S001R03.edf
+
+Event Log:
+C:\neuroweave\data\raw\public-samples\S001R03_events.csv
+```
+
+Event Mapping에서는 다음처럼 지정합니다.
+
+- `onset_seconds` -> `onset`
+- `duration_seconds` -> `duration`
+- `trial_type` -> `trial_type`
+- `stimulus` -> `stimulus`
+
+이후 `Validate Dataset`, preprocessing, epoch, ERP preview 순서로 진행합니다.
+자세한 영어 문서는 `docs/public-demo-physionet-eegmmi.md`를 참고합니다.
