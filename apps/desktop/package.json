@@ -6,6 +6,8 @@
   "main": "src/main.cjs",
   "scripts": {
     "dev": "electron .",
+    "dev:external-backend": "set NEUROWEAVE_DESKTOP_SKIP_BACKEND=1&& electron .",
+    "smoke:backend": "set NEUROWEAVE_DESKTOP_QUIT_AFTER_BACKEND_HEALTH=1&& electron .",
     "start": "electron .",
     "check": "node --check src/main.cjs && node --check scripts/ensure-electron.cjs",
     "postinstall": "node scripts/ensure-electron.cjs"

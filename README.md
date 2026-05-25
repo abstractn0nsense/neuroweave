@@ -112,12 +112,16 @@ This creates Desktop and Start Menu shortcuts with a NeuroWeave icon. The shortc
 ### Desktop Shell MVP
 
 A minimal Electron shell is available under `apps/desktop`. It does not bundle
-the API or installer yet; it opens the existing local web UI in an app window.
+the installer or packaged backend runtime yet, but in development mode it starts
+the local FastAPI backend, waits for `/health`, then opens the existing local web
+UI in an app window.
 
-Start the normal local servers first:
+Start the web dev server first:
 
 ```powershell
-.\Start NeuroWeave.bat
+cd apps/web
+npm install
+npm run dev
 ```
 
 Then run the desktop shell:
@@ -128,8 +132,10 @@ npm install
 npm run dev
 ```
 
-The default web target is `http://127.0.0.1:5173`. Override it with
-`NEUROWEAVE_WEB_URL` for alternate dev ports. See `apps/desktop/README.md`.
+The default web target is `http://127.0.0.1:5173` and the default API health
+target is `http://127.0.0.1:8000/health`. Override them with
+`NEUROWEAVE_WEB_URL`, `NEUROWEAVE_API_PORT`, or `NEUROWEAVE_API_HEALTH_URL` for
+alternate dev ports. See `apps/desktop/README.md`.
 
 ### Phase 0 Quickstart
 
