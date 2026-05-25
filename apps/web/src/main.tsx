@@ -29,6 +29,17 @@ type DatasetMetadata = {
   sampling_rate: number;
   duration_seconds: number;
   channel_names: string[];
+  channel_details?: ChannelMetadata[];
+  line_frequency_hz?: number | null;
+  reference?: string | null;
+};
+
+type ChannelMetadata = {
+  name: string;
+  type: string | null;
+  units: string | null;
+  status: string | null;
+  status_description: string | null;
 };
 
 type Project = {
@@ -3043,6 +3054,7 @@ function MetadataView({
   if (!data) {
     return <p className="muted">No metadata is available.</p>;
   }
+  const channelDetails = data.channel_details ?? [];
 
   return (
     <div className="metadata-stack">
@@ -3067,15 +3079,57 @@ function MetadataView({
           <dt>Duration</dt>
           <dd>{data.duration_seconds.toFixed(1)} s</dd>
         </div>
+        {data.line_frequency_hz !== null && data.line_frequency_hz !== undefined ? (
+          <div>
+            <dt>Line Frequency</dt>
+            <dd>{data.line_frequency_hz} Hz</dd>
+          </div>
+        ) : null}
+        {data.reference ? (
+          <div>
+            <dt>Reference</dt>
+            <dd>{data.reference}</dd>
+          </div>
+        ) : null}
       </dl>
-      <div>
-        <h3>Channel Names</h3>
-        <div className="channel-list">
-          {data.channel_names.map((channelName) => (
-            <span key={channelName}>{channelName}</span>
-          ))}
+      {channelDetails.length > 0 ? (
+        <div>
+          <h3>Channel Details</h3>
+          <div className="channel-detail-table-wrap">
+            <table className="channel-detail-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Type</th>
+                  <th>Units</th>
+                  <th>Status</th>
+                  <th>Status Detail</th>
+                </tr>
+              </thead>
+              <tbody>
+                {channelDetails.map((channel) => (
+                  <tr key={channel.name}>
+                    <td>{channel.name}</td>
+                    <td>{channel.type ?? "-"}</td>
+                    <td>{channel.units ?? "-"}</td>
+                    <td>{channel.status ?? "-"}</td>
+                    <td>{channel.status_description ?? "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
+      ) : (
+        <div>
+          <h3>Channel Names</h3>
+          <div className="channel-list">
+            {data.channel_names.map((channelName) => (
+              <span key={channelName}>{channelName}</span>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
