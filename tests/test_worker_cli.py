@@ -16,7 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 def test_run_payload_completes_preprocessing(monkeypatch, tmp_path):
     input_path = tmp_path / "input.fif"
     output_path = tmp_path / "output.fif"
-    metadata = {"channel_count": 2, "warnings": []}
+    metadata = {"channel_count": 2, "warnings": ["reference unchanged"]}
 
     def fake_preprocess_raw_eeg(
         received_input: Path,
@@ -60,8 +60,18 @@ def test_run_payload_completes_preprocessing(monkeypatch, tmp_path):
         "run_id": "preprocess-001",
         "status": "completed",
         "metadata": metadata,
-        "warnings": [],
-        "diagnostics": {"warnings": []},
+        "warnings": ["reference unchanged"],
+        "diagnostics": {
+            "warnings": [
+                {
+                    "severity": "warning",
+                    "source": "preprocessing",
+                    "code": "unstructured_warning",
+                    "impact": "reference unchanged",
+                    "suggested_action": None,
+                }
+            ]
+        },
         "error": None,
     }
 
@@ -148,7 +158,7 @@ def test_run_payload_accepts_epoching_job_routing():
 def test_run_payload_completes_epoching(monkeypatch, tmp_path):
     expected_input_path = tmp_path / "raw_preprocessed_raw.fif"
     expected_output_path = tmp_path / "epochs-epo.fif"
-    metadata = {"epoch_count": 3, "warnings": []}
+    metadata = {"epoch_count": 3, "warnings": ["dropped 1 epoch"]}
 
     def fake_epoch_preprocessed_eeg(
         input_path: Path,
@@ -191,8 +201,18 @@ def test_run_payload_completes_epoching(monkeypatch, tmp_path):
         "run_id": "epoch-002",
         "status": "completed",
         "metadata": metadata,
-        "warnings": [],
-        "diagnostics": {"warnings": []},
+        "warnings": ["dropped 1 epoch"],
+        "diagnostics": {
+            "warnings": [
+                {
+                    "severity": "warning",
+                    "source": "epoching",
+                    "code": "unstructured_warning",
+                    "impact": "dropped 1 epoch",
+                    "suggested_action": None,
+                }
+            ]
+        },
         "error": None,
     }
 
@@ -295,8 +315,18 @@ def test_run_payload_completes_erp(monkeypatch, tmp_path):
         "run_id": "erp-002",
         "status": "completed",
         "metadata": metadata,
-        "warnings": [],
-        "diagnostics": {"warnings": []},
+        "warnings": ["plot fallback"],
+        "diagnostics": {
+            "warnings": [
+                {
+                    "severity": "warning",
+                    "source": "erp",
+                    "code": "unstructured_warning",
+                    "impact": "plot fallback",
+                    "suggested_action": None,
+                }
+            ]
+        },
         "error": None,
     }
 

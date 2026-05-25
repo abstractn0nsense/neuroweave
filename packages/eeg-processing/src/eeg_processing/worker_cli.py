@@ -452,7 +452,7 @@ def _base_result(
     warnings: list[str] | None = None,
     error: str | None = None,
 ) -> dict[str, Any]:
-    warning_values = warnings or []
+    warning_values = warnings if warnings is not None else _metadata_warnings(metadata)
     return {
         "schema_version": SCHEMA_VERSION,
         "job": payload.get("job"),
@@ -478,6 +478,15 @@ def _diagnostics_payload_from_warnings(
     return {
         "warnings": [asdict(warning) for warning in structured_warnings]
     }
+
+
+def _metadata_warnings(metadata: dict[str, Any] | None) -> list[str]:
+    if not isinstance(metadata, dict):
+        return []
+    warnings = metadata.get("warnings", [])
+    if not isinstance(warnings, list):
+        return []
+    return [str(warning) for warning in warnings]
 
 
 def _warning_source_from_payload(payload: dict[str, Any]) -> str:
