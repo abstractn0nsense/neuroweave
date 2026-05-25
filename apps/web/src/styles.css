@@ -691,6 +691,39 @@ input[type="file"] {
   border-left: 4px solid var(--color-danger);
 }
 
+.run-warning-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.run-warning {
+  border-left: 3px solid var(--color-warning);
+  background: var(--color-surface-subtle);
+  padding: var(--space-2) var(--space-3);
+}
+
+.run-warning strong,
+.run-warning span,
+.run-warning small {
+  display: block;
+}
+
+.run-warning strong {
+  color: var(--color-text);
+  font-size: 12px;
+}
+
+.run-warning span,
+.run-warning small,
+.run-warning p {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.run-warning p {
+  margin: 3px 0;
+}
+
 .preprocessing-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));

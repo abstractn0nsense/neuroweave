@@ -179,6 +179,7 @@ type PreprocessingRun = {
   output_path: string | null;
   output_metadata: Record<string, MetadataValue>;
   warnings: string[];
+  diagnostics: RunDiagnostics;
   errors: string[];
 };
 
@@ -209,6 +210,7 @@ type EpochRun = {
   output_path: string | null;
   output_metadata: Record<string, MetadataValue>;
   warnings: string[];
+  diagnostics: RunDiagnostics;
   errors: string[];
 };
 
@@ -238,11 +240,24 @@ type ErpRun = {
   output_path: string | null;
   output_metadata: Record<string, MetadataValue>;
   warnings: string[];
+  diagnostics: RunDiagnostics;
   errors: string[];
 };
 
 type ErpRunsResponse = {
   runs: ErpRun[];
+};
+
+type DiagnosticWarning = {
+  severity: string;
+  source: string;
+  code: string;
+  impact: string | null;
+  suggested_action: string | null;
+};
+
+type RunDiagnostics = {
+  warnings?: DiagnosticWarning[];
 };
 
 type ComparisonConfig = {
@@ -2357,9 +2372,7 @@ function PreprocessingRunList({
               </button>
             ) : null}
           </div>
-          {run.warnings.length > 0 ? (
-            <p className="muted">{run.warnings.join(" ")}</p>
-          ) : null}
+          <RunWarnings diagnostics={run.diagnostics} warnings={run.warnings} />
           {run.errors.length > 0 ? (
             <p className="error-text">{run.errors.join(" ")}</p>
           ) : null}
@@ -2367,6 +2380,43 @@ function PreprocessingRunList({
       ))}
     </div>
   );
+}
+
+function RunWarnings({
+  diagnostics,
+  warnings,
+}: {
+  diagnostics: RunDiagnostics | Record<string, never>;
+  warnings: string[];
+}) {
+  const structuredWarnings =
+    "warnings" in diagnostics && Array.isArray(diagnostics.warnings)
+      ? diagnostics.warnings
+      : [];
+
+  if (structuredWarnings.length > 0) {
+    return (
+      <div className="run-warning-list" aria-label="Run warnings">
+        {structuredWarnings.map((warning, index) => (
+          <div className="run-warning" key={`${warning.code}-${index}`}>
+            <strong>{warning.code}</strong>
+            <span>
+              {warning.source} / {warning.severity}
+            </span>
+            {warning.impact ? <p>{warning.impact}</p> : null}
+            {warning.suggested_action ? (
+              <small>{warning.suggested_action}</small>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (warnings.length === 0) {
+    return null;
+  }
+  return <p className="muted">{warnings.join(" ")}</p>;
 }
 
 function EpochSection({
@@ -2581,9 +2631,7 @@ function EpochRunList({ runs }: { runs: LoadState<EpochRun[]> }) {
             <span>{run.config.condition_field}</span>
           </div>
           <ConditionCountSummary metadata={run.output_metadata} />
-          {run.warnings.length > 0 ? (
-            <p className="muted">{run.warnings.join(" ")}</p>
-          ) : null}
+          <RunWarnings diagnostics={run.diagnostics} warnings={run.warnings} />
           {run.errors.length > 0 ? (
             <p className="error-text">{run.errors.join(" ")}</p>
           ) : null}
@@ -2811,9 +2859,7 @@ function ErpRunList({ runs }: { runs: LoadState<ErpRun[]> }) {
             <span>{run.config.plot_mode}</span>
           </div>
           <ErpPreview run={run} />
-          {run.warnings.length > 0 ? (
-            <p className="muted">{run.warnings.join(" ")}</p>
-          ) : null}
+          <RunWarnings diagnostics={run.diagnostics} warnings={run.warnings} />
           {run.errors.length > 0 ? (
             <p className="error-text">{run.errors.join(" ")}</p>
           ) : null}
