@@ -176,6 +176,15 @@ class ValidationIssue:
 
 
 @dataclass(frozen=True)
+class DiagnosticWarning:
+    severity: ValidationSeverity
+    source: str
+    code: str
+    impact: str | None = None
+    suggested_action: str | None = None
+
+
+@dataclass(frozen=True)
 class ValidationReport:
     dataset_id: str
     status: DatasetStatus
@@ -293,3 +302,13 @@ class ErpRun:
     output_metadata: Metadata = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+
+
+def diagnostic_warning_from_dict(data: dict) -> DiagnosticWarning:
+    return DiagnosticWarning(
+        severity=ValidationSeverity(data["severity"]),
+        source=str(data["source"]),
+        code=str(data["code"]),
+        impact=data.get("impact"),
+        suggested_action=data.get("suggested_action"),
+    )

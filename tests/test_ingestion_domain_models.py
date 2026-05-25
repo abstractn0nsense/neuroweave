@@ -4,6 +4,7 @@ from eeg_core.domain import (
     ComparisonConfig,
     Dataset,
     DatasetStatus,
+    DiagnosticWarning,
     EpochConfig,
     EpochRun,
     EpochRunStatus,
@@ -17,6 +18,7 @@ from eeg_core.domain import (
     ValidationIssue,
     ValidationReport,
     ValidationSeverity,
+    diagnostic_warning_from_dict,
 )
 
 
@@ -156,3 +158,43 @@ def test_validation_report_exposes_errors_and_warnings():
     assert not report.valid
     assert [issue.code for issue in report.errors] == ["event_onset_out_of_range"]
     assert [issue.code for issue in report.warnings] == ["missing_response"]
+
+
+def test_diagnostic_warning_serializes_as_plain_payload():
+    warning = DiagnosticWarning(
+        severity=ValidationSeverity.WARNING,
+        source="preprocessing",
+        code="reference_unchanged",
+        impact="The original EEG reference was preserved.",
+        suggested_action="Confirm that this matches the analysis plan.",
+    )
+
+    payload = asdict(warning)
+
+    assert payload == {
+        "severity": "warning",
+        "source": "preprocessing",
+        "code": "reference_unchanged",
+        "impact": "The original EEG reference was preserved.",
+        "suggested_action": "Confirm that this matches the analysis plan.",
+    }
+
+
+def test_diagnostic_warning_deserializes_from_payload():
+    warning = diagnostic_warning_from_dict(
+        {
+            "severity": "warning",
+            "source": "epoch",
+            "code": "events_skipped",
+            "impact": "Some events were excluded from epoching.",
+            "suggested_action": "Review the event mapping and epoch window.",
+        }
+    )
+
+    assert warning == DiagnosticWarning(
+        severity=ValidationSeverity.WARNING,
+        source="epoch",
+        code="events_skipped",
+        impact="Some events were excluded from epoching.",
+        suggested_action="Review the event mapping and epoch window.",
+    )
