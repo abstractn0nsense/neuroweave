@@ -14,6 +14,13 @@ uvicorn main:app --reload
 
 The development server runs on `http://127.0.0.1:8000`.
 
+CORS defaults allow the local Vite dev origins `http://localhost:5173`,
+`http://127.0.0.1:5173`, `http://localhost:5174`, and
+`http://127.0.0.1:5174`. Override the allowlist with the comma-separated
+`NEUROWEAVE_CORS_ORIGINS` environment variable. For temporary local dev ports,
+set `NEUROWEAVE_CORS_ALLOW_LOCALHOST_PORTS=true` to allow `localhost` and
+`127.0.0.1` on any port.
+
 Health check:
 
 ```powershell
