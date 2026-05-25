@@ -1200,6 +1200,30 @@ function App() {
     });
   }
 
+  async function downloadErpExportBundle(run: ErpRun) {
+    if (!isErpExportReady(run)) {
+      setNotice({
+        tone: "error",
+        message: "ERP export is available after a completed run writes artifacts.",
+      });
+      return;
+    }
+
+    await runAction(`export-${run.run_id}`, async () => {
+      const response = await requestBlob(
+        `/erp-runs/${encodeURIComponent(run.run_id)}/export-bundle`,
+      );
+      downloadBlob(
+        response.blob,
+        response.filename ?? `neuroweave_${run.dataset_id}_${run.run_id}.zip`,
+      );
+      setNotice({
+        tone: "ok",
+        message: `Export bundle downloaded for ${run.run_id}.`,
+      });
+    });
+  }
+
   async function cancelPreprocessingRun(runId: string) {
     await runAction(`cancel-${runId}`, async () => {
       const run = await requestJson<PreprocessingRun>(
@@ -1630,6 +1654,7 @@ function App() {
                   erpConfig={erpConfig}
                   erpRuns={erpRuns}
                   onComparisonConfigChange={setComparisonConfig}
+                  onDownloadErpExportBundle={downloadErpExportBundle}
                   onErpConfigChange={setErpConfig}
                   onStartComparisonSummary={beginComparisonSummary}
                   onStartErpRun={beginErpRun}
@@ -2762,6 +2787,7 @@ function ErpSection({
   erpConfig,
   erpRuns,
   onComparisonConfigChange,
+  onDownloadErpExportBundle,
   onErpConfigChange,
   onStartComparisonSummary,
   onStartErpRun,
@@ -2774,6 +2800,7 @@ function ErpSection({
   erpConfig: typeof DEFAULT_ERP_CONFIG;
   erpRuns: LoadState<ErpRun[]>;
   onComparisonConfigChange: (config: typeof DEFAULT_COMPARISON_CONFIG) => void;
+  onDownloadErpExportBundle: (run: ErpRun) => void;
   onErpConfigChange: (config: typeof DEFAULT_ERP_CONFIG) => void;
   onStartComparisonSummary: () => void;
   onStartErpRun: () => void;
@@ -2890,7 +2917,11 @@ function ErpSection({
           Generate ERP
         </button>
       </section>
-      <ErpRunList runs={erpRuns} />
+      <ErpRunList
+        busyAction={busyAction}
+        onDownloadExportBundle={onDownloadErpExportBundle}
+        runs={erpRuns}
+      />
       <ComparisonSection
         busyAction={busyAction}
         comparisonConfig={comparisonConfig}
@@ -2902,7 +2933,15 @@ function ErpSection({
   );
 }
 
-function ErpRunList({ runs }: { runs: LoadState<ErpRun[]> }) {
+function ErpRunList({
+  busyAction,
+  onDownloadExportBundle,
+  runs,
+}: {
+  busyAction: string | null;
+  onDownloadExportBundle: (run: ErpRun) => void;
+  runs: LoadState<ErpRun[]>;
+}) {
   if (runs.status === "loading" || runs.status === "idle") {
     return <p className="muted">Loading ERP runs...</p>;
   }
@@ -2918,24 +2957,44 @@ function ErpRunList({ runs }: { runs: LoadState<ErpRun[]> }) {
 
   return (
     <div className="run-list" data-testid="erp-runs">
-      {runData.map((run) => (
-        <div className="run-row" key={run.run_id}>
-          <div>
-            <strong>{run.run_id}</strong>
-            <small>{run.output_path ?? "No output file"}</small>
+      {runData.map((run) => {
+        const exportReady = isErpExportReady(run);
+        const exportBusy = busyAction === `export-${run.run_id}`;
+        return (
+          <div className="run-row" key={run.run_id}>
+            <div>
+              <strong>{run.run_id}</strong>
+              <small>{run.output_path ?? "No output file"}</small>
+            </div>
+            <div className="run-actions">
+              <div className="run-meta">
+                <span>{run.status}</span>
+                <span>{formatErpMetadata(run.output_metadata)}</span>
+                <span>{run.config.plot_mode}</span>
+              </div>
+              <button
+                className="secondary-button compact-button"
+                data-testid={`export-erp-run-${run.run_id}`}
+                disabled={!exportReady || exportBusy}
+                onClick={() => onDownloadExportBundle(run)}
+                title={
+                  exportReady
+                    ? "Download export bundle"
+                    : "Export is available after completed artifacts are ready"
+                }
+                type="button"
+              >
+                {exportBusy ? "Preparing..." : "Export ZIP"}
+              </button>
+            </div>
+            <ErpPreview run={run} />
+            <RunWarnings diagnostics={run.diagnostics} warnings={run.warnings} />
+            {run.errors.length > 0 ? (
+              <p className="error-text">{run.errors.join(" ")}</p>
+            ) : null}
           </div>
-          <div className="run-meta">
-            <span>{run.status}</span>
-            <span>{formatErpMetadata(run.output_metadata)}</span>
-            <span>{run.config.plot_mode}</span>
-          </div>
-          <ErpPreview run={run} />
-          <RunWarnings diagnostics={run.diagnostics} warnings={run.warnings} />
-          {run.errors.length > 0 ? (
-            <p className="error-text">{run.errors.join(" ")}</p>
-          ) : null}
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -3635,6 +3694,50 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function requestBlob(
+  path: string,
+): Promise<{ blob: Blob; filename: string | null }> {
+  const response = await fetch(`${API_BASE_URL}${path}`);
+
+  if (!response.ok) {
+    const detail = await readErrorDetail(response);
+    throw new ApiRequestError(
+      response.status,
+      detail || `${response.status} ${response.statusText}`,
+    );
+  }
+
+  return {
+    blob: await response.blob(),
+    filename: parseContentDispositionFilename(
+      response.headers.get("content-disposition"),
+    ),
+  };
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+function parseContentDispositionFilename(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  const utf8Match = value.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1].replace(/^"|"$/g, ""));
+  }
+  const filenameMatch = value.match(/filename="?([^";]+)"?/i);
+  return filenameMatch?.[1] ?? null;
+}
+
 class ApiRequestError extends Error {
   constructor(
     readonly status: number,
@@ -4091,6 +4194,14 @@ function artifactUrl(runId: string, filename: string): string {
   return `${API_BASE_URL}/artifacts/${encodeURIComponent(runId)}/${encodeURIComponent(
     filename,
   )}`;
+}
+
+function isErpExportReady(run: ErpRun): boolean {
+  return (
+    run.status === "completed" &&
+    typeof run.output_metadata.artifact_manifest_path === "string" &&
+    run.output_metadata.artifact_manifest_path.length > 0
+  );
 }
 
 function getErrorMessage(error: unknown): string {
