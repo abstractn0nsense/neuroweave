@@ -1,9 +1,15 @@
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 from eeg_core.domain import PreprocessingConfig
 from eeg_processing import worker_cli
 from eeg_processing.preprocessing import PreprocessingError
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_run_payload_completes_preprocessing(monkeypatch, tmp_path):
@@ -194,3 +200,109 @@ def test_main_rejects_payload_job_mismatch(tmp_path):
     assert result["status"] == "failed"
     assert result["job"] == "preprocessing"
     assert result["error"] == "CLI job 'preprocessing' does not match payload job 'epoching'."
+
+
+def test_worker_cli_module_runs_preprocessing_in_subprocess(tmp_path):
+    payload_path = tmp_path / "payload.json"
+    result_path = tmp_path / "result.json"
+    output_path = tmp_path / "sample_preprocessed_raw.fif"
+    input_path = REPO_ROOT / "tests" / "fixtures" / "eeg" / "sample_resting_raw.fif"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "job": "preprocessing",
+                "run_id": "preprocess-subprocess-001",
+                "input_path": str(input_path),
+                "output_path": str(output_path),
+                "config": {"reference": "average"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "eeg_processing.worker_cli",
+            "preprocessing",
+            "--payload",
+            str(payload_path),
+            "--result",
+            str(result_path),
+        ],
+        cwd=REPO_ROOT,
+        env=_subprocess_env(),
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert output_path.exists()
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    assert result["schema_version"] == 1
+    assert result["job"] == "preprocessing"
+    assert result["run_id"] == "preprocess-subprocess-001"
+    assert result["status"] == "completed"
+    assert result["error"] is None
+    assert result["metadata"]["file_format"] == "fif"
+
+
+def test_worker_cli_module_writes_failed_result_in_subprocess(tmp_path):
+    payload_path = tmp_path / "payload.json"
+    result_path = tmp_path / "result.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "job": "preprocessing",
+                "run_id": "preprocess-subprocess-002",
+                "input_path": str(tmp_path / "missing.fif"),
+                "output_path": str(tmp_path / "output.fif"),
+                "config": {"high_pass_hz": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "eeg_processing.worker_cli",
+            "preprocessing",
+            "--payload",
+            str(payload_path),
+            "--result",
+            str(result_path),
+        ],
+        cwd=REPO_ROOT,
+        env=_subprocess_env(),
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+
+    assert completed.returncode == 1
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    assert result["schema_version"] == 1
+    assert result["job"] == "preprocessing"
+    assert result["run_id"] == "preprocess-subprocess-002"
+    assert result["status"] == "failed"
+    assert result["metadata"] == {}
+    assert result["error"] == "Payload config high_pass_hz must be a number or null."
+
+
+def _subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+    package_paths = [
+        str(REPO_ROOT / "packages" / "eeg-core" / "src"),
+        str(REPO_ROOT / "packages" / "eeg-processing" / "src"),
+    ]
+    existing_pythonpath = env.get("PYTHONPATH")
+    if existing_pythonpath:
+        package_paths.append(existing_pythonpath)
+    env["PYTHONPATH"] = os.pathsep.join(package_paths)
+    return env

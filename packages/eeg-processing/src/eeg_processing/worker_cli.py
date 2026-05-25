@@ -116,6 +116,15 @@ def _run_preprocessing_payload(payload: dict[str, Any]) -> tuple[int, dict[str, 
         output_path = _required_path(payload, "output_path")
         config = _preprocessing_config_from_payload(payload.get("config", {}))
         metadata = preprocess_raw_eeg(input_path, output_path, config)
+    except WorkerCliError as exc:
+        return (
+            1,
+            _base_result(
+                payload,
+                status="failed",
+                error=str(exc),
+            ),
+        )
     except PreprocessingError as exc:
         return (
             1,
