@@ -2482,13 +2482,16 @@ function RunWarnings({
   diagnostics,
   warnings,
 }: {
-  diagnostics: RunDiagnostics | Record<string, never>;
-  warnings: string[];
+  diagnostics?: RunDiagnostics | Record<string, never> | null;
+  warnings?: string[];
 }) {
   const structuredWarnings =
-    "warnings" in diagnostics && Array.isArray(diagnostics.warnings)
+    diagnostics &&
+    "warnings" in diagnostics &&
+    Array.isArray(diagnostics.warnings)
       ? diagnostics.warnings
       : [];
+  const unstructuredWarnings = Array.isArray(warnings) ? warnings : [];
 
   if (structuredWarnings.length > 0) {
     return (
@@ -2509,10 +2512,10 @@ function RunWarnings({
     );
   }
 
-  if (warnings.length === 0) {
+  if (unstructuredWarnings.length === 0) {
     return null;
   }
-  return <p className="muted">{warnings.join(" ")}</p>;
+  return <p className="muted">{unstructuredWarnings.join(" ")}</p>;
 }
 
 function EpochSection({
