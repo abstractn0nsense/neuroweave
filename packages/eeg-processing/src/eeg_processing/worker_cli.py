@@ -5,7 +5,14 @@ import json
 from pathlib import Path
 from typing import Any, Sequence
 
-from eeg_core.domain import PreprocessingConfig
+from eeg_core.domain import (
+    EpochConfig,
+    EventColumnMapping,
+    EventLog,
+    NormalizedEvent,
+    PreprocessingConfig,
+)
+from eeg_processing.epoching import EpochingError, epoch_preprocessed_eeg
 from eeg_processing.preprocessing import PreprocessingError, preprocess_raw_eeg
 
 
@@ -90,6 +97,8 @@ def _run_supported_payload(
 ) -> tuple[int, dict[str, Any]]:
     if job == PREPROCESSING_JOB:
         return _run_preprocessing_payload(payload)
+    if job == EPOCHING_JOB:
+        return _run_epoching_payload(payload)
     return _unimplemented_job_result(job, payload)
 
 
@@ -166,11 +175,76 @@ def _run_preprocessing_payload(payload: dict[str, Any]) -> tuple[int, dict[str, 
     )
 
 
+def _run_epoching_payload(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    try:
+        input_path = _required_path(payload, "input_path")
+        output_path = _required_path(payload, "output_path")
+        config = _epoch_config_from_payload(payload.get("config"))
+        event_log = _event_log_from_payload(payload.get("event_log"))
+        metadata = epoch_preprocessed_eeg(
+            input_path=input_path,
+            output_path=output_path,
+            event_log=event_log,
+            config=config,
+            preprocessing_run_id=config.preprocessing_run_id,
+        )
+    except WorkerCliError as exc:
+        return (
+            1,
+            _base_result(
+                payload,
+                status="failed",
+                error=str(exc),
+            ),
+        )
+    except EpochingError as exc:
+        return (
+            1,
+            _base_result(
+                payload,
+                status="failed",
+                warnings=exc.processing_warnings,
+                error=str(exc),
+            ),
+        )
+    except Exception as exc:
+        return (
+            1,
+            _base_result(
+                payload,
+                status="failed",
+                error=f"Epoching worker failed: {exc}",
+            ),
+        )
+
+    return (
+        0,
+        _base_result(payload, status="completed", metadata=metadata),
+    )
+
+
 def _required_path(payload: dict[str, Any], key: str) -> Path:
     value = payload.get(key)
     if not isinstance(value, str) or not value.strip():
         raise WorkerCliError(f"Payload {key} must be a non-empty string.")
     return Path(value)
+
+
+def _required_string(payload: dict[str, Any], key: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise WorkerCliError(f"Payload {key} must be a non-empty string.")
+    return value
+
+
+def _required_float(payload: dict[str, Any], key: str) -> float:
+    value = payload.get(key)
+    if isinstance(value, bool):
+        raise WorkerCliError(f"Payload {key} must be a number.")
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise WorkerCliError(f"Payload {key} must be a number.") from exc
 
 
 def _preprocessing_config_from_payload(value: Any) -> PreprocessingConfig:
@@ -183,6 +257,85 @@ def _preprocessing_config_from_payload(value: Any) -> PreprocessingConfig:
         notch_hz=_optional_float(value.get("notch_hz"), "notch_hz"),
         resample_hz=_optional_float(value.get("resample_hz"), "resample_hz"),
         reference=_optional_string(value.get("reference"), "reference"),
+    )
+
+
+def _epoch_config_from_payload(value: Any) -> EpochConfig:
+    if not isinstance(value, dict):
+        raise WorkerCliError("Payload config must be a JSON object.")
+
+    return EpochConfig(
+        preprocessing_run_id=_required_string(value, "preprocessing_run_id"),
+        condition_field=_required_string(value, "condition_field"),
+        tmin_seconds=_required_float(value, "tmin_seconds"),
+        tmax_seconds=_required_float(value, "tmax_seconds"),
+        baseline_start_seconds=_optional_float(
+            value.get("baseline_start_seconds"),
+            "baseline_start_seconds",
+        ),
+        baseline_end_seconds=_optional_float(
+            value.get("baseline_end_seconds"),
+            "baseline_end_seconds",
+        ),
+        reject_eeg_uv=_optional_float(value.get("reject_eeg_uv"), "reject_eeg_uv"),
+    )
+
+
+def _event_log_from_payload(value: Any) -> EventLog:
+    if not isinstance(value, dict):
+        raise WorkerCliError("Payload event_log must be a JSON object.")
+
+    events = value.get("events", [])
+    if not isinstance(events, list):
+        raise WorkerCliError("Payload event_log.events must be a list.")
+
+    mapping = value.get("mapping", {})
+    if not isinstance(mapping, dict):
+        raise WorkerCliError("Payload event_log.mapping must be a JSON object.")
+
+    return EventLog(
+        event_log_id=_required_string(value, "event_log_id"),
+        dataset_id=_required_string(value, "dataset_id"),
+        file_id=_required_string(value, "file_id"),
+        mapping=EventColumnMapping(
+            onset_seconds=_optional_string(mapping.get("onset_seconds"), "onset_seconds"),
+            duration_seconds=_optional_string(
+                mapping.get("duration_seconds"),
+                "duration_seconds",
+            ),
+            trial_type=_optional_string(mapping.get("trial_type"), "trial_type"),
+            stimulus=_optional_string(mapping.get("stimulus"), "stimulus"),
+            response=_optional_string(mapping.get("response"), "response"),
+            correct=_optional_string(mapping.get("correct"), "correct"),
+            reaction_time_seconds=_optional_string(
+                mapping.get("reaction_time_seconds"),
+                "reaction_time_seconds",
+            ),
+        ),
+        row_count=int(_required_float(value, "row_count")),
+        events=[_normalized_event_from_payload(event) for event in events],
+    )
+
+
+def _normalized_event_from_payload(value: Any) -> NormalizedEvent:
+    if not isinstance(value, dict):
+        raise WorkerCliError("Payload event_log.events entries must be JSON objects.")
+
+    return NormalizedEvent(
+        onset_seconds=_required_float(value, "onset_seconds"),
+        source_row=int(_required_float(value, "source_row")),
+        duration_seconds=_optional_float(
+            value.get("duration_seconds"),
+            "duration_seconds",
+        ),
+        trial_type=_optional_string(value.get("trial_type"), "trial_type"),
+        stimulus=_optional_string(value.get("stimulus"), "stimulus"),
+        response=_optional_string(value.get("response"), "response"),
+        correct=_optional_bool(value.get("correct"), "correct"),
+        reaction_time_seconds=_optional_float(
+            value.get("reaction_time_seconds"),
+            "reaction_time_seconds",
+        ),
     )
 
 
@@ -204,6 +357,14 @@ def _optional_string(value: Any, field_name: str) -> str | None:
         return None
     if not isinstance(value, str):
         raise WorkerCliError(f"Payload config {field_name} must be a string or null.")
+    return value
+
+
+def _optional_bool(value: Any, field_name: str) -> bool | None:
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise WorkerCliError(f"Payload {field_name} must be a boolean or null.")
     return value
 
 
