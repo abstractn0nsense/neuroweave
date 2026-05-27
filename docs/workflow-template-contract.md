@@ -412,6 +412,31 @@ Stale validation rules:
 - Non-empty channel-specific fields without a review policy are valid to load but
   marked stale until target-dataset review is resolved.
 
+## C3 Registry API
+
+The initial template registry API exposes the template document without applying
+it to datasets yet:
+
+```text
+POST /workflow-templates
+GET /workflow-templates
+GET /workflow-templates/{template_id}
+DELETE /workflow-templates/{template_id}
+```
+
+API behavior:
+
+- `POST /workflow-templates` saves a new or existing template.
+- When `template_id` is omitted, the API generates one.
+- Updating an existing template preserves `created_at_utc` and refreshes
+  `updated_at_utc`.
+- Invalid templates return `422` with validation errors.
+- Valid but stale templates can be saved and include `validation.stale: true`
+  plus `stale_reasons` in the response.
+- `GET /workflow-templates` returns all templates sorted by id.
+- `DELETE /workflow-templates/{template_id}` removes the registry entry and
+  returns `204`; missing templates return `404`.
+
 ## Relationship To Phase B Artifacts
 
 Workflow templates store intended config. They do not store Phase B diagnostic

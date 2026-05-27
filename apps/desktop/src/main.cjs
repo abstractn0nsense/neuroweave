@@ -361,6 +361,7 @@ async function startBackendIfNeeded() {
     NEUROWEAVE_SAMPLE_DATASET_DIR: process.env.NEUROWEAVE_SAMPLE_DATASET_DIR || path.join(getDataDirectory(), "raw", "samples"),
     NEUROWEAVE_UPLOADS_DIR: process.env.NEUROWEAVE_UPLOADS_DIR || path.join(getDataDirectory(), "raw", "uploads"),
     NEUROWEAVE_RUNS_DIR: process.env.NEUROWEAVE_RUNS_DIR || path.join(getDataDirectory(), "runs"),
+    NEUROWEAVE_TEMPLATES_DIR: process.env.NEUROWEAVE_TEMPLATES_DIR || path.join(getDataDirectory(), "templates"),
     NEUROWEAVE_PROCESSED_DIR: process.env.NEUROWEAVE_PROCESSED_DIR || path.join(getDataDirectory(), "processed"),
     NEUROWEAVE_EPOCHS_DIR: process.env.NEUROWEAVE_EPOCHS_DIR || path.join(getDataDirectory(), "epochs"),
     NEUROWEAVE_ERP_DIR: process.env.NEUROWEAVE_ERP_DIR || path.join(getDataDirectory(), "erp"),

@@ -61,12 +61,26 @@ GET /epoch-runs/{run_id}
 POST /datasets/{dataset_id}/erp-runs
 GET /datasets/{dataset_id}/erp-runs
 GET /erp-runs/{run_id}
+POST /workflow-templates
+GET /workflow-templates
+GET /workflow-templates/{template_id}
+DELETE /workflow-templates/{template_id}
 POST /erp-runs/{run_id}/comparison-summary
 ```
 
-These endpoints write through `eeg_io.registry.JsonRegistryRepository` to the local JSON registry under `data/raw/uploads/`.
+Project, experiment, dataset, upload, and event endpoints write through
+`eeg_io.registry.JsonRegistryRepository` to the local JSON registry under
+`data/raw/uploads/`.
 
 Run metadata is written through `eeg_io.registry.JsonRunRepository` under `data/runs/`. New run records include a `run_kind` and `schema_version` marker while remaining compatible with older preprocessing run JSON that does not have those fields. Processed FIF outputs are written under `data/processed/`.
+
+Workflow templates are written through
+`eeg_io.registry.JsonWorkflowTemplateRepository` under `data/templates/`, or
+`NEUROWEAVE_TEMPLATES_DIR` when set. The template API saves, lists, reads, and
+deletes versioned `WorkflowTemplate` JSON. Template validation rejects
+subject-specific fields such as `manual_bad_channels` and
+`ica.exclude_components`, while channel-specific fields are reported as stale
+unless they are marked for review.
 
 Preprocessing config validation rejects invalid filter ordering, cutoff frequencies at or above Nyquist, upsampling beyond the input sampling rate, and custom reference channels that do not exist in the uploaded recording.
 

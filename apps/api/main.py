@@ -4,7 +4,7 @@ from threading import Lock, Thread
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from contextlib import asynccontextmanager
-from typing import Literal
+from typing import Any, Literal
 import hashlib
 import json
 import os
@@ -63,8 +63,17 @@ from eeg_core.domain import (  # noqa: E402
     ValidationIssue,
     ValidationReport,
     ValidationSeverity,
+    WorkflowTemplate,
+    WorkflowTemplateCompatibility,
+    WorkflowTemplateCreatedFrom,
+    WorkflowTemplateEpochConfig,
+    WorkflowTemplateErpConfig,
+    WorkflowTemplateFieldPolicy,
+    WorkflowTemplateFieldPolicyEntry,
+    WorkflowTemplateWorkflow,
     diagnostic_warnings_from_strings,
     validate_ingestion_dataset,
+    validate_workflow_template,
 )
 from eeg_processing import (  # noqa: E402
     ComparisonError,
@@ -98,7 +107,12 @@ from eeg_io.provenance import (  # noqa: E402
     build_provenance_payload,
 )
 from eeg_io.qc_summary import QcSummaryError, build_qc_summary  # noqa: E402
-from eeg_io.registry import JsonRegistryRepository, JsonRunRepository  # noqa: E402
+from eeg_io.registry import (  # noqa: E402
+    JsonRegistryError,
+    JsonRegistryRepository,
+    JsonRunRepository,
+    JsonWorkflowTemplateRepository,
+)
 from eeg_io.readers import EegMetadataReadError, read_eeg_metadata  # noqa: E402
 
 
@@ -168,6 +182,10 @@ UPLOADS_DIR = _path_from_env(
     REPO_ROOT / "data" / "raw" / "uploads",
 )
 RUNS_DIR = _path_from_env("NEUROWEAVE_RUNS_DIR", REPO_ROOT / "data" / "runs")
+TEMPLATES_DIR = _path_from_env(
+    "NEUROWEAVE_TEMPLATES_DIR",
+    REPO_ROOT / "data" / "templates",
+)
 PROCESSED_DIR = _path_from_env(
     "NEUROWEAVE_PROCESSED_DIR",
     REPO_ROOT / "data" / "processed",
@@ -176,6 +194,7 @@ EPOCHS_DIR = _path_from_env("NEUROWEAVE_EPOCHS_DIR", REPO_ROOT / "data" / "epoch
 ERP_DIR = _path_from_env("NEUROWEAVE_ERP_DIR", REPO_ROOT / "data" / "erp")
 registry_repository = JsonRegistryRepository(UPLOADS_DIR)
 run_repository = JsonRunRepository(RUNS_DIR)
+template_repository = JsonWorkflowTemplateRepository(TEMPLATES_DIR)
 
 
 class WorkerSubprocessError(PreprocessingError):
@@ -690,6 +709,108 @@ class ErpRunResponse(BaseModel):
 
 class ErpRunsResponse(BaseModel):
     runs: list[ErpRunResponse]
+
+
+class WorkflowTemplateCreatedFromPayload(BaseModel):
+    dataset_id: str | None = None
+    preprocessing_run_id: str | None = None
+    epoch_run_id: str | None = None
+    erp_run_id: str | None = None
+
+
+class WorkflowTemplateCompatibilityPayload(BaseModel):
+    minimum_app_phase: str = "C"
+    requires_event_log: bool = True
+    requires_completed_preprocessing: bool = False
+    requires_completed_epoch: bool = False
+
+
+class WorkflowTemplateFieldPolicyEntryPayload(BaseModel):
+    path: str
+    reason: str
+    source_value: Any = None
+    source_value_summary: str | None = None
+    default_action: str | None = None
+
+
+class WorkflowTemplateFieldPolicyPayload(BaseModel):
+    excluded_fields: list[WorkflowTemplateFieldPolicyEntryPayload] = Field(
+        default_factory=list
+    )
+    review_required_fields: list[WorkflowTemplateFieldPolicyEntryPayload] = Field(
+        default_factory=list
+    )
+    channel_specific_fields: list[str] = Field(default_factory=list)
+
+
+class WorkflowTemplateEpochConfigPayload(BaseModel):
+    condition_field: str = "trial_type"
+    tmin_seconds: float = -0.2
+    tmax_seconds: float = 0.8
+    baseline_start_seconds: float | None = None
+    baseline_end_seconds: float | None = None
+    reject_eeg_uv: float | None = None
+
+
+class WorkflowTemplateErpConfigPayload(BaseModel):
+    conditions: list[str] | None = None
+    picks: list[str] | None = None
+    method: str = "mean"
+    plot_mode: str = "gfp"
+    plot_channel: str | None = None
+
+
+class WorkflowTemplateWorkflowPayload(BaseModel):
+    preprocessing: PreprocessingConfigPayload | None = None
+    epoch: WorkflowTemplateEpochConfigPayload | None = None
+    erp: WorkflowTemplateErpConfigPayload | None = None
+
+
+class WorkflowTemplateValidationResponse(BaseModel):
+    valid: bool
+    stale: bool
+    errors: list[str]
+    warnings: list[str]
+    stale_reasons: list[str]
+
+
+class WorkflowTemplateSaveRequest(BaseModel):
+    template_id: str | None = None
+    name: str
+    description: str | None = None
+    created_from: WorkflowTemplateCreatedFromPayload = Field(
+        default_factory=WorkflowTemplateCreatedFromPayload
+    )
+    compatibility: WorkflowTemplateCompatibilityPayload = Field(
+        default_factory=WorkflowTemplateCompatibilityPayload
+    )
+    workflow: WorkflowTemplateWorkflowPayload
+    field_policy: WorkflowTemplateFieldPolicyPayload = Field(
+        default_factory=WorkflowTemplateFieldPolicyPayload
+    )
+    notes: list[str] = Field(default_factory=list)
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkflowTemplateResponse(BaseModel):
+    schema_version: int
+    template_kind: str
+    template_id: str
+    name: str
+    description: str | None
+    created_at_utc: str
+    updated_at_utc: str
+    created_from: WorkflowTemplateCreatedFromPayload
+    compatibility: WorkflowTemplateCompatibilityPayload
+    workflow: WorkflowTemplateWorkflowPayload
+    field_policy: WorkflowTemplateFieldPolicyPayload
+    notes: list[str]
+    extra: dict[str, Any]
+    validation: WorkflowTemplateValidationResponse
+
+
+class WorkflowTemplatesResponse(BaseModel):
+    templates: list[WorkflowTemplateResponse]
 
 
 class QcSummaryResponse(BaseModel):
@@ -1476,6 +1597,72 @@ def list_dataset_erp_runs(dataset_id: str) -> ErpRunsResponse:
     )
 
 
+@app.post(
+    "/workflow-templates",
+    response_model=WorkflowTemplateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def save_workflow_template(
+    request: WorkflowTemplateSaveRequest,
+) -> WorkflowTemplateResponse:
+    template_id = request.template_id or _new_id("template")
+    existing_template = template_repository.get_template(template_id)
+    created_at = (
+        existing_template.created_at_utc
+        if existing_template is not None
+        else _utc_now_iso()
+    )
+    template = _workflow_template_from_request(
+        request=request,
+        template_id=template_id,
+        created_at_utc=created_at,
+        updated_at_utc=_utc_now_iso(),
+    )
+    validation = validate_workflow_template(template)
+    if not validation.valid:
+        raise HTTPException(status_code=422, detail=validation.errors)
+
+    try:
+        saved_template = template_repository.save_template(template)
+    except JsonRegistryError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _workflow_template_response(saved_template)
+
+
+@app.get(
+    "/workflow-templates",
+    response_model=WorkflowTemplatesResponse,
+)
+def list_workflow_templates() -> WorkflowTemplatesResponse:
+    return WorkflowTemplatesResponse(
+        templates=[
+            _workflow_template_response(template)
+            for template in template_repository.list_templates()
+        ]
+    )
+
+
+@app.get(
+    "/workflow-templates/{template_id}",
+    response_model=WorkflowTemplateResponse,
+)
+def get_workflow_template(template_id: str) -> WorkflowTemplateResponse:
+    template = template_repository.get_template(template_id)
+    if template is None:
+        raise HTTPException(status_code=404, detail="Workflow template not found")
+    return _workflow_template_response(template)
+
+
+@app.delete(
+    "/workflow-templates/{template_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_workflow_template(template_id: str) -> None:
+    if not template_repository.delete_template(template_id):
+        raise HTTPException(status_code=404, detail="Workflow template not found")
+    return None
+
+
 @app.get("/datasets/{dataset_id}/qc-summary", response_model=QcSummaryResponse)
 def get_dataset_qc_summary(
     dataset_id: str,
@@ -1881,6 +2068,142 @@ def _erp_run_response(run: ErpRun) -> ErpRunResponse:
         warnings=run.warnings,
         diagnostics=_run_diagnostics_response(run.diagnostics),
         errors=run.errors,
+    )
+
+
+def _workflow_template_response(
+    template: WorkflowTemplate,
+) -> WorkflowTemplateResponse:
+    validation = validate_workflow_template(template)
+    return WorkflowTemplateResponse(
+        schema_version=template.schema_version,
+        template_kind=template.template_kind,
+        template_id=template.template_id,
+        name=template.name,
+        description=template.description,
+        created_at_utc=template.created_at_utc,
+        updated_at_utc=template.updated_at_utc,
+        created_from=WorkflowTemplateCreatedFromPayload(
+            **asdict(template.created_from)
+        ),
+        compatibility=WorkflowTemplateCompatibilityPayload(
+            **asdict(template.compatibility)
+        ),
+        workflow=_workflow_template_workflow_payload(template.workflow),
+        field_policy=_workflow_template_field_policy_payload(template.field_policy),
+        notes=template.notes,
+        extra=template.extra,
+        validation=WorkflowTemplateValidationResponse(
+            valid=validation.valid,
+            stale=validation.stale,
+            errors=validation.errors,
+            warnings=validation.warnings,
+            stale_reasons=validation.stale_reasons,
+        ),
+    )
+
+
+def _workflow_template_workflow_payload(
+    workflow: WorkflowTemplateWorkflow,
+) -> WorkflowTemplateWorkflowPayload:
+    return WorkflowTemplateWorkflowPayload(
+        preprocessing=(
+            PreprocessingConfigPayload(**asdict(workflow.preprocessing))
+            if workflow.preprocessing is not None
+            else None
+        ),
+        epoch=(
+            WorkflowTemplateEpochConfigPayload(**asdict(workflow.epoch))
+            if workflow.epoch is not None
+            else None
+        ),
+        erp=(
+            WorkflowTemplateErpConfigPayload(**asdict(workflow.erp))
+            if workflow.erp is not None
+            else None
+        ),
+    )
+
+
+def _workflow_template_field_policy_payload(
+    field_policy: WorkflowTemplateFieldPolicy,
+) -> WorkflowTemplateFieldPolicyPayload:
+    return WorkflowTemplateFieldPolicyPayload(
+        excluded_fields=[
+            WorkflowTemplateFieldPolicyEntryPayload(**asdict(entry))
+            for entry in field_policy.excluded_fields
+        ],
+        review_required_fields=[
+            WorkflowTemplateFieldPolicyEntryPayload(**asdict(entry))
+            for entry in field_policy.review_required_fields
+        ],
+        channel_specific_fields=field_policy.channel_specific_fields,
+    )
+
+
+def _workflow_template_from_request(
+    *,
+    request: WorkflowTemplateSaveRequest,
+    template_id: str,
+    created_at_utc: str,
+    updated_at_utc: str,
+) -> WorkflowTemplate:
+    return WorkflowTemplate(
+        template_id=template_id,
+        name=request.name,
+        description=request.description,
+        created_at_utc=created_at_utc,
+        updated_at_utc=updated_at_utc,
+        created_from=WorkflowTemplateCreatedFrom(
+            **request.created_from.model_dump()
+        ),
+        compatibility=WorkflowTemplateCompatibility(
+            **request.compatibility.model_dump()
+        ),
+        workflow=_workflow_template_workflow_from_payload(request.workflow),
+        field_policy=_workflow_template_field_policy_from_payload(
+            request.field_policy
+        ),
+        notes=list(request.notes),
+        extra=dict(request.extra),
+    )
+
+
+def _workflow_template_workflow_from_payload(
+    payload: WorkflowTemplateWorkflowPayload,
+) -> WorkflowTemplateWorkflow:
+    return WorkflowTemplateWorkflow(
+        preprocessing=(
+            _preprocessing_config_from_payload(payload.preprocessing)
+            if payload.preprocessing is not None
+            else None
+        ),
+        epoch=(
+            WorkflowTemplateEpochConfig(**payload.epoch.model_dump())
+            if payload.epoch is not None
+            else None
+        ),
+        erp=(
+            WorkflowTemplateErpConfig(**payload.erp.model_dump())
+            if payload.erp is not None
+            else None
+        ),
+    )
+
+
+def _workflow_template_field_policy_from_payload(
+    payload: WorkflowTemplateFieldPolicyPayload,
+) -> WorkflowTemplateFieldPolicy:
+    return WorkflowTemplateFieldPolicy(
+        excluded_fields=[
+            WorkflowTemplateFieldPolicyEntry(**entry.model_dump())
+            for entry in payload.excluded_fields
+        ],
+        review_required_fields=[
+            WorkflowTemplateFieldPolicyEntry(**entry.model_dump())
+            for entry in payload.review_required_fields
+        ],
+        channel_specific_fields=list(payload.channel_specific_fields),
     )
 
 

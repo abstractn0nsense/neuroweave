@@ -84,6 +84,7 @@ userData/
     raw/samples/        local sample EEG files
     raw/uploads/        user-uploaded recordings and event logs
     runs/               run state
+    templates/          workflow template registry
     processed/          preprocessing outputs
     epochs/             epoch outputs
     erp/                ERP outputs, plots, reports, bundles
