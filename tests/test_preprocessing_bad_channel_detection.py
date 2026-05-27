@@ -7,6 +7,45 @@ from eeg_core.domain import BadChannelDetectionConfig, PreprocessingConfig
 from eeg_processing.preprocessing import preprocess_raw_eeg
 
 
+def test_preprocessing_applies_manual_bad_channels_without_interpolation(tmp_path):
+    input_path = tmp_path / "input_raw.fif"
+    output_path = tmp_path / "output_raw.fif"
+    sampling_rate = 100.0
+    times = np.arange(0, 1, 1 / sampling_rate)
+    data = np.vstack(
+        [
+            np.sin(2 * np.pi * 8 * times) * 1e-6,
+            np.sin(2 * np.pi * 9 * times) * 1e-6,
+        ]
+    )
+    raw = mne.io.RawArray(
+        data,
+        mne.create_info(["Fz", "Cz"], sampling_rate, ch_types="eeg"),
+        verbose=False,
+    )
+    raw.save(input_path, overwrite=True, verbose=False)
+
+    metadata = preprocess_raw_eeg(
+        input_path,
+        output_path,
+        PreprocessingConfig(manual_bad_channels=["Cz"]),
+    )
+
+    output_raw = mne.io.read_raw_fif(output_path, preload=False, verbose=False)
+    artifact_summary = metadata["diagnostics"]["artifact_summary"]
+    assert output_raw.info["bads"] == ["Cz"]
+    assert artifact_summary["input"]["bad_channels"] == []
+    assert artifact_summary["output"]["bad_channels"] == ["Cz"]
+    assert artifact_summary["bad_channels"]["manual"] == {
+        "channels": ["Cz"],
+        "applied_channels": ["Cz"],
+        "status": "applied",
+    }
+    assert artifact_summary["bad_channels"]["interpolation"]["status"] == (
+        "not_requested"
+    )
+
+
 def test_preprocessing_reports_flat_bad_channel_candidate(tmp_path):
     input_path = tmp_path / "input_raw.fif"
     output_path = tmp_path / "output_raw.fif"

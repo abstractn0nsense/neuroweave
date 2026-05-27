@@ -319,6 +319,12 @@ def test_create_preprocessing_run_accepts_artifact_aware_contract(
     artifact_summary = json.loads(artifact_summary_path.read_text(encoding="utf-8"))
     assert artifact_summary["schema_version"] == 1
     assert artifact_summary["bad_channels"]["manual"]["channels"] == [channel_name]
+    assert artifact_summary["bad_channels"]["manual"]["applied_channels"] == [
+        channel_name
+    ]
+    assert artifact_summary["bad_channels"]["manual"]["status"] == "applied"
+    assert artifact_summary["output"]["bad_channels"] == [channel_name]
+    assert artifact_summary["output"]["bad_channel_count"] == 1
     assert payload["output_metadata"]["artifact_bad_channel_detection_status"] == (
         "completed"
     )

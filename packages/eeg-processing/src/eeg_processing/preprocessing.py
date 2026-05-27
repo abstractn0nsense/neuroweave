@@ -59,6 +59,7 @@ def preprocess_raw_eeg(
                 raw.n_times / input_sampling_rate if input_sampling_rate else 0
             )
             input_artifact_summary = _artifact_summary(raw)
+            manual_bad_channels = _apply_manual_bad_channels(raw, config)
             _check_cancelled(should_cancel, manual_warnings)
             bad_channel_detection = _bad_channel_detection_report(raw, config)
             manual_warnings.extend(bad_channel_detection.get("warnings", []))
@@ -193,6 +194,7 @@ def preprocess_raw_eeg(
                 "output": output_artifact_summary,
                 "bad_channels": _bad_channel_contract_summary(
                     config,
+                    manual_bad_channels=manual_bad_channels,
                     detection=bad_channel_detection,
                 ),
                 "artifact_rejection": {
@@ -270,13 +272,15 @@ def _artifact_summary(raw: Any) -> dict[str, Any]:
 def _bad_channel_contract_summary(
     config: PreprocessingConfig,
     *,
+    manual_bad_channels: list[str],
     detection: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "schema_version": config.artifact_schema_version,
         "manual": {
             "channels": list(config.manual_bad_channels),
-            "status": "schema_only" if config.manual_bad_channels else "not_requested",
+            "applied_channels": manual_bad_channels,
+            "status": "applied" if manual_bad_channels else "not_requested",
         },
         "detection": detection,
         "interpolation": {
@@ -288,6 +292,28 @@ def _bad_channel_contract_summary(
             ),
         },
     }
+
+
+def _apply_manual_bad_channels(raw: Any, config: PreprocessingConfig) -> list[str]:
+    requested_channels = list(dict.fromkeys(config.manual_bad_channels))
+    if not requested_channels:
+        return []
+
+    channel_names = set(raw.ch_names)
+    missing_channels = [
+        channel for channel in requested_channels if channel not in channel_names
+    ]
+    if missing_channels:
+        raise PreprocessingError(
+            "Manual bad channels were not found in the recording: "
+            + ", ".join(missing_channels)
+        )
+
+    existing_bads = [str(channel) for channel in raw.info.get("bads", [])]
+    bads = set(existing_bads)
+    bads.update(requested_channels)
+    raw.info["bads"] = [channel for channel in raw.ch_names if channel in bads]
+    return requested_channels
 
 
 def _bad_channel_detection_report(raw: Any, config: PreprocessingConfig) -> dict[str, Any]:
@@ -442,10 +468,6 @@ def _ica_contract_summary(config: PreprocessingConfig) -> dict[str, Any]:
 
 def _artifact_contract_warnings(config: PreprocessingConfig) -> list[str]:
     warnings: list[str] = []
-    if config.manual_bad_channels:
-        warnings.append(
-            "Manual bad channel config was captured but is not applied until Phase B3."
-        )
     if config.bad_channel_interpolation.enabled:
         warnings.append(
             "Bad channel interpolation config was captured but is not executed until Phase B4."

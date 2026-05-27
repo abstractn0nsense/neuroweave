@@ -448,6 +448,7 @@ const DEFAULT_PREPROCESSING_CONFIG = {
   notch_hz: "",
   resample_hz: "",
   reference: "average",
+  manual_bad_channels: [] as string[],
   bad_channel_detection: {
     enabled: false,
     method: "deviation",
@@ -1914,6 +1915,7 @@ function App() {
                   onUploadEeg={uploadEegFile}
                   onUploadEvent={uploadEventFile}
                   onValidate={validateDataset}
+                  metadata={metadata}
                   preprocessingConfig={preprocessingConfig}
                   preprocessingRuns={preprocessingRuns}
                   uploadedEegFilename={uploadedEegFilename}
@@ -2383,6 +2385,7 @@ function IntakeSection({
   onUploadEeg,
   onUploadEvent,
   onValidate,
+  metadata,
   preprocessingConfig,
   preprocessingRuns,
   uploadedEegFilename,
@@ -2412,6 +2415,7 @@ function IntakeSection({
   onUploadEeg: () => void;
   onUploadEvent: () => void;
   onValidate: () => void;
+  metadata: LoadState<DatasetMetadata>;
   preprocessingConfig: typeof DEFAULT_PREPROCESSING_CONFIG;
   preprocessingRuns: LoadState<PreprocessingRun[]>;
   uploadedEegFilename: string | null;
@@ -2421,6 +2425,7 @@ function IntakeSection({
   const disabled = !activeDataset;
   const canContinue = validation?.valid === true || activeDataset?.status === "valid";
   const configError = getPreprocessingConfigError(preprocessingConfig);
+  const channelNames = metadata.status === "success" ? metadata.data.channel_names : [];
   const eegStatus = getUploadStatus({
     disabled,
     selectedFilename: eegFile?.name ?? null,
@@ -2760,6 +2765,30 @@ function IntakeSection({
             >
               <option value="">Unchanged</option>
               <option value="average">Average</option>
+            </select>
+          </label>
+          <label>
+            <span>Manual bad channels</span>
+            <select
+              disabled={!canContinue || channelNames.length === 0}
+              multiple
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  manual_bad_channels: Array.from(
+                    event.currentTarget.selectedOptions,
+                    (option) => option.value,
+                  ),
+                })
+              }
+              size={Math.min(Math.max(channelNames.length, 2), 8)}
+              value={preprocessingConfig.manual_bad_channels}
+            >
+              {channelNames.map((channelName) => (
+                <option key={channelName} value={channelName}>
+                  {channelName}
+                </option>
+              ))}
             </select>
           </label>
           <label>
@@ -4526,7 +4555,7 @@ function normalizePreprocessingConfig(
     notch_hz: parseOptionalNumber(config.notch_hz),
     resample_hz: parseOptionalNumber(config.resample_hz),
     reference: config.reference || null,
-    manual_bad_channels: [],
+    manual_bad_channels: config.manual_bad_channels,
     bad_channel_detection: {
       enabled: detectionEnabled,
       method: detectionEnabled
