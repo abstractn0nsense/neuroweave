@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from apps.api import main as api_main
 from eeg_core.domain import (
+    BadChannelDetectionConfig,
     Dataset,
     DatasetStatus,
     EpochConfig,
@@ -190,9 +191,17 @@ def _seed_completed_run_chain(tmp_path, dataset_id: str = "dataset-001") -> None
                 low_pass_hz=40.0,
                 reference="average",
                 manual_bad_channels=["Fp1"],
+                bad_channel_detection=BadChannelDetectionConfig(
+                    enabled=True,
+                    method="deviation",
+                    zscore_threshold=4.5,
+                ),
                 ica=IcaConfig(
                     enabled=True,
+                    method="picard",
                     n_components=2,
+                    random_state=13,
+                    max_iter=250,
                     exclude_components=[0],
                     eog_channels=["VEOG"],
                 ),
@@ -408,6 +417,14 @@ def test_workflow_template_from_completed_erp_run_builds_reusable_template(
     }
     preprocessing = payload["workflow"]["preprocessing"]
     assert preprocessing["manual_bad_channels"] == []
+    assert preprocessing["bad_channel_detection"]["enabled"] is True
+    assert preprocessing["bad_channel_detection"]["method"] == "deviation"
+    assert preprocessing["bad_channel_detection"]["zscore_threshold"] == 4.5
+    assert preprocessing["ica"]["enabled"] is True
+    assert preprocessing["ica"]["method"] == "picard"
+    assert preprocessing["ica"]["n_components"] == 2
+    assert preprocessing["ica"]["random_state"] == 13
+    assert preprocessing["ica"]["max_iter"] == 250
     assert preprocessing["ica"]["exclude_components"] == []
     assert preprocessing["ica"]["eog_channels"] == ["VEOG"]
     assert payload["workflow"]["epoch"]["condition_field"] == "trial_type"
@@ -487,6 +504,60 @@ def test_workflow_template_apply_preview_returns_ready_config_with_overrides(
     preprocessing = payload["configs"]["preprocessing"]
     assert preprocessing["manual_bad_channels"] == ["Fp1"]
     assert preprocessing["ica"]["exclude_components"] == [1]
+    assert payload["errors"] == []
+
+
+def test_workflow_template_apply_preview_does_not_auto_apply_imported_ica_exclusions(
+    tmp_path,
+    monkeypatch,
+):
+    client = _client_with_repositories(tmp_path, monkeypatch)
+    _seed_dataset()
+    template_path = (
+        api_main.template_repository.template_path("template-imported-ica")
+    )
+    template_path.parent.mkdir(parents=True, exist_ok=True)
+    template_path.write_text(
+        """
+{
+  "template_id": "template-imported-ica",
+  "name": "Imported ICA review",
+  "created_at_utc": "2026-05-28T00:00:00Z",
+  "workflow": {
+    "preprocessing": {
+      "high_pass_hz": 1.0,
+      "low_pass_hz": 40.0,
+      "ica": {
+        "enabled": true,
+        "method": "fastica",
+        "exclude_components": [0, 1]
+      }
+    }
+  }
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    response = client.post(
+        "/workflow-templates/template-imported-ica/apply-preview",
+        json={"target_dataset_id": "dataset-001"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "requires_review"
+    assert payload["configs"]["preprocessing"]["ica"]["exclude_components"] == []
+    assert payload["review_required_fields"] == [
+        {
+            "path": "workflow.preprocessing.ica.exclude_components",
+            "reason": "subject_specific_review_decision",
+            "source_value": [0, 1],
+            "source_value_summary": "2 component(s) imported as review-only",
+            "default_action": "requires_review",
+        }
+    ]
     assert payload["errors"] == []
 
 

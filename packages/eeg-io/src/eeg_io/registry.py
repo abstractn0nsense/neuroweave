@@ -1,4 +1,4 @@
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
@@ -680,6 +680,14 @@ def _workflow_template_from_json(data: JsonObject) -> WorkflowTemplate:
     for key, value in data.items():
         if key not in known_keys:
             extra[key] = value
+    workflow = _workflow_template_workflow_from_json(workflow_data)
+    field_policy = _workflow_template_field_policy_from_json(
+        _json_object(data.get("field_policy"))
+    )
+    workflow, field_policy = _workflow_template_guard_ica_exclusions(
+        workflow=workflow,
+        field_policy=field_policy,
+    )
     return WorkflowTemplate(
         schema_version=int(data.get("schema_version", 1)),
         template_kind=str(data.get("template_kind", "workflow_template")),
@@ -696,12 +704,51 @@ def _workflow_template_from_json(data: JsonObject) -> WorkflowTemplate:
         compatibility=_workflow_template_compatibility_from_json(
             _json_object(data.get("compatibility"))
         ),
-        workflow=_workflow_template_workflow_from_json(workflow_data),
-        field_policy=_workflow_template_field_policy_from_json(
-            _json_object(data.get("field_policy"))
-        ),
+        workflow=workflow,
+        field_policy=field_policy,
         notes=_string_list(data.get("notes")),
         extra=extra,
+    )
+
+
+def _workflow_template_guard_ica_exclusions(
+    *,
+    workflow: WorkflowTemplateWorkflow,
+    field_policy: WorkflowTemplateFieldPolicy,
+) -> tuple[WorkflowTemplateWorkflow, WorkflowTemplateFieldPolicy]:
+    preprocessing = workflow.preprocessing
+    if preprocessing is None or not preprocessing.ica.exclude_components:
+        return workflow, field_policy
+
+    imported_exclusions = list(preprocessing.ica.exclude_components)
+    sanitized_preprocessing = replace(
+        preprocessing,
+        ica=replace(preprocessing.ica, exclude_components=[]),
+    )
+    sanitized_workflow = replace(workflow, preprocessing=sanitized_preprocessing)
+
+    review_path = "workflow.preprocessing.ica.exclude_components"
+    existing_review_paths = {
+        entry.path for entry in field_policy.review_required_fields
+    }
+    if review_path in existing_review_paths:
+        return sanitized_workflow, field_policy
+
+    review_required_fields = [
+        *field_policy.review_required_fields,
+        WorkflowTemplateFieldPolicyEntry(
+            path=review_path,
+            reason="subject_specific_review_decision",
+            source_value=imported_exclusions,
+            source_value_summary=(
+                f"{len(imported_exclusions)} component(s) imported as review-only"
+            ),
+            default_action="requires_review",
+        ),
+    ]
+    return sanitized_workflow, replace(
+        field_policy,
+        review_required_fields=review_required_fields,
     )
 
 

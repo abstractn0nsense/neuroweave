@@ -210,6 +210,70 @@ def test_workflow_template_repository_loads_legacy_template_defaults(tmp_path):
     assert stored["extra"]["future_top_level"] == {"kept": True}
 
 
+def test_workflow_template_repository_imports_ica_exclusions_as_review_only(
+    tmp_path,
+):
+    repository = JsonWorkflowTemplateRepository(tmp_path / "templates")
+    path = repository.template_path("legacy-ica-template")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "template_id": "legacy-ica-template",
+                "name": "Legacy ICA review",
+                "created_at_utc": "2026-05-28T00:00:00Z",
+                "workflow": {
+                    "preprocessing": {
+                        "bad_channel_detection": {
+                            "enabled": True,
+                            "method": "deviation",
+                            "zscore_threshold": 4.5,
+                        },
+                        "ica": {
+                            "enabled": True,
+                            "method": "picard",
+                            "n_components": 0.95,
+                            "random_state": 13,
+                            "max_iter": 250,
+                            "exclude_components": [0, 2],
+                        },
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    template = repository.get_template("legacy-ica-template")
+
+    assert template is not None
+    assert template.workflow.preprocessing is not None
+    preprocessing = template.workflow.preprocessing
+    assert preprocessing.ica.enabled is True
+    assert preprocessing.ica.method == "picard"
+    assert preprocessing.ica.n_components == 0.95
+    assert preprocessing.ica.random_state == 13
+    assert preprocessing.ica.max_iter == 250
+    assert preprocessing.ica.exclude_components == []
+    assert preprocessing.bad_channel_detection.enabled is True
+    assert preprocessing.bad_channel_detection.method == "deviation"
+    assert preprocessing.bad_channel_detection.zscore_threshold == 4.5
+    assert validate_workflow_template(template).valid
+    review_entry = template.field_policy.review_required_fields[0]
+    assert review_entry.path == "workflow.preprocessing.ica.exclude_components"
+    assert review_entry.source_value == [0, 2]
+    assert review_entry.default_action == "requires_review"
+
+    repository.save_template(template)
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    assert stored["workflow"]["preprocessing"]["ica"]["exclude_components"] == []
+    assert stored["field_policy"]["review_required_fields"][0]["source_value"] == [
+        0,
+        2,
+    ]
+
+
 def test_workflow_template_validation_flags_unsupported_schema_as_stale():
     template = _template(schema_version=99)
 

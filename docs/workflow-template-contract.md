@@ -251,6 +251,9 @@ validation:
 - `workflow.preprocessing.ica.n_components`
 - `workflow.preprocessing.ica.random_state`
 - `workflow.preprocessing.ica.max_iter`
+- `workflow.preprocessing.bad_channel_detection.method`
+- `workflow.preprocessing.bad_channel_detection.minimum_correlation`
+- `workflow.preprocessing.bad_channel_detection.zscore_threshold`
 - `workflow.preprocessing.artifact_handling.eog_enabled`
 - `workflow.preprocessing.artifact_handling.ecg_enabled`
 - `workflow.preprocessing.artifact_handling.create_annotations`
@@ -409,6 +412,10 @@ Stale validation rules:
 - `manual_bad_channels` in reusable preprocessing config is invalid and stale.
 - `ica.exclude_components` in reusable preprocessing config is invalid and
   stale.
+- Imported legacy templates that contain `ica.exclude_components` are normalized
+  on load: the reusable config value is cleared, the source value is kept only
+  in `field_policy.review_required_fields`, and apply preview returns
+  `requires_review` without auto-applying the component exclusions.
 - Non-empty channel-specific fields without a review policy are valid to load but
   marked stale until target-dataset review is resolved.
 
@@ -456,6 +463,9 @@ Template creation from completed runs:
   reusable epoch/ERP config and recorded as source-run bindings.
 - Non-empty channel-specific source fields are copied into config but recorded in
   `field_policy.review_required_fields`.
+- ICA reusable settings keep `ica.enabled`, `ica.method`, component-count/random
+  state/max-iteration settings, and bad-channel detection thresholds. Component
+  exclusions are never copied into reusable config by default.
 
 Template apply preview:
 
@@ -466,6 +476,8 @@ Template apply preview:
   `manual_bad_channels` and `ica_exclude_components`.
 - Overrides are validated against the target recording before the preview is
   considered ready.
+- Imported `ica.exclude_components` source values are review-only metadata until
+  a future target-subject review flow explicitly turns them into overrides.
 - Epoch and ERP bindings are resolved from request-provided completed run ids, or
   from the latest completed target-dataset run when available.
 - When preprocessing or epoching is part of the template but the downstream run
