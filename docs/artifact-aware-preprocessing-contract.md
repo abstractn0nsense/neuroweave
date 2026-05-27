@@ -63,7 +63,7 @@ Allowed methods:
 Channel-list fields must reference uploaded recording channel names. The API
 rejects unknown channels before queueing a run.
 
-## Phase B7 Execution Status
+## Phase B8 Execution Status
 
 B2 executes automatic bad-channel detection in report-only mode. It records
 candidates and metrics in diagnostics, but does not mutate `raw.info["bads"]`,
@@ -91,6 +91,11 @@ B7 executes ICA when `ica.enabled` is true. The worker fits ICA on non-bad EEG
 channels after filtering/reference and before resampling, applies valid
 `exclude_components`, mutates the preprocessed raw output only through ICA apply,
 and records component metadata plus requested/applied exclusions.
+
+B8 adds ICA review metadata and UI. Component metadata includes EOG/ECG
+association scores when those channels are configured or inferred. The QC view
+lists components and lets the user select excluded components for the next
+preprocessing run.
 
 Bad-channel detection methods:
 
@@ -257,9 +262,25 @@ enabled. This gives the UI, export bundle, and future QC views a stable schema.
         "component": 0,
         "excluded": true,
         "pca_explained_variance": 2.4,
-        "pca_explained_variance_ratio": 0.42
+        "pca_explained_variance_ratio": 0.42,
+        "eog_score": 0.81,
+        "eog_channel": "VEOG",
+        "eog_correlation": -0.81,
+        "ecg_score": 0.12,
+        "ecg_channel": "ECG",
+        "ecg_correlation": 0.12
       }
     ],
+    "association_sources": {
+      "eog": {
+        "channels": ["VEOG"],
+        "channel_source": "channel_type"
+      },
+      "ecg": {
+        "channels": ["ECG"],
+        "channel_source": "channel_type"
+      }
+    },
     "apply_performed": true,
     "warnings": []
   },

@@ -1016,6 +1016,7 @@ def _ica_execution_report(raw: Any, config: PreprocessingConfig) -> dict[str, An
             "warnings": [str(exc)],
         }
     component_count = int(ica.n_components_)
+    association_scores = _ica_artifact_association_scores(ica, raw, config)
     exclusions = _valid_ica_exclusions(
         ica_config.exclude_components,
         component_count=component_count,
@@ -1045,6 +1046,28 @@ def _ica_execution_report(raw: Any, config: PreprocessingConfig) -> dict[str, An
                 "excluded": index in exclusions,
                 "pca_explained_variance": variance,
                 "pca_explained_variance_ratio": ratio,
+                "eog_score": association_scores["eog"]["scores"][index]["score"]
+                if index < len(association_scores["eog"]["scores"])
+                else None,
+                "eog_channel": association_scores["eog"]["scores"][index]["channel"]
+                if index < len(association_scores["eog"]["scores"])
+                else None,
+                "eog_correlation": association_scores["eog"]["scores"][index][
+                    "correlation"
+                ]
+                if index < len(association_scores["eog"]["scores"])
+                else None,
+                "ecg_score": association_scores["ecg"]["scores"][index]["score"]
+                if index < len(association_scores["ecg"]["scores"])
+                else None,
+                "ecg_channel": association_scores["ecg"]["scores"][index]["channel"]
+                if index < len(association_scores["ecg"]["scores"])
+                else None,
+                "ecg_correlation": association_scores["ecg"]["scores"][index][
+                    "correlation"
+                ]
+                if index < len(association_scores["ecg"]["scores"])
+                else None,
             }
         )
 
@@ -1057,8 +1080,96 @@ def _ica_execution_report(raw: Any, config: PreprocessingConfig) -> dict[str, An
         "fit_channels": channel_names,
         "excluded_components_applied": exclusions,
         "component_metadata": component_metadata,
+        "association_sources": {
+            "eog": {
+                "channels": association_scores["eog"]["channels"],
+                "channel_source": association_scores["eog"]["channel_source"],
+            },
+            "ecg": {
+                "channels": association_scores["ecg"]["channels"],
+                "channel_source": association_scores["ecg"]["channel_source"],
+            },
+        },
         "apply_performed": apply_performed,
         "warnings": warnings,
+    }
+
+
+def _ica_artifact_association_scores(
+    ica: Any,
+    raw: Any,
+    config: PreprocessingConfig,
+) -> dict[str, Any]:
+    sources = ica.get_sources(raw).get_data()
+    return {
+        "eog": _ica_artifact_kind_scores(
+            raw,
+            sources,
+            kind="eog",
+            requested_channels=config.ica.eog_channels
+            or config.artifact_handling.eog_channels,
+        ),
+        "ecg": _ica_artifact_kind_scores(
+            raw,
+            sources,
+            kind="ecg",
+            requested_channels=config.ica.ecg_channels
+            or config.artifact_handling.ecg_channels,
+        ),
+    }
+
+
+def _ica_artifact_kind_scores(
+    raw: Any,
+    sources: Any,
+    *,
+    kind: str,
+    requested_channels: list[str],
+) -> dict[str, Any]:
+    import numpy as np
+
+    resolved = _resolve_artifact_channels(raw, kind, requested_channels)
+    channel_names = resolved["channels"]
+    empty_scores = [
+        {"score": None, "channel": None, "correlation": None}
+        for _ in range(sources.shape[0])
+    ]
+    if not channel_names:
+        return {
+            "channels": [],
+            "channel_source": resolved["source"],
+            "scores": empty_scores,
+        }
+
+    artifact_data = raw.get_data(picks=channel_names)
+    scores: list[dict[str, Any]] = []
+    for source in sources:
+        best_channel: str | None = None
+        best_correlation: float | None = None
+        best_score: float | None = None
+        for channel_name, artifact_signal in zip(channel_names, artifact_data):
+            if np.std(source) == 0 or np.std(artifact_signal) == 0:
+                continue
+            correlation = float(np.corrcoef(source, artifact_signal)[0, 1])
+            if not np.isfinite(correlation):
+                continue
+            score = abs(correlation)
+            if best_score is None or score > best_score:
+                best_score = score
+                best_correlation = correlation
+                best_channel = channel_name
+        scores.append(
+            {
+                "score": best_score,
+                "channel": best_channel,
+                "correlation": best_correlation,
+            }
+        )
+
+    return {
+        "channels": channel_names,
+        "channel_source": resolved["source"],
+        "scores": scores,
     }
 
 

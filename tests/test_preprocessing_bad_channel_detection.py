@@ -250,7 +250,7 @@ def test_preprocessing_fits_and_applies_ica_exclusions(tmp_path):
     times = np.arange(0, 6, 1 / sampling_rate)
     source_a = np.sin(2 * np.pi * 8 * times) * 1e-6
     source_b = np.sign(np.sin(2 * np.pi * 2 * times)) * 0.5e-6
-    data = np.vstack(
+    eeg_data = np.vstack(
         [
             source_a + source_b,
             0.6 * source_a - source_b,
@@ -258,9 +258,14 @@ def test_preprocessing_fits_and_applies_ica_exclusions(tmp_path):
             0.3 * source_a + 0.2 * source_b,
         ]
     )
+    data = np.vstack([eeg_data, source_b * 50, source_a * 40])
     raw = mne.io.RawArray(
         data,
-        mne.create_info(["Fz", "Cz", "Pz", "Oz"], sampling_rate, ch_types="eeg"),
+        mne.create_info(
+            ["Fz", "Cz", "Pz", "Oz", "VEOG", "ECG"],
+            sampling_rate,
+            ch_types=["eeg", "eeg", "eeg", "eeg", "eog", "ecg"],
+        ),
         verbose=False,
     )
     raw.save(input_path, overwrite=True, verbose=False)
@@ -275,6 +280,8 @@ def test_preprocessing_fits_and_applies_ica_exclusions(tmp_path):
                 random_state=97,
                 max_iter=200,
                 exclude_components=[0],
+                eog_channels=["VEOG"],
+                ecg_channels=["ECG"],
             )
         ),
     )
@@ -288,7 +295,17 @@ def test_preprocessing_fits_and_applies_ica_exclusions(tmp_path):
     assert ica["excluded_components_applied"] == [0]
     assert ica["apply_performed"] is True
     assert ica["component_metadata"][0]["excluded"] is True
-    assert not np.allclose(output_raw.get_data(), data)
+    assert ica["association_sources"]["eog"]["channels"] == ["VEOG"]
+    assert ica["association_sources"]["ecg"]["channels"] == ["ECG"]
+    assert any(
+        component["eog_score"] is not None
+        for component in ica["component_metadata"]
+    )
+    assert any(
+        component["ecg_score"] is not None
+        for component in ica["component_metadata"]
+    )
+    assert not np.allclose(output_raw.get_data(picks=["Fz", "Cz", "Pz", "Oz"]), eeg_data)
 
 
 def test_preprocessing_report_is_json_serializable(tmp_path):

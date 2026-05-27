@@ -2031,7 +2031,11 @@ function App() {
                     </p>
                   </div>
                 </div>
-                <QcDashboard qcSummary={qcSummary} />
+                <QcDashboard
+                  onPreprocessingConfigChange={setPreprocessingConfig}
+                  preprocessingConfig={preprocessingConfig}
+                  qcSummary={qcSummary}
+                />
               </section>
             </section>
           </section>
@@ -3860,8 +3864,14 @@ function ErpPreview({ run }: { run: ErpRun }) {
 }
 
 function QcDashboard({
+  onPreprocessingConfigChange,
+  preprocessingConfig,
   qcSummary,
 }: {
+  onPreprocessingConfigChange: (
+    config: typeof DEFAULT_PREPROCESSING_CONFIG,
+  ) => void;
+  preprocessingConfig: typeof DEFAULT_PREPROCESSING_CONFIG;
   qcSummary: LoadState<QcSummaryResponse | null>;
 }) {
   if (qcSummary.status === "loading" || qcSummary.status === "idle") {
@@ -3893,7 +3903,11 @@ function QcDashboard({
         </div>
       ) : null}
       {qcSummary.data.summary.run_kind === "preprocessing" ? (
-        <PreprocessingQc summary={qcSummary.data.summary.preprocessing ?? {}} />
+        <PreprocessingQc
+          onPreprocessingConfigChange={onPreprocessingConfigChange}
+          preprocessingConfig={preprocessingConfig}
+          summary={qcSummary.data.summary.preprocessing ?? {}}
+        />
       ) : null}
       {qcSummary.data.summary.run_kind === "epoch" ? (
         <EpochQc summary={qcSummary.data.summary.epoch ?? {}} />
@@ -3905,7 +3919,17 @@ function QcDashboard({
   );
 }
 
-function PreprocessingQc({ summary }: { summary: Record<string, unknown> }) {
+function PreprocessingQc({
+  onPreprocessingConfigChange,
+  preprocessingConfig,
+  summary,
+}: {
+  onPreprocessingConfigChange: (
+    config: typeof DEFAULT_PREPROCESSING_CONFIG,
+  ) => void;
+  preprocessingConfig: typeof DEFAULT_PREPROCESSING_CONFIG;
+  summary: Record<string, unknown>;
+}) {
   const filters = asRecord(summary.filters);
   const reference = asRecord(summary.reference);
   const resample = asRecord(summary.resample);
@@ -3968,6 +3992,95 @@ function PreprocessingQc({ summary }: { summary: Record<string, unknown> }) {
           value={formatRatio(delta.psd_total_power_ratio)}
         />
       </dl>
+      <IcaComponentReview
+        ica={ica}
+        onPreprocessingConfigChange={onPreprocessingConfigChange}
+        preprocessingConfig={preprocessingConfig}
+      />
+    </div>
+  );
+}
+
+function IcaComponentReview({
+  ica,
+  onPreprocessingConfigChange,
+  preprocessingConfig,
+}: {
+  ica: Record<string, unknown>;
+  onPreprocessingConfigChange: (
+    config: typeof DEFAULT_PREPROCESSING_CONFIG,
+  ) => void;
+  preprocessingConfig: typeof DEFAULT_PREPROCESSING_CONFIG;
+}) {
+  const components = Array.isArray(ica.component_metadata)
+    ? ica.component_metadata.filter(isRecord)
+    : [];
+  if (components.length === 0) {
+    return null;
+  }
+
+  const selectedComponents = new Set(
+    parseIntegerCsv(preprocessingConfig.ica.exclude_components),
+  );
+  const updateSelection = (component: number, checked: boolean) => {
+    const next = new Set(selectedComponents);
+    if (checked) {
+      next.add(component);
+    } else {
+      next.delete(component);
+    }
+    onPreprocessingConfigChange({
+      ...preprocessingConfig,
+      ica: {
+        ...preprocessingConfig.ica,
+        enabled: true,
+        exclude_components: Array.from(next)
+          .sort((left, right) => left - right)
+          .join(", "),
+      },
+    });
+  };
+
+  return (
+    <div className="ica-review" data-testid="ica-review">
+      <h4>ICA Components</h4>
+      <div className="ica-review-table-wrap">
+        <table className="ica-review-table">
+          <thead>
+            <tr>
+              <th>Exclude</th>
+              <th>Component</th>
+              <th>EOG</th>
+              <th>ECG</th>
+              <th>Variance</th>
+            </tr>
+          </thead>
+          <tbody>
+            {components.map((component) => {
+              const componentIndex = Number(component.component);
+              const checked = selectedComponents.has(componentIndex);
+              return (
+                <tr key={String(component.component)}>
+                  <td>
+                    <input
+                      checked={checked}
+                      disabled={!Number.isInteger(componentIndex)}
+                      onChange={(event) =>
+                        updateSelection(componentIndex, event.target.checked)
+                      }
+                      type="checkbox"
+                    />
+                  </td>
+                  <td>{stringValue(component.component)}</td>
+                  <td>{formatMaybeNumber(component.eog_score)}</td>
+                  <td>{formatMaybeNumber(component.ecg_score)}</td>
+                  <td>{formatRatio(component.pca_explained_variance_ratio)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
