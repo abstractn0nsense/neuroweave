@@ -4,7 +4,17 @@ import subprocess
 import sys
 from pathlib import Path
 
-from eeg_core.domain import EpochConfig, ErpConfig, EventLog, PreprocessingConfig
+from eeg_core.domain import (
+    ArtifactHandlingConfig,
+    BadChannelDetectionConfig,
+    BadChannelInterpolationConfig,
+    EpochConfig,
+    ErpConfig,
+    EventLog,
+    IcaConfig,
+    PreprocessingConfig,
+    PreprocessingQcConfig,
+)
 from eeg_processing import worker_cli
 from eeg_processing.erp import ErpError
 from eeg_processing.preprocessing import PreprocessingError
@@ -74,6 +84,79 @@ def test_run_payload_completes_preprocessing(monkeypatch, tmp_path):
         },
         "error": None,
     }
+
+
+def test_run_payload_parses_artifact_aware_preprocessing_config(monkeypatch, tmp_path):
+    input_path = tmp_path / "input.fif"
+    output_path = tmp_path / "output.fif"
+
+    def fake_preprocess_raw_eeg(
+        received_input: Path,
+        received_output: Path,
+        received_config: PreprocessingConfig,
+    ):
+        assert received_input == input_path
+        assert received_output == output_path
+        assert received_config == PreprocessingConfig(
+            manual_bad_channels=["Fp1"],
+            bad_channel_detection=BadChannelDetectionConfig(
+                enabled=True,
+                method="deviation",
+                zscore_threshold=4.0,
+            ),
+            bad_channel_interpolation=BadChannelInterpolationConfig(enabled=True),
+            ica=IcaConfig(
+                enabled=True,
+                n_components=0.95,
+                exclude_components=[1],
+                eog_channels=["EOG"],
+            ),
+            artifact_handling=ArtifactHandlingConfig(
+                eog_enabled=True,
+                eog_channels=["EOG"],
+            ),
+            qc=PreprocessingQcConfig(metrics=["channel_status", "psd"]),
+        )
+        return {"channel_count": 2, "warnings": []}
+
+    monkeypatch.setattr(
+        worker_cli,
+        "preprocess_raw_eeg",
+        fake_preprocess_raw_eeg,
+    )
+
+    exit_code, result = worker_cli.run_payload(
+        {
+            "schema_version": 1,
+            "job": "preprocessing",
+            "run_id": "preprocess-artifact-aware",
+            "input_path": str(input_path),
+            "output_path": str(output_path),
+            "config": {
+                "manual_bad_channels": ["Fp1"],
+                "bad_channel_detection": {
+                    "enabled": True,
+                    "method": "deviation",
+                    "zscore_threshold": 4.0,
+                },
+                "bad_channel_interpolation": {"enabled": True},
+                "ica": {
+                    "enabled": True,
+                    "n_components": 0.95,
+                    "exclude_components": [1],
+                    "eog_channels": ["EOG"],
+                },
+                "artifact_handling": {
+                    "eog_enabled": True,
+                    "eog_channels": ["EOG"],
+                },
+                "qc": {"metrics": ["channel_status", "psd"]},
+            },
+        }
+    )
+
+    assert exit_code == 0
+    assert result["status"] == "completed"
 
 
 def test_run_payload_returns_failed_result_for_preprocessing_error(monkeypatch, tmp_path):

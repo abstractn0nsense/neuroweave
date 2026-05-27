@@ -26,6 +26,8 @@ docs/
   local-research-preview-release-checklist.md
                         Release checklist for the installable local preview
   export-bundle.md      ZIP export structure and diagnostics contract
+  artifact-aware-preprocessing-contract.md
+                        Phase B preprocessing config and QC artifact contract
   neuro-weave-growth-pipeline.md
                         Product and research-platform growth pipeline
   phase-1-ingestion.md  External experiment upload and event-log plan

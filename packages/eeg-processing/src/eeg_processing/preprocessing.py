@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Any, Callable
+from dataclasses import asdict
 import warnings as python_warnings
 
 from eeg_core.domain import PreprocessingConfig
@@ -44,6 +45,7 @@ def preprocess_raw_eeg(
             parameters={"target_sampling_rate_hz": config.resample_hz},
         ),
     }
+    contract_warnings = _artifact_contract_warnings(config)
     try:
         with python_warnings.catch_warnings(record=True) as warning_records:
             python_warnings.simplefilter("always")
@@ -57,6 +59,18 @@ def preprocess_raw_eeg(
                 raw.n_times / input_sampling_rate if input_sampling_rate else 0
             )
             input_artifact_summary = _artifact_summary(raw)
+            input_qc_snapshot = _qc_snapshot(raw)
+            manual_bad_channels = _apply_manual_bad_channels(raw, config)
+            _check_cancelled(should_cancel, manual_warnings)
+            bad_channel_detection = _bad_channel_detection_report(raw, config)
+            manual_warnings.extend(bad_channel_detection.get("warnings", []))
+            _check_cancelled(should_cancel, manual_warnings)
+            bad_channel_interpolation = _interpolate_bad_channels(raw, config)
+            manual_warnings.extend(bad_channel_interpolation.get("warnings", []))
+            _check_cancelled(should_cancel, manual_warnings)
+            artifact_rejection = _artifact_rejection_report(raw, config)
+            manual_warnings.extend(artifact_rejection.get("warnings", []))
+            _check_cancelled(should_cancel, manual_warnings)
 
             if config.high_pass_hz is not None or config.low_pass_hz is not None:
                 _check_cancelled(should_cancel, manual_warnings)
@@ -118,6 +132,11 @@ def preprocess_raw_eeg(
                         filter_report["reference"]["status"] = "skipped"
                         filter_report["reference"]["reason"] = "No reference channels provided."
 
+            _check_cancelled(should_cancel, manual_warnings)
+            ica_report = _ica_execution_report(raw, config)
+            manual_warnings.extend(ica_report.get("warnings", []))
+            _check_cancelled(should_cancel, manual_warnings)
+
             if config.resample_hz is not None:
                 _check_cancelled(should_cancel, manual_warnings)
                 raw.resample(config.resample_hz, verbose=False)
@@ -133,6 +152,7 @@ def preprocess_raw_eeg(
             str(exc),
             processing_warnings=_dedupe(
                 manual_warnings
+                + contract_warnings
                 + _format_warning_records(warning_records)
                 + exc.processing_warnings
             ),
@@ -141,15 +161,21 @@ def preprocess_raw_eeg(
         raise PreprocessingError(
             f"Preprocessing failed: {exc}",
             processing_warnings=_dedupe(
-                manual_warnings + _format_warning_records(warning_records)
+                manual_warnings + contract_warnings + _format_warning_records(warning_records)
             ),
         ) from exc
 
     sampling_rate = float(raw.info["sfreq"])
     output_duration = raw.n_times / sampling_rate if sampling_rate else 0
     output_artifact_summary = _artifact_summary(raw)
+    output_qc_snapshot = _qc_snapshot(raw)
+    before_after_qc = _before_after_qc_summary(
+        config,
+        before=input_qc_snapshot,
+        after=output_qc_snapshot,
+    )
     warnings = _dedupe(
-        manual_warnings + _format_warning_records(warning_records)
+        manual_warnings + contract_warnings + _format_warning_records(warning_records)
     )
     preprocessing_summary = {
         "input": {
@@ -181,11 +207,22 @@ def preprocess_raw_eeg(
             "preprocessing_summary": preprocessing_summary,
             "filter_report": filter_report,
             "artifact_summary": {
+                "schema_version": config.artifact_schema_version,
                 "input": input_artifact_summary,
                 "output": output_artifact_summary,
-                "artifact_rejection": {
-                    "enabled": False,
-                    "reason": "Artifact detection and rejection are not implemented in Phase 2.0.5.",
+                "bad_channels": _bad_channel_contract_summary(
+                    config,
+                    manual_bad_channels=manual_bad_channels,
+                    detection=bad_channel_detection,
+                    interpolation=bad_channel_interpolation,
+                ),
+                "artifact_rejection": artifact_rejection,
+                "ica": ica_report,
+                "qc": {
+                    "schema_version": config.artifact_schema_version,
+                    "config": asdict(config.qc),
+                    "status": "completed" if config.qc.enabled else "disabled",
+                    "before_after": before_after_qc,
                 },
             },
         },
@@ -230,13 +267,7 @@ def _operation_report(
 
 
 def _config_summary(config: PreprocessingConfig) -> dict[str, Any]:
-    return {
-        "high_pass_hz": config.high_pass_hz,
-        "low_pass_hz": config.low_pass_hz,
-        "notch_hz": config.notch_hz,
-        "resample_hz": config.resample_hz,
-        "reference": config.reference,
-    }
+    return asdict(config)
 
 
 def _artifact_summary(raw: Any) -> dict[str, Any]:
@@ -251,6 +282,948 @@ def _artifact_summary(raw: Any) -> dict[str, Any]:
         "annotation_count": len(annotations),
         "annotation_descriptions": sorted(set(descriptions)),
     }
+
+
+def _qc_snapshot(raw: Any) -> dict[str, Any]:
+    return {
+        "channel_status": _channel_status_snapshot(raw),
+        "annotations": _annotation_summary(raw),
+        "variance": _variance_summary(raw),
+        "psd": _psd_summary(raw),
+    }
+
+
+def _annotation_summary(raw: Any) -> dict[str, Any]:
+    annotations = getattr(raw, "annotations", [])
+    descriptions = [
+        str(description)
+        for description in getattr(annotations, "description", [])
+    ]
+    return {
+        "count": len(annotations),
+        "descriptions": sorted(set(descriptions)),
+    }
+
+
+def _variance_summary(raw: Any) -> dict[str, Any]:
+    selected = _eeg_detection_data(raw)
+    if selected is None:
+        return {
+            "channel_count": 0,
+            "mean_uv2": None,
+            "median_uv2": None,
+            "min_uv2": None,
+            "max_uv2": None,
+            "channels": [],
+        }
+
+    channel_names, data = selected
+    import numpy as np
+
+    variances_uv2 = np.var(data, axis=1) * 1_000_000_000_000
+    return {
+        "channel_count": len(channel_names),
+        "mean_uv2": float(np.mean(variances_uv2)),
+        "median_uv2": float(np.median(variances_uv2)),
+        "min_uv2": float(np.min(variances_uv2)),
+        "max_uv2": float(np.max(variances_uv2)),
+        "channels": [
+            {
+                "channel": channel,
+                "variance_uv2": float(variance),
+            }
+            for channel, variance in zip(channel_names, variances_uv2)
+        ],
+    }
+
+
+def _psd_summary(raw: Any) -> dict[str, Any]:
+    selected = _eeg_detection_data(raw)
+    if selected is None:
+        return {
+            "channel_count": 0,
+            "sampling_rate_hz": float(raw.info["sfreq"]),
+            "total_power_uv2": None,
+            "bands": {},
+        }
+
+    channel_names, data = selected
+    import numpy as np
+
+    sampling_rate = float(raw.info["sfreq"])
+    if data.shape[1] < 2 or sampling_rate <= 0:
+        return {
+            "channel_count": len(channel_names),
+            "sampling_rate_hz": sampling_rate,
+            "total_power_uv2": None,
+            "bands": {},
+        }
+
+    demeaned = data - np.mean(data, axis=1, keepdims=True)
+    frequencies = np.fft.rfftfreq(demeaned.shape[1], d=1 / sampling_rate)
+    power_uv2 = (np.abs(np.fft.rfft(demeaned, axis=1)) ** 2) * 1_000_000_000_000
+    nyquist = sampling_rate / 2
+    bands = {
+        "delta": (1.0, 4.0),
+        "theta": (4.0, 8.0),
+        "alpha": (8.0, 13.0),
+        "beta": (13.0, 30.0),
+        "gamma": (30.0, 45.0),
+    }
+    band_summary: dict[str, Any] = {}
+    for band_name, (low_hz, high_hz) in bands.items():
+        if low_hz >= nyquist:
+            continue
+        high_hz = min(high_hz, nyquist)
+        mask = (frequencies >= low_hz) & (frequencies < high_hz)
+        if not np.any(mask):
+            continue
+        band_power = np.mean(power_uv2[:, mask], axis=1)
+        band_summary[band_name] = {
+            "low_hz": low_hz,
+            "high_hz": high_hz,
+            "mean_power_uv2": float(np.mean(band_power)),
+            "median_power_uv2": float(np.median(band_power)),
+        }
+
+    positive_mask = frequencies > 0
+    total_power = (
+        float(np.mean(power_uv2[:, positive_mask]))
+        if np.any(positive_mask)
+        else None
+    )
+    return {
+        "channel_count": len(channel_names),
+        "sampling_rate_hz": sampling_rate,
+        "total_power_uv2": total_power,
+        "bands": band_summary,
+    }
+
+
+def _before_after_qc_summary(
+    config: PreprocessingConfig,
+    *,
+    before: dict[str, Any],
+    after: dict[str, Any],
+) -> dict[str, Any]:
+    if not config.qc.enabled:
+        return {
+            "enabled": False,
+            "before": {},
+            "after": {},
+            "delta": {},
+        }
+
+    return {
+        "enabled": True,
+        "before": before,
+        "after": after,
+        "delta": {
+            "bad_channel_count": _numeric_delta(
+                before["channel_status"].get("bad_channel_count"),
+                after["channel_status"].get("bad_channel_count"),
+            ),
+            "annotation_count": _numeric_delta(
+                before["annotations"].get("count"),
+                after["annotations"].get("count"),
+            ),
+            "variance_mean_uv2": _numeric_delta(
+                before["variance"].get("mean_uv2"),
+                after["variance"].get("mean_uv2"),
+            ),
+            "variance_mean_ratio": _numeric_ratio(
+                before["variance"].get("mean_uv2"),
+                after["variance"].get("mean_uv2"),
+            ),
+            "psd_total_power_uv2": _numeric_delta(
+                before["psd"].get("total_power_uv2"),
+                after["psd"].get("total_power_uv2"),
+            ),
+            "psd_total_power_ratio": _numeric_ratio(
+                before["psd"].get("total_power_uv2"),
+                after["psd"].get("total_power_uv2"),
+            ),
+        },
+    }
+
+
+def _numeric_delta(before: Any, after: Any) -> float | int | None:
+    if not isinstance(before, (int, float)) or not isinstance(after, (int, float)):
+        return None
+    return after - before
+
+
+def _numeric_ratio(before: Any, after: Any) -> float | None:
+    if (
+        not isinstance(before, (int, float))
+        or not isinstance(after, (int, float))
+        or before == 0
+    ):
+        return None
+    return after / before
+
+
+def _bad_channel_contract_summary(
+    config: PreprocessingConfig,
+    *,
+    manual_bad_channels: list[str],
+    detection: dict[str, Any],
+    interpolation: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schema_version": config.artifact_schema_version,
+        "manual": {
+            "channels": list(config.manual_bad_channels),
+            "applied_channels": manual_bad_channels,
+            "status": "applied" if manual_bad_channels else "not_requested",
+        },
+        "detection": detection,
+        "interpolation": interpolation,
+    }
+
+
+def _apply_manual_bad_channels(raw: Any, config: PreprocessingConfig) -> list[str]:
+    requested_channels = list(dict.fromkeys(config.manual_bad_channels))
+    if not requested_channels:
+        return []
+
+    channel_names = set(raw.ch_names)
+    missing_channels = [
+        channel for channel in requested_channels if channel not in channel_names
+    ]
+    if missing_channels:
+        raise PreprocessingError(
+            "Manual bad channels were not found in the recording: "
+            + ", ".join(missing_channels)
+        )
+
+    existing_bads = [str(channel) for channel in raw.info.get("bads", [])]
+    bads = set(existing_bads)
+    bads.update(requested_channels)
+    raw.info["bads"] = [channel for channel in raw.ch_names if channel in bads]
+    return requested_channels
+
+
+def _interpolate_bad_channels(raw: Any, config: PreprocessingConfig) -> dict[str, Any]:
+    interpolation_config = config.bad_channel_interpolation
+    before = _channel_status_snapshot(raw)
+    base_report: dict[str, Any] = {
+        "schema_version": config.artifact_schema_version,
+        "config": asdict(interpolation_config),
+        "status": "not_requested",
+        "before": before,
+        "after": before,
+        "interpolated_channels": [],
+        "warnings": [],
+    }
+    if not interpolation_config.enabled:
+        return base_report
+
+    bad_channels = list(before["bad_channels"])
+    if not bad_channels:
+        return {
+            **base_report,
+            "status": "skipped",
+            "reason": "No bad channels were marked before interpolation.",
+        }
+
+    montage_source = _ensure_interpolation_montage(raw)
+    try:
+        raw.interpolate_bads(
+            reset_bads=interpolation_config.reset_bads,
+            verbose=False,
+        )
+    except Exception as exc:
+        raise PreprocessingError(f"Bad channel interpolation failed: {exc}") from exc
+
+    after = _channel_status_snapshot(raw)
+    return {
+        **base_report,
+        "status": "applied",
+        "before": before,
+        "after": after,
+        "interpolated_channels": bad_channels,
+        "reset_bads": interpolation_config.reset_bads,
+        "montage_source": montage_source,
+    }
+
+
+def _channel_status_snapshot(raw: Any) -> dict[str, Any]:
+    bad_channels = [str(channel) for channel in raw.info.get("bads", [])]
+    return {
+        "bad_channels": bad_channels,
+        "bad_channel_count": len(bad_channels),
+    }
+
+
+def _ensure_interpolation_montage(raw: Any) -> str:
+    dig_points = raw.info.get("dig") or []
+    if dig_points:
+        return "existing"
+
+    try:
+        raw.set_montage("standard_1020", match_case=False, on_missing="ignore")
+    except Exception:
+        return "unavailable"
+    return "standard_1020"
+
+
+def _artifact_rejection_report(raw: Any, config: PreprocessingConfig) -> dict[str, Any]:
+    artifact_config = config.artifact_handling
+    eog_report = _physiological_artifact_report(
+        raw,
+        config,
+        kind="eog",
+        enabled=artifact_config.eog_enabled,
+        requested_channels=artifact_config.eog_channels,
+        event_label="blink",
+        minimum_distance_seconds=0.25,
+        duration_seconds=0.25,
+    )
+    ecg_report = _physiological_artifact_report(
+        raw,
+        config,
+        kind="ecg",
+        enabled=artifact_config.ecg_enabled,
+        requested_channels=artifact_config.ecg_channels,
+        event_label="heartbeat",
+        minimum_distance_seconds=0.4,
+        duration_seconds=0.1,
+    )
+    warnings = [
+        *eog_report.get("warnings", []),
+        *ecg_report.get("warnings", []),
+    ]
+    enabled = artifact_config.eog_enabled or artifact_config.ecg_enabled
+    statuses = [
+        report["status"]
+        for report in (eog_report, ecg_report)
+        if report["status"] != "not_requested"
+    ]
+    status = "not_requested"
+    if statuses:
+        status = "completed" if all(item == "completed" for item in statuses) else "partial"
+
+    return {
+        "enabled": enabled,
+        "schema_version": config.artifact_schema_version,
+        "config": asdict(artifact_config),
+        "status": status,
+        "mode": "report_only",
+        "annotations_created": False,
+        "create_annotations_requested": artifact_config.create_annotations,
+        "eog": eog_report,
+        "ecg": ecg_report,
+        "warnings": warnings,
+        "reason": (
+            "EOG/ECG artifact candidates are reported without modifying raw annotations."
+            if enabled
+            else "EOG/ECG artifact detection was not requested."
+        ),
+    }
+
+
+def _physiological_artifact_report(
+    raw: Any,
+    config: PreprocessingConfig,
+    *,
+    kind: str,
+    enabled: bool,
+    requested_channels: list[str],
+    event_label: str,
+    minimum_distance_seconds: float,
+    duration_seconds: float,
+) -> dict[str, Any]:
+    base_report: dict[str, Any] = {
+        "schema_version": config.artifact_schema_version,
+        "enabled": enabled,
+        "status": "not_requested",
+        "channel_source": "not_requested",
+        "channels": [],
+        "candidate_count": 0,
+        "candidates": [],
+        "warnings": [],
+    }
+    if not enabled:
+        return base_report
+
+    resolved = _resolve_artifact_channels(raw, kind, requested_channels)
+    if not resolved["channels"]:
+        return {
+            **base_report,
+            "status": "no_channels",
+            "channel_source": resolved["source"],
+            "warnings": [
+                f"No {kind.upper()} channels were specified or inferred; no {event_label} candidates were generated."
+            ],
+        }
+
+    channel_names = resolved["channels"]
+    data = raw.get_data(picks=channel_names)
+    candidates = _peak_candidates(
+        data,
+        channel_names,
+        sampling_rate=float(raw.info["sfreq"]),
+        event_label=event_label,
+        minimum_distance_seconds=minimum_distance_seconds,
+        duration_seconds=duration_seconds,
+    )
+    return {
+        **base_report,
+        "status": "completed",
+        "channel_source": resolved["source"],
+        "channels": channel_names,
+        "candidate_count": len(candidates),
+        "candidates": candidates,
+    }
+
+
+def _resolve_artifact_channels(
+    raw: Any,
+    kind: str,
+    requested_channels: list[str],
+) -> dict[str, Any]:
+    requested = list(dict.fromkeys(requested_channels))
+    if requested:
+        return {"channels": requested, "source": "config"}
+
+    import mne
+
+    type_picks = mne.pick_types(
+        raw.info,
+        eeg=False,
+        meg=False,
+        eog=kind == "eog",
+        ecg=kind == "ecg",
+        stim=False,
+        exclude=[],
+    )
+    if len(type_picks) > 0:
+        return {
+            "channels": [raw.ch_names[pick] for pick in type_picks],
+            "source": "channel_type",
+        }
+
+    tokens = {
+        "eog": ("eog", "veog", "heog", "blink"),
+        "ecg": ("ecg", "ekg"),
+    }[kind]
+    inferred = [
+        channel
+        for channel in raw.ch_names
+        if any(
+            token in channel.lower().replace("-", "").replace("_", "")
+            for token in tokens
+        )
+    ]
+    return {"channels": inferred, "source": "name_inference" if inferred else "none"}
+
+
+def _peak_candidates(
+    data: Any,
+    channel_names: list[str],
+    *,
+    sampling_rate: float,
+    event_label: str,
+    minimum_distance_seconds: float,
+    duration_seconds: float,
+) -> list[dict[str, Any]]:
+    import numpy as np
+
+    if data.shape[1] == 0 or sampling_rate <= 0:
+        return []
+
+    candidates: list[dict[str, Any]] = []
+    minimum_distance_samples = max(int(minimum_distance_seconds * sampling_rate), 1)
+    for channel_index, channel_name in enumerate(channel_names):
+        signal = data[channel_index]
+        absolute_signal = np.abs(signal)
+        baseline = float(np.median(absolute_signal))
+        mad = float(np.median(np.abs(absolute_signal - baseline)))
+        scale = 1.4826 * mad if mad > 0 else float(np.std(absolute_signal))
+        if scale <= 0:
+            continue
+        scores = (absolute_signal - baseline) / scale
+        threshold = max(4.0, float(np.percentile(scores, 99)))
+        peak_indices = _local_peak_indices(
+            scores,
+            threshold=threshold,
+            minimum_distance_samples=minimum_distance_samples,
+        )
+        for sample_index in peak_indices:
+            candidates.append(
+                {
+                    "type": event_label,
+                    "channel": channel_name,
+                    "onset_seconds": float(sample_index / sampling_rate),
+                    "duration_seconds": duration_seconds,
+                    "peak_amplitude_uv": float(signal[sample_index] * 1_000_000),
+                    "score": float(scores[sample_index]),
+                }
+            )
+
+    return sorted(
+        candidates,
+        key=lambda candidate: (
+            float(candidate["onset_seconds"]),
+            str(candidate["channel"]),
+        ),
+    )
+
+
+def _local_peak_indices(
+    scores: Any,
+    *,
+    threshold: float,
+    minimum_distance_samples: int,
+) -> list[int]:
+    import numpy as np
+
+    candidate_indices = np.where(scores >= threshold)[0]
+    peaks: list[int] = []
+    last_peak = -minimum_distance_samples
+    for index in candidate_indices:
+        left = scores[index - 1] if index > 0 else -np.inf
+        right = scores[index + 1] if index < len(scores) - 1 else -np.inf
+        if scores[index] < left or scores[index] < right:
+            continue
+        if index - last_peak < minimum_distance_samples:
+            if peaks and scores[index] > scores[peaks[-1]]:
+                peaks[-1] = int(index)
+                last_peak = int(index)
+            continue
+        peaks.append(int(index))
+        last_peak = int(index)
+    return peaks
+
+
+def _bad_channel_detection_report(raw: Any, config: PreprocessingConfig) -> dict[str, Any]:
+    detection_config = config.bad_channel_detection
+    base_report: dict[str, Any] = {
+        "schema_version": config.artifact_schema_version,
+        "config": asdict(detection_config),
+        "method": detection_config.method,
+        "status": "not_requested",
+        "candidate_count": 0,
+        "candidates": [],
+        "metrics": {},
+        "warnings": [],
+    }
+    if not detection_config.enabled:
+        return base_report
+
+    method = detection_config.method.lower()
+    if method == "ransac":
+        base_report["status"] = "unsupported"
+        base_report["warnings"] = [
+            "RANSAC bad channel detection requires a later optional dependency path; no candidates were generated."
+        ]
+        return base_report
+    if method not in {"flat", "deviation"}:
+        base_report["status"] = "unsupported"
+        base_report["warnings"] = [
+            f"Unsupported bad channel detection method: {detection_config.method}"
+        ]
+        return base_report
+
+    selected = _eeg_detection_data(raw)
+    if selected is None:
+        base_report["status"] = "no_data"
+        base_report["warnings"] = [
+            "Bad channel detection could not run because no EEG data channels were available."
+        ]
+        return base_report
+
+    channel_names, data = selected
+    import numpy as np
+
+    std_uv = np.std(data, axis=1) * 1_000_000
+    ptp_uv = np.ptp(data, axis=1) * 1_000_000
+    log_std = np.log10(np.maximum(std_uv, 1e-12))
+    zscores = _robust_zscores(log_std)
+    correlations = _channel_correlations(data)
+    zscore_threshold = detection_config.zscore_threshold or 5.0
+    minimum_correlation = detection_config.minimum_correlation
+    flat_threshold_uv = max(float(np.median(ptp_uv)) * 1e-6, 1e-9)
+
+    candidates: list[dict[str, Any]] = []
+    for index, channel_name in enumerate(channel_names):
+        reasons: list[str] = []
+        if ptp_uv[index] <= flat_threshold_uv:
+            reasons.append("flat")
+        if method == "deviation" and abs(float(zscores[index])) >= zscore_threshold:
+            reasons.append("variance_deviation")
+        if (
+            method == "deviation"
+            and minimum_correlation is not None
+            and correlations[index] is not None
+            and correlations[index] < minimum_correlation
+        ):
+            reasons.append("low_correlation")
+        if reasons:
+            candidates.append(
+                {
+                    "channel": channel_name,
+                    "reasons": reasons,
+                    "metrics": {
+                        "std_uv": float(std_uv[index]),
+                        "peak_to_peak_uv": float(ptp_uv[index]),
+                        "log_std_robust_zscore": float(zscores[index]),
+                        "correlation": correlations[index],
+                    },
+                }
+            )
+
+    base_report.update(
+        {
+            "status": "completed",
+            "candidate_count": len(candidates),
+            "candidates": candidates,
+            "metrics": {
+                "channel_count": len(channel_names),
+                "zscore_threshold": zscore_threshold,
+                "minimum_correlation": minimum_correlation,
+                "flat_threshold_uv": flat_threshold_uv,
+            },
+        }
+    )
+    return base_report
+
+
+def _eeg_detection_data(raw: Any) -> tuple[list[str], Any] | None:
+    import mne
+
+    picks = mne.pick_types(
+        raw.info,
+        eeg=True,
+        meg=False,
+        eog=False,
+        ecg=False,
+        stim=False,
+        exclude=[],
+    )
+    if len(picks) == 0:
+        return None
+    channel_names = [raw.ch_names[pick] for pick in picks]
+    return channel_names, raw.get_data(picks=picks)
+
+
+def _robust_zscores(values: Any) -> Any:
+    import numpy as np
+
+    median = float(np.median(values))
+    mad = float(np.median(np.abs(values - median)))
+    if mad > 0:
+        return 0.6745 * (values - median) / mad
+    std = float(np.std(values))
+    if std > 0:
+        return (values - float(np.mean(values))) / std
+    return np.zeros_like(values)
+
+
+def _channel_correlations(data: Any) -> list[float | None]:
+    import numpy as np
+
+    if data.shape[0] < 3:
+        return [None for _ in range(data.shape[0])]
+
+    correlations: list[float | None] = []
+    for index in range(data.shape[0]):
+        peer_data = np.delete(data, index, axis=0)
+        peer_reference = np.median(peer_data, axis=0)
+        if np.std(data[index]) == 0 or np.std(peer_reference) == 0:
+            correlations.append(None)
+            continue
+        value = float(np.corrcoef(data[index], peer_reference)[0, 1])
+        correlations.append(value if np.isfinite(value) else None)
+    return correlations
+
+
+def _ica_execution_report(raw: Any, config: PreprocessingConfig) -> dict[str, Any]:
+    ica_config = config.ica
+    base_report: dict[str, Any] = {
+        "schema_version": config.artifact_schema_version,
+        "config": asdict(ica_config),
+        "enabled": ica_config.enabled,
+        "status": "not_requested",
+        "method": ica_config.method,
+        "component_count": 0,
+        "fit_channel_count": 0,
+        "fit_channels": [],
+        "excluded_components_requested": list(ica_config.exclude_components),
+        "excluded_components_applied": [],
+        "component_metadata": [],
+        "apply_performed": False,
+        "warnings": [],
+    }
+    if not ica_config.enabled:
+        return base_report
+
+    import mne
+    import numpy as np
+    from mne.preprocessing import ICA
+
+    picks = mne.pick_types(
+        raw.info,
+        eeg=True,
+        meg=False,
+        eog=False,
+        ecg=False,
+        stim=False,
+        exclude="bads",
+    )
+    channel_names = [raw.ch_names[pick] for pick in picks]
+    if len(picks) < 2:
+        warning = "ICA requires at least two non-bad EEG channels."
+        return {
+            **base_report,
+            "status": "skipped",
+            "fit_channel_count": len(picks),
+            "fit_channels": channel_names,
+            "warnings": [warning],
+        }
+
+    warnings: list[str] = []
+    n_components = _resolve_ica_n_components(
+        ica_config.n_components,
+        channel_count=len(picks),
+        warnings=warnings,
+    )
+    if n_components == "invalid":
+        return {
+            **base_report,
+            "status": "skipped",
+            "fit_channel_count": len(picks),
+            "fit_channels": channel_names,
+            "warnings": warnings,
+        }
+
+    ica = ICA(
+        n_components=n_components,
+        method=ica_config.method,
+        random_state=ica_config.random_state,
+        max_iter=ica_config.max_iter,
+    )
+    try:
+        ica.fit(raw, picks=picks, verbose=False)
+    except ImportError as exc:
+        return {
+            **base_report,
+            "status": "skipped",
+            "n_components": n_components,
+            "fit_channel_count": len(picks),
+            "fit_channels": channel_names,
+            "warnings": [str(exc)],
+        }
+    component_count = int(ica.n_components_)
+    association_scores = _ica_artifact_association_scores(ica, raw, config)
+    exclusions = _valid_ica_exclusions(
+        ica_config.exclude_components,
+        component_count=component_count,
+        warnings=warnings,
+    )
+    apply_performed = bool(exclusions)
+    if apply_performed:
+        ica.apply(raw, exclude=exclusions, verbose=False)
+
+    explained_variance = getattr(ica, "pca_explained_variance_", np.array([]))
+    explained_total = float(np.sum(explained_variance)) if len(explained_variance) else 0
+    component_metadata = []
+    for index in range(component_count):
+        variance = (
+            float(explained_variance[index])
+            if index < len(explained_variance)
+            else None
+        )
+        ratio = (
+            variance / explained_total
+            if isinstance(variance, float) and explained_total > 0
+            else None
+        )
+        component_metadata.append(
+            {
+                "component": index,
+                "excluded": index in exclusions,
+                "pca_explained_variance": variance,
+                "pca_explained_variance_ratio": ratio,
+                "eog_score": association_scores["eog"]["scores"][index]["score"]
+                if index < len(association_scores["eog"]["scores"])
+                else None,
+                "eog_channel": association_scores["eog"]["scores"][index]["channel"]
+                if index < len(association_scores["eog"]["scores"])
+                else None,
+                "eog_correlation": association_scores["eog"]["scores"][index][
+                    "correlation"
+                ]
+                if index < len(association_scores["eog"]["scores"])
+                else None,
+                "ecg_score": association_scores["ecg"]["scores"][index]["score"]
+                if index < len(association_scores["ecg"]["scores"])
+                else None,
+                "ecg_channel": association_scores["ecg"]["scores"][index]["channel"]
+                if index < len(association_scores["ecg"]["scores"])
+                else None,
+                "ecg_correlation": association_scores["ecg"]["scores"][index][
+                    "correlation"
+                ]
+                if index < len(association_scores["ecg"]["scores"])
+                else None,
+            }
+        )
+
+    return {
+        **base_report,
+        "status": "applied" if apply_performed else "fitted",
+        "n_components": n_components,
+        "component_count": component_count,
+        "fit_channel_count": len(picks),
+        "fit_channels": channel_names,
+        "excluded_components_applied": exclusions,
+        "component_metadata": component_metadata,
+        "association_sources": {
+            "eog": {
+                "channels": association_scores["eog"]["channels"],
+                "channel_source": association_scores["eog"]["channel_source"],
+            },
+            "ecg": {
+                "channels": association_scores["ecg"]["channels"],
+                "channel_source": association_scores["ecg"]["channel_source"],
+            },
+        },
+        "apply_performed": apply_performed,
+        "warnings": warnings,
+    }
+
+
+def _ica_artifact_association_scores(
+    ica: Any,
+    raw: Any,
+    config: PreprocessingConfig,
+) -> dict[str, Any]:
+    sources = ica.get_sources(raw).get_data()
+    return {
+        "eog": _ica_artifact_kind_scores(
+            raw,
+            sources,
+            kind="eog",
+            requested_channels=config.ica.eog_channels
+            or config.artifact_handling.eog_channels,
+        ),
+        "ecg": _ica_artifact_kind_scores(
+            raw,
+            sources,
+            kind="ecg",
+            requested_channels=config.ica.ecg_channels
+            or config.artifact_handling.ecg_channels,
+        ),
+    }
+
+
+def _ica_artifact_kind_scores(
+    raw: Any,
+    sources: Any,
+    *,
+    kind: str,
+    requested_channels: list[str],
+) -> dict[str, Any]:
+    import numpy as np
+
+    resolved = _resolve_artifact_channels(raw, kind, requested_channels)
+    channel_names = resolved["channels"]
+    empty_scores = [
+        {"score": None, "channel": None, "correlation": None}
+        for _ in range(sources.shape[0])
+    ]
+    if not channel_names:
+        return {
+            "channels": [],
+            "channel_source": resolved["source"],
+            "scores": empty_scores,
+        }
+
+    artifact_data = raw.get_data(picks=channel_names)
+    scores: list[dict[str, Any]] = []
+    for source in sources:
+        best_channel: str | None = None
+        best_correlation: float | None = None
+        best_score: float | None = None
+        for channel_name, artifact_signal in zip(channel_names, artifact_data):
+            if np.std(source) == 0 or np.std(artifact_signal) == 0:
+                continue
+            correlation = float(np.corrcoef(source, artifact_signal)[0, 1])
+            if not np.isfinite(correlation):
+                continue
+            score = abs(correlation)
+            if best_score is None or score > best_score:
+                best_score = score
+                best_correlation = correlation
+                best_channel = channel_name
+        scores.append(
+            {
+                "score": best_score,
+                "channel": best_channel,
+                "correlation": best_correlation,
+            }
+        )
+
+    return {
+        "channels": channel_names,
+        "channel_source": resolved["source"],
+        "scores": scores,
+    }
+
+
+def _resolve_ica_n_components(
+    value: float | int | None,
+    *,
+    channel_count: int,
+    warnings: list[str],
+) -> float | int | None | str:
+    if value is None:
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        if 0 < value <= 1:
+            return value
+        warnings.append("ICA n_components as a float must be greater than 0 and at most 1.")
+        return "invalid"
+
+    component_count = int(value)
+    if component_count < 1:
+        warnings.append("ICA n_components must be greater than 0.")
+        return "invalid"
+    if component_count > channel_count:
+        warnings.append(
+            f"ICA n_components was reduced from {component_count} to {channel_count} "
+            "to match available EEG channels."
+        )
+        return channel_count
+    return component_count
+
+
+def _valid_ica_exclusions(
+    requested_components: list[int],
+    *,
+    component_count: int,
+    warnings: list[str],
+) -> list[int]:
+    valid_components: list[int] = []
+    invalid_components: list[int] = []
+    for component in dict.fromkeys(requested_components):
+        if 0 <= component < component_count:
+            valid_components.append(component)
+        else:
+            invalid_components.append(component)
+
+    if invalid_components:
+        warnings.append(
+            "ICA exclude_components ignored out-of-range components: "
+            + ", ".join(str(component) for component in invalid_components)
+        )
+    return valid_components
+
+
+def _artifact_contract_warnings(config: PreprocessingConfig) -> list[str]:
+    return []
 
 
 def _check_cancelled(

@@ -230,12 +230,69 @@ class ValidationReport:
 
 
 @dataclass(frozen=True)
+class BadChannelDetectionConfig:
+    enabled: bool = False
+    method: str = "none"
+    minimum_correlation: float | None = None
+    zscore_threshold: float | None = None
+
+
+@dataclass(frozen=True)
+class BadChannelInterpolationConfig:
+    enabled: bool = False
+    reset_bads: bool = True
+
+
+@dataclass(frozen=True)
+class IcaConfig:
+    enabled: bool = False
+    method: str = "fastica"
+    n_components: float | int | None = None
+    random_state: int = 97
+    max_iter: int | str = "auto"
+    exclude_components: list[int] = field(default_factory=list)
+    eog_channels: list[str] = field(default_factory=list)
+    ecg_channels: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ArtifactHandlingConfig:
+    eog_enabled: bool = False
+    ecg_enabled: bool = False
+    eog_channels: list[str] = field(default_factory=list)
+    ecg_channels: list[str] = field(default_factory=list)
+    create_annotations: bool = True
+
+
+@dataclass(frozen=True)
+class PreprocessingQcConfig:
+    enabled: bool = True
+    include_before_after: bool = True
+    metrics: list[str] = field(
+        default_factory=lambda: ["channel_status", "amplitude", "annotations"]
+    )
+
+
+@dataclass(frozen=True)
 class PreprocessingConfig:
+    artifact_schema_version: int = 1
     high_pass_hz: float | None = None
     low_pass_hz: float | None = None
     notch_hz: float | None = None
     resample_hz: float | None = None
     reference: str | None = None
+    manual_bad_channels: list[str] = field(default_factory=list)
+    bad_channel_detection: BadChannelDetectionConfig = field(
+        default_factory=BadChannelDetectionConfig
+    )
+    bad_channel_interpolation: BadChannelInterpolationConfig = field(
+        default_factory=BadChannelInterpolationConfig
+    )
+    ica: IcaConfig = field(default_factory=IcaConfig)
+    artifact_handling: ArtifactHandlingConfig = field(
+        default_factory=ArtifactHandlingConfig
+    )
+    qc: PreprocessingQcConfig = field(default_factory=PreprocessingQcConfig)
 
 
 @dataclass(frozen=True)

@@ -1,7 +1,9 @@
 from pathlib import Path
 from time import sleep
 from dataclasses import replace
+from io import BytesIO
 import json
+import zipfile
 
 from fastapi.testclient import TestClient
 import pytest
@@ -174,7 +176,7 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert metadata["primary_artifact_path"] == payload["output_path"]
     assert metadata["primary_artifact_size_bytes"] > 0
     assert metadata["primary_artifact_checksum_sha256"]
-    assert metadata["artifact_count"] == 5
+    assert metadata["artifact_count"] == 9
     assert metadata["provenance_available"] is True
     assert metadata["provenance_schema_version"] == 1
     assert metadata["output_path"] == payload["output_path"]
@@ -184,15 +186,36 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert metadata["output_duration_seconds"] > 0
     assert metadata["mne_version"]
     assert metadata["diagnostics_available"] is True
-    assert metadata["diagnostics_file_count"] == 3
+    assert metadata["diagnostics_file_count"] == 7
     assert metadata["artifact_bad_channel_count"] == 0
     assert metadata["artifact_annotation_count"] == 0
+    assert metadata["artifact_bad_channel_detection_status"] == "not_requested"
+    assert metadata["artifact_bad_channel_candidate_count"] == 0
+    assert metadata["artifact_bad_channel_interpolation_status"] == "not_requested"
+    assert metadata["artifact_bad_channel_interpolated_count"] == 0
+    assert metadata["qc_before_after_available"] is True
+    assert metadata["qc_bad_channel_count_delta"] == 0
+    assert metadata["qc_annotation_count_delta"] == 0
+    assert metadata["qc_variance_mean_ratio"] is not None
+    assert metadata["qc_psd_total_power_ratio"] is not None
+    assert metadata["artifact_rejection_status"] == "not_requested"
+    assert metadata["artifact_eog_candidate_count"] == 0
+    assert metadata["artifact_ecg_candidate_count"] == 0
+    assert metadata["ica_status"] == "not_requested"
+    assert metadata["ica_component_count"] == 0
+    assert metadata["ica_excluded_component_count"] == 0
     assert metadata["worker_schema_version"] == 1
     assert metadata["worker_exit_code"] == 0
 
     summary_path = Path(str(metadata["preprocessing_summary_path"]))
     filter_report_path = Path(str(metadata["filter_report_path"]))
     artifact_summary_path = Path(str(metadata["artifact_summary_path"]))
+    bad_channel_report_path = Path(str(metadata["bad_channel_report_path"]))
+    artifact_rejection_report_path = Path(
+        str(metadata["artifact_rejection_report_path"])
+    )
+    ica_report_path = Path(str(metadata["ica_report_path"]))
+    before_after_qc_path = Path(str(metadata["before_after_qc_path"]))
     artifact_manifest_path = Path(str(metadata["artifact_manifest_path"]))
     provenance_path = Path(str(metadata["provenance_path"]))
     worker_payload_path = Path(str(metadata["worker_payload_path"]))
@@ -202,6 +225,10 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert summary_path.is_file()
     assert filter_report_path.is_file()
     assert artifact_summary_path.is_file()
+    assert bad_channel_report_path.is_file()
+    assert artifact_rejection_report_path.is_file()
+    assert ica_report_path.is_file()
+    assert before_after_qc_path.is_file()
     assert artifact_manifest_path.is_file()
     assert provenance_path.is_file()
     assert worker_payload_path.is_file()
@@ -212,6 +239,12 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     filter_report = json.loads(filter_report_path.read_text(encoding="utf-8"))
     artifact_summary = json.loads(artifact_summary_path.read_text(encoding="utf-8"))
+    bad_channel_report = json.loads(bad_channel_report_path.read_text(encoding="utf-8"))
+    artifact_rejection_report = json.loads(
+        artifact_rejection_report_path.read_text(encoding="utf-8")
+    )
+    ica_report = json.loads(ica_report_path.read_text(encoding="utf-8"))
+    before_after_qc = json.loads(before_after_qc_path.read_text(encoding="utf-8"))
     artifact_manifest = json.loads(artifact_manifest_path.read_text(encoding="utf-8"))
     provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
     worker_payload = json.loads(worker_payload_path.read_text(encoding="utf-8"))
@@ -221,6 +254,10 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert filter_report["resample"]["status"] == "applied"
     assert filter_report["reference"]["status"] == "applied"
     assert artifact_summary["artifact_rejection"]["enabled"] is False
+    assert bad_channel_report == artifact_summary["bad_channels"]
+    assert artifact_rejection_report == artifact_summary["artifact_rejection"]
+    assert ica_report == artifact_summary["ica"]
+    assert before_after_qc == artifact_summary["qc"]["before_after"]
     assert worker_payload["schema_version"] == 1
     assert worker_payload["job"] == "preprocessing"
     assert worker_payload["run_id"] == payload["run_id"]
@@ -230,7 +267,7 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert worker_result["error"] is None
     assert artifact_manifest["schema_version"] == 1
     assert artifact_manifest["artifact_root"] == str(Path(payload["output_path"]).parent)
-    assert artifact_manifest["artifact_count"] == 5
+    assert artifact_manifest["artifact_count"] == 9
     assert {
         artifact["logical_name"] for artifact in artifact_manifest["artifacts"]
     } == {
@@ -238,6 +275,10 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
         "preprocessing_summary",
         "filter_report",
         "artifact_summary",
+        "bad_channel_report",
+        "artifact_rejection_report",
+        "ica_report",
+        "before_after_qc",
         "provenance",
     }
     assert provenance["run"]["run_id"] == payload["run_id"]
@@ -253,6 +294,177 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
 
     assert list_response.status_code == 200
     assert list_response.json()["runs"] == [payload]
+
+    integrity_response = client.get(f"/runs/{payload['run_id']}/artifact-integrity")
+    assert integrity_response.status_code == 200
+    integrity_payload = integrity_response.json()["integrity"]
+    assert integrity_payload["status"] == "ok"
+    assert integrity_payload["artifact_count"] == 9
+    assert {
+        artifact["logical_name"] for artifact in integrity_payload["artifacts"]
+    } >= {
+        "bad_channel_report",
+        "artifact_rejection_report",
+        "ica_report",
+        "before_after_qc",
+    }
+
+    export_response = client.get(
+        f"/datasets/dataset-001/export-bundle?run_id={payload['run_id']}"
+    )
+    assert export_response.status_code == 200
+    with zipfile.ZipFile(BytesIO(export_response.content)) as bundle:
+        names = set(bundle.namelist())
+        analysis_report = json.loads(bundle.read("analysis_report.json"))
+
+    assert {
+        "diagnostics/bad_channel_report.json",
+        "diagnostics/artifact_rejection_report.json",
+        "diagnostics/ica_report.json",
+        "diagnostics/before_after_qc.json",
+    }.issubset(names)
+    assert analysis_report["qc_summary"]["preprocessing"]["phase_b_artifacts"][
+        "before_after_qc"
+    ] == before_after_qc
+
+
+def test_create_preprocessing_run_accepts_artifact_aware_contract(
+    tmp_path,
+    monkeypatch,
+):
+    client = _client_with_dataset(tmp_path, monkeypatch)
+    _upload_eeg(client)
+    _upload_and_map_events(client)
+    recording = api_main.registry_repository.get_recording("dataset-001")
+    assert recording is not None
+    channel_name = recording.metadata.channel_names[0]
+
+    response = client.post(
+        "/datasets/dataset-001/preprocessing-runs",
+        json={
+            "manual_bad_channels": [channel_name],
+            "bad_channel_detection": {
+                "enabled": True,
+                "method": "deviation",
+                "zscore_threshold": 4.0,
+            },
+            "bad_channel_interpolation": {"enabled": True},
+            "ica": {
+                "enabled": True,
+                "n_components": 0.95,
+                "exclude_components": [0],
+                "eog_channels": [channel_name],
+            },
+            "artifact_handling": {
+                "eog_enabled": True,
+                "eog_channels": [channel_name],
+            },
+            "qc": {"metrics": ["channel_status", "psd", "ica"]},
+        },
+    )
+
+    assert response.status_code == 201
+    queued_payload = response.json()
+    assert queued_payload["config"]["artifact_schema_version"] == 1
+    assert queued_payload["config"]["manual_bad_channels"] == [channel_name]
+    assert queued_payload["config"]["bad_channel_detection"]["method"] == "deviation"
+    assert queued_payload["config"]["bad_channel_interpolation"]["enabled"] is True
+    assert queued_payload["config"]["ica"]["exclude_components"] == [0]
+    assert queued_payload["config"]["artifact_handling"]["eog_channels"] == [
+        channel_name
+    ]
+    assert queued_payload["config"]["qc"]["metrics"] == [
+        "channel_status",
+        "psd",
+        "ica",
+    ]
+
+    payload = _wait_for_run_status(client, queued_payload["run_id"], "completed")
+
+    assert "ICA config was captured but is not executed until Phase B7." not in payload[
+        "warnings"
+    ]
+    artifact_summary_path = Path(
+        str(payload["output_metadata"]["artifact_summary_path"])
+    )
+    artifact_summary = json.loads(artifact_summary_path.read_text(encoding="utf-8"))
+    assert artifact_summary["schema_version"] == 1
+    assert artifact_summary["bad_channels"]["manual"]["channels"] == [channel_name]
+    assert artifact_summary["bad_channels"]["manual"]["applied_channels"] == [
+        channel_name
+    ]
+    assert artifact_summary["bad_channels"]["manual"]["status"] == "applied"
+    assert artifact_summary["output"]["bad_channels"] == []
+    assert artifact_summary["output"]["bad_channel_count"] == 0
+    assert payload["output_metadata"]["artifact_bad_channel_detection_status"] == (
+        "completed"
+    )
+    assert payload["output_metadata"]["artifact_bad_channel_candidate_count"] == 0
+    assert artifact_summary["bad_channels"]["detection"]["status"] == "completed"
+    assert artifact_summary["bad_channels"]["detection"]["candidate_count"] == 0
+    assert payload["output_metadata"]["artifact_bad_channel_interpolation_status"] == (
+        "applied"
+    )
+    assert payload["output_metadata"]["artifact_bad_channel_interpolated_count"] == 1
+    assert artifact_summary["bad_channels"]["interpolation"]["status"] == "applied"
+    assert artifact_summary["bad_channels"]["interpolation"]["before"] == {
+        "bad_channels": [channel_name],
+        "bad_channel_count": 1,
+    }
+    assert artifact_summary["bad_channels"]["interpolation"]["after"] == {
+        "bad_channels": [],
+        "bad_channel_count": 0,
+    }
+    assert payload["output_metadata"]["qc_before_after_available"] is True
+    assert payload["output_metadata"]["qc_bad_channel_count_delta"] == 0
+    assert payload["output_metadata"]["artifact_rejection_status"] == "completed"
+    assert payload["output_metadata"]["artifact_eog_candidate_count"] == (
+        artifact_summary["artifact_rejection"]["eog"]["candidate_count"]
+    )
+    assert payload["output_metadata"]["artifact_ecg_candidate_count"] == 0
+    assert artifact_summary["artifact_rejection"]["status"] == "completed"
+    assert artifact_summary["artifact_rejection"]["mode"] == "report_only"
+    assert artifact_summary["artifact_rejection"]["annotations_created"] is False
+    assert artifact_summary["artifact_rejection"]["eog"]["status"] == "completed"
+    assert artifact_summary["artifact_rejection"]["eog"]["channels"] == [channel_name]
+    assert payload["output_metadata"]["ica_status"] == "applied"
+    assert payload["output_metadata"]["ica_component_count"] == artifact_summary[
+        "ica"
+    ]["component_count"]
+    assert payload["output_metadata"]["ica_excluded_component_count"] == 1
+    assert artifact_summary["qc"]["status"] == "completed"
+    assert artifact_summary["qc"]["before_after"]["before"]["variance"]["mean_uv2"] is not None
+    assert artifact_summary["qc"]["before_after"]["after"]["variance"]["mean_uv2"] is not None
+    assert artifact_summary["qc"]["before_after"]["before"]["psd"]["total_power_uv2"] is not None
+    assert artifact_summary["qc"]["before_after"]["after"]["psd"]["total_power_uv2"] is not None
+    assert artifact_summary["ica"]["status"] == "applied"
+    assert artifact_summary["ica"]["excluded_components_requested"] == [0]
+    assert artifact_summary["ica"]["excluded_components_applied"] == [0]
+    assert artifact_summary["ica"]["apply_performed"] is True
+    assert artifact_summary["qc"]["config"]["metrics"] == [
+        "channel_status",
+        "psd",
+        "ica",
+    ]
+
+
+def test_create_preprocessing_run_rejects_unknown_artifact_channel(
+    tmp_path,
+    monkeypatch,
+):
+    client = _client_with_dataset(tmp_path, monkeypatch)
+    _upload_eeg(client)
+    _upload_and_map_events(client)
+
+    response = client.post(
+        "/datasets/dataset-001/preprocessing-runs",
+        json={"manual_bad_channels": ["MissingChannel"]},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == [
+        "manual_bad_channels contains unknown channels: MissingChannel"
+    ]
 
 
 def test_create_preprocessing_run_persists_failed_run_details(

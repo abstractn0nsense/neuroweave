@@ -79,6 +79,30 @@ def _preprocessing_qc(artifacts: dict[str, ArtifactReference]) -> dict[str, Any]
 
     output_artifact = _dict_value(artifact_summary, "output")
     input_artifact = _dict_value(artifact_summary, "input")
+    bad_channels = _dict_value(artifact_summary, "bad_channels")
+    artifact_rejection = _dict_value(artifact_summary, "artifact_rejection")
+    ica = _dict_value(artifact_summary, "ica")
+    before_after = _dict_value(_dict_value(artifact_summary, "qc"), "before_after")
+    bad_channel_report = _read_json_artifact(
+        artifacts,
+        "bad_channel_report",
+        default=bad_channels,
+    )
+    artifact_rejection_report = _read_json_artifact(
+        artifacts,
+        "artifact_rejection_report",
+        default=artifact_rejection,
+    )
+    ica_report = _read_json_artifact(
+        artifacts,
+        "ica_report",
+        default=ica,
+    )
+    before_after_qc = _read_json_artifact(
+        artifacts,
+        "before_after_qc",
+        default=before_after,
+    )
     return {
         "summary": preprocessing_summary,
         "filters": {
@@ -94,7 +118,17 @@ def _preprocessing_qc(artifacts: dict[str, ArtifactReference]) -> dict[str, Any]
             "output_bad_channels": output_artifact.get("bad_channels", []),
             "output_bad_channel_count": output_artifact.get("bad_channel_count", 0),
         },
-        "artifact_rejection": _dict_value(artifact_summary, "artifact_rejection"),
+        "bad_channel_detection": _dict_value(bad_channels, "detection"),
+        "bad_channel_interpolation": _dict_value(bad_channels, "interpolation"),
+        "artifact_rejection": artifact_rejection,
+        "ica": ica,
+        "before_after": before_after,
+        "phase_b_artifacts": {
+            "bad_channel_report": bad_channel_report,
+            "artifact_rejection_report": artifact_rejection_report,
+            "ica_report": ica_report,
+            "before_after_qc": before_after_qc,
+        },
     }
 
 

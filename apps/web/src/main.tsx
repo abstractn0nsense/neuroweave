@@ -159,12 +159,45 @@ type ValidationReport = {
 };
 
 type PreprocessingConfig = {
+  artifact_schema_version: number;
   high_pass_hz: number | null;
   low_pass_hz: number | null;
   notch_hz: number | null;
   resample_hz: number | null;
   reference: string | null;
+  manual_bad_channels: string[];
+  bad_channel_detection: {
+    enabled: boolean;
+    method: "none" | "flat" | "deviation" | "ransac";
+    minimum_correlation: number | null;
+    zscore_threshold: number | null;
+  };
+  bad_channel_interpolation: {
+    enabled: boolean;
+    reset_bads: boolean;
+  };
+  artifact_handling: {
+    eog_enabled: boolean;
+    ecg_enabled: boolean;
+    eog_channels: string[];
+    ecg_channels: string[];
+    create_annotations: boolean;
+  };
+  ica: {
+    enabled: boolean;
+    method: "fastica" | "infomax" | "picard";
+    n_components: number | null;
+    random_state: number;
+    max_iter: number | "auto";
+    exclude_components: number[];
+    eog_channels: string[];
+    ecg_channels: string[];
+  };
 };
+
+type BadChannelDetectionMethod =
+  PreprocessingConfig["bad_channel_detection"]["method"];
+type IcaMethod = PreprocessingConfig["ica"]["method"];
 
 type PreprocessingRun = {
   run_id: string;
@@ -437,6 +470,34 @@ const DEFAULT_PREPROCESSING_CONFIG = {
   notch_hz: "",
   resample_hz: "",
   reference: "average",
+  manual_bad_channels: [] as string[],
+  bad_channel_interpolation: {
+    enabled: false,
+    reset_bads: true,
+  },
+  artifact_handling: {
+    eog_enabled: false,
+    ecg_enabled: false,
+    eog_channels: "",
+    ecg_channels: "",
+    create_annotations: false,
+  },
+  bad_channel_detection: {
+    enabled: false,
+    method: "deviation",
+    zscore_threshold: "5",
+    minimum_correlation: "",
+  },
+  ica: {
+    enabled: false,
+    method: "fastica",
+    n_components: "",
+    random_state: "97",
+    max_iter: "auto",
+    exclude_components: "",
+    eog_channels: "",
+    ecg_channels: "",
+  },
 };
 
 const CONDITION_FIELDS = ["trial_type", "stimulus", "response", "correct"] as const;
@@ -1897,6 +1958,7 @@ function App() {
                   onUploadEeg={uploadEegFile}
                   onUploadEvent={uploadEventFile}
                   onValidate={validateDataset}
+                  metadata={metadata}
                   preprocessingConfig={preprocessingConfig}
                   preprocessingRuns={preprocessingRuns}
                   uploadedEegFilename={uploadedEegFilename}
@@ -1969,7 +2031,11 @@ function App() {
                     </p>
                   </div>
                 </div>
-                <QcDashboard qcSummary={qcSummary} />
+                <QcDashboard
+                  onPreprocessingConfigChange={setPreprocessingConfig}
+                  preprocessingConfig={preprocessingConfig}
+                  qcSummary={qcSummary}
+                />
               </section>
             </section>
           </section>
@@ -2366,6 +2432,7 @@ function IntakeSection({
   onUploadEeg,
   onUploadEvent,
   onValidate,
+  metadata,
   preprocessingConfig,
   preprocessingRuns,
   uploadedEegFilename,
@@ -2395,6 +2462,7 @@ function IntakeSection({
   onUploadEeg: () => void;
   onUploadEvent: () => void;
   onValidate: () => void;
+  metadata: LoadState<DatasetMetadata>;
   preprocessingConfig: typeof DEFAULT_PREPROCESSING_CONFIG;
   preprocessingRuns: LoadState<PreprocessingRun[]>;
   uploadedEegFilename: string | null;
@@ -2404,6 +2472,7 @@ function IntakeSection({
   const disabled = !activeDataset;
   const canContinue = validation?.valid === true || activeDataset?.status === "valid";
   const configError = getPreprocessingConfigError(preprocessingConfig);
+  const channelNames = metadata.status === "success" ? metadata.data.channel_names : [];
   const eegStatus = getUploadStatus({
     disabled,
     selectedFilename: eegFile?.name ?? null,
@@ -2744,6 +2813,304 @@ function IntakeSection({
               <option value="">Unchanged</option>
               <option value="average">Average</option>
             </select>
+          </label>
+          <label>
+            <span>Manual bad channels</span>
+            <select
+              disabled={!canContinue || channelNames.length === 0}
+              multiple
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  manual_bad_channels: Array.from(
+                    event.currentTarget.selectedOptions,
+                    (option) => option.value,
+                  ),
+                })
+              }
+              size={Math.min(Math.max(channelNames.length, 2), 8)}
+              value={preprocessingConfig.manual_bad_channels}
+            >
+              {channelNames.map((channelName) => (
+                <option key={channelName} value={channelName}>
+                  {channelName}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Interpolate bads</span>
+            <input
+              checked={preprocessingConfig.bad_channel_interpolation.enabled}
+              disabled={
+                !canContinue || preprocessingConfig.manual_bad_channels.length === 0
+              }
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  bad_channel_interpolation: {
+                    ...preprocessingConfig.bad_channel_interpolation,
+                    enabled: event.target.checked,
+                  },
+                })
+              }
+              type="checkbox"
+            />
+          </label>
+          <label>
+            <span>Clear bad labels</span>
+            <input
+              checked={preprocessingConfig.bad_channel_interpolation.reset_bads}
+              disabled={
+                !canContinue ||
+                !preprocessingConfig.bad_channel_interpolation.enabled
+              }
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  bad_channel_interpolation: {
+                    ...preprocessingConfig.bad_channel_interpolation,
+                    reset_bads: event.target.checked,
+                  },
+                })
+              }
+              type="checkbox"
+            />
+          </label>
+          <label>
+            <span>Bad-channel report</span>
+            <input
+              checked={preprocessingConfig.bad_channel_detection.enabled}
+              disabled={!canContinue}
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  bad_channel_detection: {
+                    ...preprocessingConfig.bad_channel_detection,
+                    enabled: event.target.checked,
+                  },
+                })
+              }
+              type="checkbox"
+            />
+          </label>
+          <label>
+            <span>Detection method</span>
+            <select
+              disabled={
+                !canContinue || !preprocessingConfig.bad_channel_detection.enabled
+              }
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  bad_channel_detection: {
+                    ...preprocessingConfig.bad_channel_detection,
+                    method: event.target.value,
+                  },
+                })
+              }
+              value={preprocessingConfig.bad_channel_detection.method}
+            >
+              <option value="deviation">Deviation</option>
+              <option value="flat">Flat</option>
+              <option value="ransac">RANSAC</option>
+            </select>
+          </label>
+          <label>
+            <span>Z-score threshold</span>
+            <input
+              disabled={
+                !canContinue ||
+                !preprocessingConfig.bad_channel_detection.enabled ||
+                preprocessingConfig.bad_channel_detection.method === "flat"
+              }
+              min="0.1"
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  bad_channel_detection: {
+                    ...preprocessingConfig.bad_channel_detection,
+                    zscore_threshold: event.target.value,
+                  },
+                })
+              }
+              step="0.1"
+              type="number"
+              value={preprocessingConfig.bad_channel_detection.zscore_threshold}
+            />
+          </label>
+          <label>
+            <span>Min correlation</span>
+            <input
+              disabled={
+                !canContinue ||
+                !preprocessingConfig.bad_channel_detection.enabled ||
+                preprocessingConfig.bad_channel_detection.method !== "deviation"
+              }
+              max="1"
+              min="0"
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  bad_channel_detection: {
+                    ...preprocessingConfig.bad_channel_detection,
+                    minimum_correlation: event.target.value,
+                  },
+                })
+              }
+              placeholder="Optional"
+              step="0.05"
+              type="number"
+              value={preprocessingConfig.bad_channel_detection.minimum_correlation}
+            />
+          </label>
+          <label>
+            <span>EOG report</span>
+            <input
+              checked={preprocessingConfig.artifact_handling.eog_enabled}
+              disabled={!canContinue}
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  artifact_handling: {
+                    ...preprocessingConfig.artifact_handling,
+                    eog_enabled: event.target.checked,
+                  },
+                })
+              }
+              type="checkbox"
+            />
+          </label>
+          <label>
+            <span>EOG channels</span>
+            <input
+              disabled={
+                !canContinue || !preprocessingConfig.artifact_handling.eog_enabled
+              }
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  artifact_handling: {
+                    ...preprocessingConfig.artifact_handling,
+                    eog_channels: event.target.value,
+                  },
+                })
+              }
+              placeholder={channelNames.slice(0, 2).join(", ")}
+              type="text"
+              value={preprocessingConfig.artifact_handling.eog_channels}
+            />
+          </label>
+          <label>
+            <span>ECG report</span>
+            <input
+              checked={preprocessingConfig.artifact_handling.ecg_enabled}
+              disabled={!canContinue}
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  artifact_handling: {
+                    ...preprocessingConfig.artifact_handling,
+                    ecg_enabled: event.target.checked,
+                  },
+                })
+              }
+              type="checkbox"
+            />
+          </label>
+          <label>
+            <span>ECG channels</span>
+            <input
+              disabled={
+                !canContinue || !preprocessingConfig.artifact_handling.ecg_enabled
+              }
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  artifact_handling: {
+                    ...preprocessingConfig.artifact_handling,
+                    ecg_channels: event.target.value,
+                  },
+                })
+              }
+              placeholder={channelNames.slice(0, 2).join(", ")}
+              type="text"
+              value={preprocessingConfig.artifact_handling.ecg_channels}
+            />
+          </label>
+          <label>
+            <span>ICA</span>
+            <input
+              checked={preprocessingConfig.ica.enabled}
+              disabled={!canContinue}
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  ica: {
+                    ...preprocessingConfig.ica,
+                    enabled: event.target.checked,
+                  },
+                })
+              }
+              type="checkbox"
+            />
+          </label>
+          <label>
+            <span>ICA method</span>
+            <select
+              disabled={!canContinue || !preprocessingConfig.ica.enabled}
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  ica: {
+                    ...preprocessingConfig.ica,
+                    method: event.target.value,
+                  },
+                })
+              }
+              value={preprocessingConfig.ica.method}
+            >
+              <option value="fastica">fastica</option>
+              <option value="infomax">infomax</option>
+              <option value="picard">picard</option>
+            </select>
+          </label>
+          <label>
+            <span>ICA components</span>
+            <input
+              disabled={!canContinue || !preprocessingConfig.ica.enabled}
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  ica: {
+                    ...preprocessingConfig.ica,
+                    n_components: event.target.value,
+                  },
+                })
+              }
+              placeholder="Optional"
+              step="0.05"
+              type="number"
+              value={preprocessingConfig.ica.n_components}
+            />
+          </label>
+          <label>
+            <span>Exclude ICA</span>
+            <input
+              disabled={!canContinue || !preprocessingConfig.ica.enabled}
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  ica: {
+                    ...preprocessingConfig.ica,
+                    exclude_components: event.target.value,
+                  },
+                })
+              }
+              placeholder="0, 1"
+              type="text"
+              value={preprocessingConfig.ica.exclude_components}
+            />
           </label>
         </div>
         <button
@@ -3497,8 +3864,14 @@ function ErpPreview({ run }: { run: ErpRun }) {
 }
 
 function QcDashboard({
+  onPreprocessingConfigChange,
+  preprocessingConfig,
   qcSummary,
 }: {
+  onPreprocessingConfigChange: (
+    config: typeof DEFAULT_PREPROCESSING_CONFIG,
+  ) => void;
+  preprocessingConfig: typeof DEFAULT_PREPROCESSING_CONFIG;
   qcSummary: LoadState<QcSummaryResponse | null>;
 }) {
   if (qcSummary.status === "loading" || qcSummary.status === "idle") {
@@ -3530,7 +3903,11 @@ function QcDashboard({
         </div>
       ) : null}
       {qcSummary.data.summary.run_kind === "preprocessing" ? (
-        <PreprocessingQc summary={qcSummary.data.summary.preprocessing ?? {}} />
+        <PreprocessingQc
+          onPreprocessingConfigChange={onPreprocessingConfigChange}
+          preprocessingConfig={preprocessingConfig}
+          summary={qcSummary.data.summary.preprocessing ?? {}}
+        />
       ) : null}
       {qcSummary.data.summary.run_kind === "epoch" ? (
         <EpochQc summary={qcSummary.data.summary.epoch ?? {}} />
@@ -3542,12 +3919,27 @@ function QcDashboard({
   );
 }
 
-function PreprocessingQc({ summary }: { summary: Record<string, unknown> }) {
+function PreprocessingQc({
+  onPreprocessingConfigChange,
+  preprocessingConfig,
+  summary,
+}: {
+  onPreprocessingConfigChange: (
+    config: typeof DEFAULT_PREPROCESSING_CONFIG,
+  ) => void;
+  preprocessingConfig: typeof DEFAULT_PREPROCESSING_CONFIG;
+  summary: Record<string, unknown>;
+}) {
   const filters = asRecord(summary.filters);
   const reference = asRecord(summary.reference);
   const resample = asRecord(summary.resample);
   const channelStatus = asRecord(summary.channel_status);
   const artifactRejection = asRecord(summary.artifact_rejection);
+  const eogArtifacts = asRecord(artifactRejection.eog);
+  const ecgArtifacts = asRecord(artifactRejection.ecg);
+  const ica = asRecord(summary.ica);
+  const beforeAfter = asRecord(summary.before_after);
+  const delta = asRecord(beforeAfter.delta);
 
   return (
     <div className="qc-section">
@@ -3570,7 +3962,125 @@ function PreprocessingQc({ summary }: { summary: Record<string, unknown> }) {
           label="Artifact Reject"
           value={artifactRejection.enabled === true ? "enabled" : "off"}
         />
+        <QcMetric
+          label="Blink Candidates"
+          value={stringValue(eogArtifacts.candidate_count)}
+        />
+        <QcMetric
+          label="Heartbeat Candidates"
+          value={stringValue(ecgArtifacts.candidate_count)}
+        />
+        <QcMetric label="ICA" value={stringValue(ica.status)} />
+        <QcMetric
+          label="ICA Components"
+          value={stringValue(ica.component_count)}
+        />
+        <QcMetric
+          label="Bad Ch Delta"
+          value={formatSignedNumber(delta.bad_channel_count)}
+        />
+        <QcMetric
+          label="Annotation Delta"
+          value={formatSignedNumber(delta.annotation_count)}
+        />
+        <QcMetric
+          label="Variance Ratio"
+          value={formatRatio(delta.variance_mean_ratio)}
+        />
+        <QcMetric
+          label="PSD Ratio"
+          value={formatRatio(delta.psd_total_power_ratio)}
+        />
       </dl>
+      <IcaComponentReview
+        ica={ica}
+        onPreprocessingConfigChange={onPreprocessingConfigChange}
+        preprocessingConfig={preprocessingConfig}
+      />
+    </div>
+  );
+}
+
+function IcaComponentReview({
+  ica,
+  onPreprocessingConfigChange,
+  preprocessingConfig,
+}: {
+  ica: Record<string, unknown>;
+  onPreprocessingConfigChange: (
+    config: typeof DEFAULT_PREPROCESSING_CONFIG,
+  ) => void;
+  preprocessingConfig: typeof DEFAULT_PREPROCESSING_CONFIG;
+}) {
+  const components = Array.isArray(ica.component_metadata)
+    ? ica.component_metadata.filter(isRecord)
+    : [];
+  if (components.length === 0) {
+    return null;
+  }
+
+  const selectedComponents = new Set(
+    parseIntegerCsv(preprocessingConfig.ica.exclude_components),
+  );
+  const updateSelection = (component: number, checked: boolean) => {
+    const next = new Set(selectedComponents);
+    if (checked) {
+      next.add(component);
+    } else {
+      next.delete(component);
+    }
+    onPreprocessingConfigChange({
+      ...preprocessingConfig,
+      ica: {
+        ...preprocessingConfig.ica,
+        enabled: true,
+        exclude_components: Array.from(next)
+          .sort((left, right) => left - right)
+          .join(", "),
+      },
+    });
+  };
+
+  return (
+    <div className="ica-review" data-testid="ica-review">
+      <h4>ICA Components</h4>
+      <div className="ica-review-table-wrap">
+        <table className="ica-review-table">
+          <thead>
+            <tr>
+              <th>Exclude</th>
+              <th>Component</th>
+              <th>EOG</th>
+              <th>ECG</th>
+              <th>Variance</th>
+            </tr>
+          </thead>
+          <tbody>
+            {components.map((component) => {
+              const componentIndex = Number(component.component);
+              const checked = selectedComponents.has(componentIndex);
+              return (
+                <tr key={String(component.component)}>
+                  <td>
+                    <input
+                      checked={checked}
+                      disabled={!Number.isInteger(componentIndex)}
+                      onChange={(event) =>
+                        updateSelection(componentIndex, event.target.checked)
+                      }
+                      type="checkbox"
+                    />
+                  </td>
+                  <td>{stringValue(component.component)}</td>
+                  <td>{formatMaybeNumber(component.eog_score)}</td>
+                  <td>{formatMaybeNumber(component.ecg_score)}</td>
+                  <td>{formatRatio(component.pca_explained_variance_ratio)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -4414,12 +4924,54 @@ function parseRowFilterConditions(value: string): EventRowFilterCondition[] {
 function normalizePreprocessingConfig(
   config: typeof DEFAULT_PREPROCESSING_CONFIG,
 ): PreprocessingConfig {
+  const detectionEnabled = config.bad_channel_detection.enabled;
   return {
+    artifact_schema_version: 1,
     high_pass_hz: parseOptionalNumber(config.high_pass_hz),
     low_pass_hz: parseOptionalNumber(config.low_pass_hz),
     notch_hz: parseOptionalNumber(config.notch_hz),
     resample_hz: parseOptionalNumber(config.resample_hz),
     reference: config.reference || null,
+    manual_bad_channels: config.manual_bad_channels,
+    bad_channel_interpolation: {
+      enabled:
+        config.bad_channel_interpolation.enabled &&
+        config.manual_bad_channels.length > 0,
+      reset_bads: config.bad_channel_interpolation.reset_bads,
+    },
+    bad_channel_detection: {
+      enabled: detectionEnabled,
+      method: detectionEnabled
+        ? (config.bad_channel_detection.method as BadChannelDetectionMethod)
+        : "none",
+      minimum_correlation: detectionEnabled
+        ? parseOptionalNumber(config.bad_channel_detection.minimum_correlation)
+        : null,
+      zscore_threshold: detectionEnabled
+        ? parseOptionalNumber(config.bad_channel_detection.zscore_threshold)
+        : null,
+    },
+    artifact_handling: {
+      eog_enabled: config.artifact_handling.eog_enabled,
+      ecg_enabled: config.artifact_handling.ecg_enabled,
+      eog_channels: parseOptionalCsv(config.artifact_handling.eog_channels) ?? [],
+      ecg_channels: parseOptionalCsv(config.artifact_handling.ecg_channels) ?? [],
+      create_annotations: false,
+    },
+    ica: {
+      enabled: config.ica.enabled,
+      method: config.ica.method as IcaMethod,
+      n_components: config.ica.enabled
+        ? parseOptionalNumber(config.ica.n_components)
+        : null,
+      random_state: parseOptionalNumber(config.ica.random_state) ?? 97,
+      max_iter: parseMaxIter(config.ica.max_iter),
+      exclude_components: config.ica.enabled
+        ? parseIntegerCsv(config.ica.exclude_components)
+        : [],
+      eog_channels: parseOptionalCsv(config.ica.eog_channels) ?? [],
+      ecg_channels: parseOptionalCsv(config.ica.ecg_channels) ?? [],
+    },
   };
 }
 
@@ -4475,6 +5027,15 @@ function getPreprocessingConfigError(
   const lowPass = parseOptionalNumber(config.low_pass_hz);
   const notch = parseOptionalNumber(config.notch_hz);
   const resample = parseOptionalNumber(config.resample_hz);
+  const zscore = parseOptionalNumber(
+    config.bad_channel_detection.zscore_threshold,
+  );
+  const minimumCorrelation = parseOptionalNumber(
+    config.bad_channel_detection.minimum_correlation,
+  );
+  const icaComponents = parseOptionalNumber(config.ica.n_components);
+  const icaRandomState = parseOptionalNumber(config.ica.random_state);
+  const icaMaxIter = parseMaxIter(config.ica.max_iter);
 
   for (const [label, value] of [
     ["High-pass", highPass],
@@ -4501,6 +5062,66 @@ function getPreprocessingConfigError(
 
   if (highPass !== null && lowPass !== null && highPass >= lowPass) {
     return "High-pass must be lower than low-pass.";
+  }
+
+  if (config.bad_channel_detection.enabled) {
+    if (
+      !["flat", "deviation", "ransac"].includes(
+        config.bad_channel_detection.method,
+      )
+    ) {
+      return "Select a supported bad-channel detection method.";
+    }
+    if (zscore !== null && (!Number.isFinite(zscore) || zscore <= 0)) {
+      return "Bad-channel z-score threshold must be greater than 0.";
+    }
+    if (
+      minimumCorrelation !== null &&
+      (!Number.isFinite(minimumCorrelation) ||
+        minimumCorrelation < 0 ||
+        minimumCorrelation > 1)
+    ) {
+      return "Bad-channel minimum correlation must be between 0 and 1.";
+    }
+  }
+
+  if (config.ica.enabled) {
+    if (!["fastica", "infomax", "picard"].includes(config.ica.method)) {
+      return "Select a supported ICA method.";
+    }
+    if (
+      icaComponents !== null &&
+      (!Number.isFinite(icaComponents) || icaComponents <= 0)
+    ) {
+      return "ICA components must be greater than 0.";
+    }
+    if (
+      icaComponents !== null &&
+      !Number.isInteger(icaComponents) &&
+      icaComponents > 1
+    ) {
+      return "ICA fractional components must be at most 1.";
+    }
+    if (
+      icaRandomState === null ||
+      !Number.isInteger(icaRandomState)
+    ) {
+      return "ICA random state must be an integer.";
+    }
+    if (icaMaxIter !== "auto" && (!Number.isInteger(icaMaxIter) || icaMaxIter <= 0)) {
+      return "ICA max iterations must be auto or a positive integer.";
+    }
+    const rawExclusions = config.ica.exclude_components
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (
+      rawExclusions.some(
+        (item) => !Number.isInteger(Number(item)) || Number(item) < 0,
+      )
+    ) {
+      return "ICA excluded components must be non-negative integers.";
+    }
   }
 
   return null;
@@ -4637,6 +5258,24 @@ function parseOptionalCsv(value: string): string[] | null {
     .filter(Boolean);
 }
 
+function parseIntegerCsv(value: string): number[] {
+  if (!value.trim()) {
+    return [];
+  }
+  return value
+    .split(",")
+    .map((item) => Number(item.trim()))
+    .filter((item) => Number.isFinite(item));
+}
+
+function parseMaxIter(value: string): number | "auto" {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed || trimmed === "auto") {
+    return "auto";
+  }
+  return Number(trimmed);
+}
+
 function formatRunMetadata(metadata: Record<string, MetadataValue>): string {
   const samplingRate =
     metadata.output_sampling_rate_hz ?? metadata.sampling_rate_hz;
@@ -4707,6 +5346,21 @@ function formatMaybeNumber(value: unknown): string {
   return typeof value === "number" && Number.isFinite(value)
     ? value.toFixed(2)
     : stringValue(value);
+}
+
+function formatSignedNumber(value: unknown): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "-";
+  }
+  const prefix = value > 0 ? "+" : "";
+  return `${prefix}${value.toFixed(2)}`;
+}
+
+function formatRatio(value: unknown): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "-";
+  }
+  return `${value.toFixed(2)}x`;
 }
 
 function getErpConditionLabels(run: ErpRun): string[] {

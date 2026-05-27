@@ -32,7 +32,7 @@ type WorkflowLabels = {
 export async function createPreprocessedDataset(
   page: Page,
   labels: WorkflowLabels,
-) {
+): Promise<{ datasetId: string; preprocessingRunId: string }> {
   await page.goto("/");
   await expect(page.getByTestId("setup-workspace")).toBeVisible();
 
@@ -178,6 +178,17 @@ export async function createPreprocessedDataset(
     },
   );
   await expect(page.getByTestId("preprocessing-runs")).toContainText("50.0 Hz");
+  const preprocessingRunsText =
+    (await page.getByTestId("preprocessing-runs").textContent()) ?? "";
+  const preprocessingRunId = preprocessingRunsText.match(
+    /preprocess-[a-z0-9-]+/,
+  )?.[0];
+  expect(preprocessingRunId).toBeTruthy();
+
+  return {
+    datasetId: activeDatasetId ?? "",
+    preprocessingRunId: preprocessingRunId ?? "",
+  };
 }
 
 export async function createCompletedEpochRun(page: Page) {

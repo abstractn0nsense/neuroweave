@@ -2,6 +2,9 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 
 from eeg_core.domain import (
+    ArtifactHandlingConfig,
+    BadChannelDetectionConfig,
+    BadChannelInterpolationConfig,
     ChannelMetadata,
     Dataset,
     DatasetStatus,
@@ -19,7 +22,9 @@ from eeg_core.domain import (
     Experiment,
     NormalizedEvent,
     Participant,
+    IcaConfig,
     PreprocessingConfig,
+    PreprocessingQcConfig,
     PreprocessingRun,
     PreprocessingRunStatus,
     Project,
@@ -456,6 +461,53 @@ def test_run_repository_persists_preprocessing_runs(tmp_path):
     assert stored["diagnostics"]["warnings"][0]["code"] == "reference_unchanged"
 
 
+def test_run_repository_persists_artifact_aware_preprocessing_config(tmp_path):
+    repository = JsonRunRepository(tmp_path / "runs")
+    run = PreprocessingRun(
+        run_id="preprocess-artifact-aware",
+        dataset_id="dataset-001",
+        config=PreprocessingConfig(
+            high_pass_hz=1.0,
+            manual_bad_channels=["Fp1"],
+            bad_channel_detection=BadChannelDetectionConfig(
+                enabled=True,
+                method="deviation",
+                zscore_threshold=4.0,
+            ),
+            bad_channel_interpolation=BadChannelInterpolationConfig(enabled=True),
+            ica=IcaConfig(
+                enabled=True,
+                n_components=0.95,
+                exclude_components=[0, 2],
+                eog_channels=["EOG"],
+            ),
+            artifact_handling=ArtifactHandlingConfig(
+                eog_enabled=True,
+                eog_channels=["EOG"],
+            ),
+            qc=PreprocessingQcConfig(metrics=["channel_status", "psd", "ica"]),
+        ),
+    )
+
+    repository.save_preprocessing_run(run)
+
+    loaded = repository.get_preprocessing_run("preprocess-artifact-aware")
+    assert loaded == run
+
+    stored = json.loads(
+        repository.preprocessing_run_path("preprocess-artifact-aware").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert stored["config"]["artifact_schema_version"] == 1
+    assert stored["config"]["manual_bad_channels"] == ["Fp1"]
+    assert stored["config"]["bad_channel_detection"]["method"] == "deviation"
+    assert stored["config"]["bad_channel_interpolation"]["enabled"] is True
+    assert stored["config"]["ica"]["exclude_components"] == [0, 2]
+    assert stored["config"]["artifact_handling"]["eog_channels"] == ["EOG"]
+    assert stored["config"]["qc"]["metrics"] == ["channel_status", "psd", "ica"]
+
+
 def test_run_repository_persists_epoch_runs(tmp_path):
     repository = JsonRunRepository(tmp_path / "runs")
     run = EpochRun(
@@ -595,6 +647,13 @@ def test_run_repository_loads_legacy_preprocessing_runs_without_schema_marker(
     assert run.run_kind == RunKind.PREPROCESSING
     assert run.schema_version == 1
     assert run.output_metadata["legacy_key"] == "legacy-value"
+    assert run.config.artifact_schema_version == 1
+    assert run.config.manual_bad_channels == []
+    assert run.config.bad_channel_detection == BadChannelDetectionConfig()
+    assert run.config.bad_channel_interpolation == BadChannelInterpolationConfig()
+    assert run.config.ica == IcaConfig()
+    assert run.config.artifact_handling == ArtifactHandlingConfig()
+    assert run.config.qc == PreprocessingQcConfig()
     assert run.warnings == []
     assert run.diagnostics == {}
 
