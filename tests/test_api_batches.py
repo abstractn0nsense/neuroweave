@@ -18,6 +18,11 @@ from eeg_io.registry import (
 )
 
 
+class _NoopBatchWorker:
+    def enqueue(self, batch_id: str) -> None:
+        return None
+
+
 def _client_with_repositories(tmp_path, monkeypatch) -> TestClient:
     monkeypatch.setattr(
         api_main,
@@ -39,6 +44,7 @@ def _client_with_repositories(tmp_path, monkeypatch) -> TestClient:
         "batch_repository",
         JsonBatchRepository(tmp_path / "batches"),
     )
+    monkeypatch.setattr(api_main, "batch_worker", _NoopBatchWorker())
     return TestClient(api_main.app)
 
 

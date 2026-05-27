@@ -218,3 +218,34 @@ Responsibilities:
 
 The service also returns per-dataset planning results so callers can inspect
 validation state without parsing the persisted plan shape directly.
+
+## C10 Worker Orchestration MVP
+
+C10 adds a local batch worker that queues persisted batch ids and executes
+preprocessing subject items sequentially. It reuses the existing preprocessing
+run repository and `_execute_preprocessing_run` path instead of running a second
+preprocessing implementation.
+
+Worker rules:
+
+- `POST /batches` persists the plan, then enqueues the batch id.
+- Startup recovery re-enqueues `pending`, `running`, and `cancelling` batches.
+- The worker marks a batch `running` before item execution.
+- Each pending subject item gets one concrete preprocessing run id in
+  `run_ids.preprocessing`.
+- Items execute in request order; the next subject does not start until the
+  previous preprocessing run reaches a terminal state.
+- A completed preprocessing run marks only that subject item `completed`.
+- A failed preprocessing run marks only that subject item `failed` and copies
+  run errors/warnings onto the item.
+- A mix of completed and failed items finalizes the batch as `partial`.
+- If all runnable items fail, the batch finalizes as `failed`.
+
+Cancellation checkpoints:
+
+- Cancelling a pending batch marks pending items `cancelled`.
+- Cancelling a running batch moves the batch to `cancelling`, marks pending or
+  running items `cancelling`, and requests cancellation for the active concrete
+  preprocessing run.
+- The worker checks cancellation before each item and after each concrete run,
+  then finalizes remaining pending items as `cancelled`.

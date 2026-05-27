@@ -103,7 +103,10 @@ preview configs, warnings, errors, excluded fields, and review-required fields
 into each subject item before the plan is saved. `GET /batches` and `GET
 /batches/{batch_id}` read the persisted plans. `POST /batches/{batch_id}/cancel`
 marks pending plans and items as `cancelled`; running plans move to
-`cancelling` for future worker drain behavior.
+`cancelling` and request cancellation for the active concrete preprocessing run.
+The local batch worker recovers pending/running batches on startup, executes
+preprocessing items sequentially, records each subject's concrete run id, marks
+only failing subjects as failed, and finalizes mixed outcomes as `partial`.
 
 Preprocessing config validation rejects invalid filter ordering, cutoff frequencies at or above Nyquist, upsampling beyond the input sampling rate, and custom reference channels that do not exist in the uploaded recording.
 

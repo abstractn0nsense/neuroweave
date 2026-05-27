@@ -404,6 +404,58 @@ class LocalErpWorker:
 erp_worker = LocalErpWorker()
 
 
+class LocalBatchWorker:
+    def __init__(self) -> None:
+        self._queue: Queue[str] = Queue()
+        self._queued_batch_ids: set[str] = set()
+        self._lock = Lock()
+        self._thread: Thread | None = None
+
+    def start(self) -> None:
+        with self._lock:
+            if self._thread and self._thread.is_alive():
+                return
+            self._thread = Thread(
+                target=self._run_loop,
+                name="neuroweave-batch-worker",
+                daemon=True,
+            )
+            self._thread.start()
+
+    def is_alive(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def enqueue(self, batch_id: str) -> None:
+        self.start()
+        with self._lock:
+            if batch_id in self._queued_batch_ids:
+                return
+            self._queued_batch_ids.add(batch_id)
+            self._queue.put(batch_id)
+
+    def recover(self) -> None:
+        for batch in batch_repository.list_batches():
+            if batch.status in {
+                BatchStatus.PENDING,
+                BatchStatus.RUNNING,
+                BatchStatus.CANCELLING,
+            }:
+                self.enqueue(batch.batch_id)
+
+    def _run_loop(self) -> None:
+        while True:
+            batch_id = self._queue.get()
+            try:
+                _execute_batch_run(batch_id)
+            finally:
+                with self._lock:
+                    self._queued_batch_ids.discard(batch_id)
+                self._queue.task_done()
+
+
+batch_worker = LocalBatchWorker()
+
+
 class HealthResponse(BaseModel):
     status: str
     service: str
@@ -1025,9 +1077,11 @@ async def lifespan(app: FastAPI):
     preprocessing_worker.start()
     epoch_worker.start()
     erp_worker.start()
+    batch_worker.start()
     preprocessing_worker.recover()
     epoch_worker.recover()
     erp_worker.recover()
+    batch_worker.recover()
     yield
 
 
@@ -1052,6 +1106,7 @@ def health() -> HealthResponse:
             "preprocessing": preprocessing_worker.is_alive(),
             "epoch": epoch_worker.is_alive(),
             "erp": erp_worker.is_alive(),
+            "batch": batch_worker.is_alive(),
         },
         data_directories={
             "samples": str(SAMPLE_DATASET_DIR),
@@ -1526,6 +1581,20 @@ def cancel_preprocessing_run(run_id: str) -> PreprocessingRunResponse:
     if run is None:
         raise HTTPException(status_code=404, detail="Preprocessing run not found")
 
+    cancelled_run = _request_preprocessing_run_cancellation(run_id)
+    if cancelled_run is not None:
+        return _preprocessing_run_response(cancelled_run)
+
+    return _preprocessing_run_response(run)
+
+
+def _request_preprocessing_run_cancellation(
+    run_id: str,
+) -> PreprocessingRun | None:
+    run = run_repository.get_preprocessing_run(run_id)
+    if run is None:
+        return None
+
     if run.status == PreprocessingRunStatus.PENDING:
         cancelled_at = _utc_now_iso()
         warnings = [*run.warnings, "Run cancelled before preprocessing started."]
@@ -1538,7 +1607,7 @@ def cancel_preprocessing_run(run_id: str) -> PreprocessingRunResponse:
             diagnostics=_diagnostics_from_warnings(warnings, "preprocessing"),
         )
         run_repository.save_preprocessing_run(cancelled_run)
-        return _preprocessing_run_response(cancelled_run)
+        return cancelled_run
 
     if run.status == PreprocessingRunStatus.RUNNING:
         warnings = [
@@ -1553,9 +1622,9 @@ def cancel_preprocessing_run(run_id: str) -> PreprocessingRunResponse:
             diagnostics=_diagnostics_from_warnings(warnings, "preprocessing"),
         )
         run_repository.save_preprocessing_run(cancelling_run)
-        return _preprocessing_run_response(cancelling_run)
+        return cancelling_run
 
-    return _preprocessing_run_response(run)
+    return run
 
 
 @app.get(
@@ -1884,6 +1953,7 @@ def create_batch(request: BatchCreateRequest) -> BatchRunPlanResponse:
         saved_batch = batch_repository.save_batch(planning_result.plan)
     except JsonRegistryError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    batch_worker.enqueue(saved_batch.batch_id)
     return _batch_run_plan_response(saved_batch)
 
 
@@ -1928,10 +1998,15 @@ def cancel_batch(batch_id: str) -> BatchRunPlanResponse:
         if cancel_status == BatchStatus.CANCELLED
         else BatchItemStatus.CANCELLING
     )
+    for item in batch.items:
+        preprocessing_run_id = item.run_ids.get(RunKind.PREPROCESSING.value)
+        if item.status == BatchItemStatus.RUNNING and preprocessing_run_id:
+            _request_preprocessing_run_cancellation(preprocessing_run_id)
+
     updated_batch = replace(
         batch,
         status=cancel_status,
-        updated_at_utc=_utc_now_iso(),
+        updated_at_utc=_batch_updated_at(batch),
         items=[
             replace(item, status=item_status)
             if item.status in {BatchItemStatus.PENDING, BatchItemStatus.RUNNING}
@@ -4573,6 +4648,348 @@ def _validate_dataset(dataset: IngestionDataset) -> ValidationReport:
         recording=recording,
         event_log=event_log,
     )
+
+
+def _execute_batch_run(batch_id: str) -> None:
+    batch = batch_repository.get_batch(batch_id)
+    if batch is None or batch.status in {
+        BatchStatus.COMPLETED,
+        BatchStatus.FAILED,
+        BatchStatus.PARTIAL,
+        BatchStatus.CANCELLED,
+    }:
+        return
+
+    if batch.status == BatchStatus.CANCELLING:
+        _cancel_batch_pending_items(batch, reason="Batch cancelled before next item.")
+        return
+
+    batch = replace(
+        batch,
+        status=BatchStatus.RUNNING,
+        updated_at_utc=_batch_updated_at(batch),
+    )
+    batch_repository.save_batch(batch)
+
+    for item in batch.items:
+        current_batch = batch_repository.get_batch(batch_id)
+        if current_batch is None:
+            return
+        if current_batch.status in {BatchStatus.CANCELLING, BatchStatus.CANCELLED}:
+            _cancel_batch_pending_items(
+                current_batch,
+                reason="Batch cancelled at worker checkpoint.",
+            )
+            return
+
+        current_item = _batch_item_by_id(current_batch, item.item_id)
+        if current_item is None or current_item.status in {
+            BatchItemStatus.COMPLETED,
+            BatchItemStatus.FAILED,
+            BatchItemStatus.CANCELLED,
+        }:
+            continue
+
+        _ensure_batch_preprocessing_run(current_batch, current_item)
+        current_batch = batch_repository.get_batch(batch_id)
+        if current_batch is None:
+            return
+        current_item = _batch_item_by_id(current_batch, item.item_id)
+        if current_item is None:
+            return
+        if current_item.status == BatchItemStatus.FAILED:
+            continue
+        if current_batch.status in {BatchStatus.CANCELLING, BatchStatus.CANCELLED}:
+            _cancel_current_batch_item(current_batch, current_item)
+            return
+
+        run_id = current_item.run_ids.get(RunKind.PREPROCESSING.value)
+        if not run_id:
+            failed_item = replace(
+                current_item,
+                status=BatchItemStatus.FAILED,
+                errors=[
+                    *current_item.errors,
+                    "Batch preprocessing run id was not created.",
+                ],
+            )
+            _save_batch_item(current_batch, failed_item)
+            continue
+
+        _execute_preprocessing_run(run_id)
+        completed_batch = batch_repository.get_batch(batch_id)
+        if completed_batch is None:
+            return
+        completed_item = _batch_item_by_id(completed_batch, item.item_id)
+        if completed_item is None:
+            return
+        run = run_repository.get_preprocessing_run(run_id)
+        if completed_batch.status in {
+            BatchStatus.CANCELLING,
+            BatchStatus.CANCELLED,
+        } or (run is not None and run.status == PreprocessingRunStatus.CANCELLED):
+            _cancel_current_batch_item(completed_batch, completed_item)
+            return
+        _save_batch_item(
+            completed_batch,
+            _batch_item_from_preprocessing_run(completed_item, run),
+        )
+
+    final_batch = batch_repository.get_batch(batch_id)
+    if final_batch is None:
+        return
+    if final_batch.status in {BatchStatus.CANCELLING, BatchStatus.CANCELLED}:
+        _cancel_batch_pending_items(
+            final_batch,
+            reason="Batch cancelled at final checkpoint.",
+        )
+        return
+    batch_repository.save_batch(
+        replace(
+            final_batch,
+            status=_batch_status_from_items(final_batch.items),
+            updated_at_utc=_batch_updated_at(final_batch),
+        )
+    )
+
+
+def _ensure_batch_preprocessing_run(
+    batch: BatchRunPlan,
+    item: BatchSubjectRunPlan,
+) -> BatchSubjectRunPlan:
+    existing_run_id = item.run_ids.get(RunKind.PREPROCESSING.value)
+    if existing_run_id:
+        running_item = replace(item, status=BatchItemStatus.RUNNING)
+        _save_batch_item(batch, running_item)
+        return running_item
+
+    if RunKind.PREPROCESSING not in item.planned_steps:
+        failed_item = replace(
+            item,
+            status=BatchItemStatus.FAILED,
+            errors=[
+                *item.errors,
+                "Batch worker MVP only supports preprocessing steps.",
+            ],
+        )
+        _save_batch_item(batch, failed_item)
+        return failed_item
+
+    preprocessing_config = item.configs.preprocessing
+    if preprocessing_config is None:
+        failed_item = replace(
+            item,
+            status=BatchItemStatus.FAILED,
+            errors=[*item.errors, "Preprocessing config is missing."],
+        )
+        _save_batch_item(batch, failed_item)
+        return failed_item
+
+    try:
+        run = _create_batch_preprocessing_run(
+            batch_id=batch.batch_id,
+            item_id=item.item_id,
+            dataset_id=item.dataset_id,
+            config=preprocessing_config,
+        )
+    except ValueError as exc:
+        failed_item = replace(
+            item,
+            status=BatchItemStatus.FAILED,
+            errors=_dedupe_strings([*item.errors, str(exc)]),
+        )
+        _save_batch_item(batch, failed_item)
+        return failed_item
+
+    running_item = replace(
+        item,
+        status=BatchItemStatus.RUNNING,
+        run_ids={**item.run_ids, RunKind.PREPROCESSING.value: run.run_id},
+        errors=[],
+    )
+    _save_batch_item(batch, running_item)
+    return running_item
+
+
+def _create_batch_preprocessing_run(
+    *,
+    batch_id: str,
+    item_id: str,
+    dataset_id: str,
+    config: PreprocessingConfig,
+) -> PreprocessingRun:
+    dataset = registry_repository.get_dataset(dataset_id)
+    if dataset is None:
+        raise ValueError("Dataset not found")
+
+    report = _validate_dataset(dataset)
+    if not report.valid:
+        registry_repository.update_dataset(replace(dataset, status=report.status))
+        raise ValueError("Dataset must be valid before batch preprocessing.")
+
+    recording = registry_repository.get_recording(dataset_id)
+    if recording is None:
+        raise ValueError("Recording not found")
+
+    uploaded_file = _find_uploaded_file(dataset_id, recording.file_id)
+    if uploaded_file is None or uploaded_file.kind != UploadedFileKind.EEG:
+        raise ValueError("EEG file not found")
+
+    config_errors = _validate_preprocessing_config(config, recording)
+    if config_errors:
+        raise ValueError("; ".join(config_errors))
+
+    run_id = _new_id("preprocess")
+    output_path = _preprocessing_output_path(dataset_id, run_id)
+    run = PreprocessingRun(
+        run_id=run_id,
+        dataset_id=dataset_id,
+        config=config,
+        status=PreprocessingRunStatus.PENDING,
+        output_path=str(output_path),
+        output_metadata={
+            **_preprocessing_input_provenance(
+                uploaded_file=uploaded_file,
+                recording=recording,
+            ),
+            "batch_id": batch_id,
+            "batch_item_id": item_id,
+        },
+    )
+    run_repository.save_preprocessing_run(run)
+    return run
+
+
+def _batch_item_from_preprocessing_run(
+    item: BatchSubjectRunPlan,
+    run: PreprocessingRun | None,
+) -> BatchSubjectRunPlan:
+    if run is None:
+        return replace(
+            item,
+            status=BatchItemStatus.FAILED,
+            errors=[*item.errors, "Preprocessing run not found after execution."],
+        )
+    if run.status == PreprocessingRunStatus.COMPLETED:
+        return replace(
+            item,
+            status=BatchItemStatus.COMPLETED,
+            warnings=_dedupe_strings([*item.warnings, *run.warnings]),
+            errors=[],
+        )
+    if run.status == PreprocessingRunStatus.CANCELLED:
+        return replace(
+            item,
+            status=BatchItemStatus.CANCELLED,
+            warnings=_dedupe_strings([*item.warnings, *run.warnings]),
+            errors=run.errors,
+        )
+    return replace(
+        item,
+        status=BatchItemStatus.FAILED,
+        warnings=_dedupe_strings([*item.warnings, *run.warnings]),
+        errors=run.errors or [f"Preprocessing ended with status {run.status.value}."],
+    )
+
+
+def _cancel_current_batch_item(
+    batch: BatchRunPlan,
+    item: BatchSubjectRunPlan,
+) -> None:
+    run_id = item.run_ids.get(RunKind.PREPROCESSING.value)
+    if run_id:
+        _request_preprocessing_run_cancellation(run_id)
+    cancelled_item = replace(
+        item,
+        status=BatchItemStatus.CANCELLED,
+        warnings=_dedupe_strings(
+            [*item.warnings, "Batch cancellation stopped this item."]
+        ),
+    )
+    _save_batch_item(batch, cancelled_item)
+    current_batch = batch_repository.get_batch(batch.batch_id)
+    if current_batch is not None:
+        _cancel_batch_pending_items(
+            current_batch,
+            reason="Batch cancellation stopped pending items.",
+        )
+
+
+def _cancel_batch_pending_items(batch: BatchRunPlan, *, reason: str) -> BatchRunPlan:
+    cancelled_items = []
+    for item in batch.items:
+        if item.status in {
+            BatchItemStatus.PENDING,
+            BatchItemStatus.RUNNING,
+            BatchItemStatus.CANCELLING,
+        }:
+            run_id = item.run_ids.get(RunKind.PREPROCESSING.value)
+            if run_id:
+                _request_preprocessing_run_cancellation(run_id)
+            cancelled_items.append(
+                replace(
+                    item,
+                    status=BatchItemStatus.CANCELLED,
+                    warnings=_dedupe_strings([*item.warnings, reason]),
+                )
+            )
+        else:
+            cancelled_items.append(item)
+    cancelled_batch = replace(
+        batch,
+        status=BatchStatus.CANCELLED,
+        items=cancelled_items,
+        updated_at_utc=_batch_updated_at(batch),
+    )
+    batch_repository.save_batch(cancelled_batch)
+    return cancelled_batch
+
+
+def _batch_item_by_id(
+    batch: BatchRunPlan,
+    item_id: str,
+) -> BatchSubjectRunPlan | None:
+    for item in batch.items:
+        if item.item_id == item_id:
+            return item
+    return None
+
+
+def _save_batch_item(
+    batch: BatchRunPlan,
+    updated_item: BatchSubjectRunPlan,
+) -> BatchRunPlan:
+    updated_batch = replace(
+        batch,
+        items=[
+            updated_item if item.item_id == updated_item.item_id else item
+            for item in batch.items
+        ],
+        updated_at_utc=_batch_updated_at(batch),
+    )
+    batch_repository.save_batch(updated_batch)
+    return updated_batch
+
+
+def _batch_status_from_items(items: list[BatchSubjectRunPlan]) -> BatchStatus:
+    if items and all(item.status == BatchItemStatus.CANCELLED for item in items):
+        return BatchStatus.CANCELLED
+    if items and all(item.status == BatchItemStatus.COMPLETED for item in items):
+        return BatchStatus.COMPLETED
+    has_completed = any(item.status == BatchItemStatus.COMPLETED for item in items)
+    has_failed = any(item.status == BatchItemStatus.FAILED for item in items)
+    if has_completed and has_failed:
+        return BatchStatus.PARTIAL
+    if has_failed:
+        return BatchStatus.FAILED
+    if any(item.status == BatchItemStatus.CANCELLED for item in items):
+        return BatchStatus.CANCELLED
+    return BatchStatus.COMPLETED
+
+
+def _batch_updated_at(batch: BatchRunPlan) -> str:
+    now = _utc_now_iso()
+    return now if now >= batch.created_at_utc else batch.created_at_utc
 
 
 def _execute_preprocessing_run(run_id: str) -> None:

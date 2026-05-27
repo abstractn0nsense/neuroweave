@@ -15,6 +15,7 @@ def test_health_reports_workers_and_data_directories():
             "preprocessing": True,
             "epoch": True,
             "erp": True,
+            "batch": True,
         }
         assert set(payload["data_directories"]) == {
             "samples",
