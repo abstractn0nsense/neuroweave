@@ -38,8 +38,17 @@ from eeg_core.domain import (
     RunKind,
     UploadedFile,
     UploadedFileKind,
+    WorkflowTemplate,
+    WorkflowTemplateCompatibility,
+    WorkflowTemplateCreatedFrom,
+    WorkflowTemplateEpochConfig,
+    WorkflowTemplateErpConfig,
+    WorkflowTemplateFieldPolicy,
+    WorkflowTemplateFieldPolicyEntry,
+    WorkflowTemplateWorkflow,
     diagnostic_warning_from_dict,
     recording_metadata_from_dict,
+    validate_workflow_template,
 )
 
 
@@ -399,6 +408,51 @@ class JsonRunRepository:
         return self.erp_run_directory(run_id) / "run.json"
 
 
+class JsonWorkflowTemplateRepository:
+    def __init__(self, templates_root: Path):
+        self.templates_root = templates_root
+
+    def initialize(self) -> None:
+        self.templates_root.mkdir(parents=True, exist_ok=True)
+
+    def save_template(self, template: WorkflowTemplate) -> WorkflowTemplate:
+        validation = validate_workflow_template(template)
+        if not validation.valid:
+            raise JsonRegistryError(
+                "Invalid workflow template: " + "; ".join(validation.errors)
+            )
+        self.initialize()
+        _write_json(self.template_path(template.template_id), asdict(template))
+        return template
+
+    def get_template(self, template_id: str) -> WorkflowTemplate | None:
+        path = self.template_path(template_id)
+        if not path.exists():
+            return None
+        return _workflow_template_from_json(_read_json_object(path))
+
+    def list_templates(self) -> list[WorkflowTemplate]:
+        self.initialize()
+        templates = [
+            _workflow_template_from_json(_read_json_object(path))
+            for path in sorted(self.templates_root.glob("*/template.json"))
+        ]
+        return sorted(templates, key=lambda template: template.template_id)
+
+    def delete_template(self, template_id: str) -> bool:
+        path = self.template_path(template_id)
+        if not path.exists():
+            return False
+        path.unlink()
+        return True
+
+    def template_directory(self, template_id: str) -> Path:
+        return self.templates_root / template_id
+
+    def template_path(self, template_id: str) -> Path:
+        return self.template_directory(template_id) / "template.json"
+
+
 def _project_from_json(data: JsonObject) -> Project:
     return Project(
         project_id=str(data["project_id"]),
@@ -591,6 +645,183 @@ def _erp_config_from_json(data: JsonObject) -> ErpConfig:
         method=str(data.get("method", "mean")),
         plot_mode=str(data.get("plot_mode", "gfp")),
         plot_channel=data.get("plot_channel"),
+    )
+
+
+def _workflow_template_from_json(data: JsonObject) -> WorkflowTemplate:
+    workflow_data = _json_object(data.get("workflow"))
+    if not workflow_data:
+        workflow_data = {
+            key: data.get(key)
+            for key in ("preprocessing", "epoch", "erp")
+            if key in data
+        }
+    template_id = str(data.get("template_id", data.get("id", "")))
+    known_keys = {
+        "schema_version",
+        "template_kind",
+        "template_id",
+        "id",
+        "name",
+        "description",
+        "created_at_utc",
+        "updated_at_utc",
+        "created_from",
+        "compatibility",
+        "workflow",
+        "preprocessing",
+        "epoch",
+        "erp",
+        "field_policy",
+        "notes",
+        "extra",
+    }
+    extra = dict(_json_object(data.get("extra")))
+    for key, value in data.items():
+        if key not in known_keys:
+            extra[key] = value
+    return WorkflowTemplate(
+        schema_version=int(data.get("schema_version", 1)),
+        template_kind=str(data.get("template_kind", "workflow_template")),
+        template_id=template_id,
+        name=str(data.get("name", template_id)),
+        description=data.get("description"),
+        created_at_utc=str(data.get("created_at_utc", "")),
+        updated_at_utc=str(
+            data.get("updated_at_utc", data.get("created_at_utc", ""))
+        ),
+        created_from=_workflow_template_created_from_json(
+            _json_object(data.get("created_from"))
+        ),
+        compatibility=_workflow_template_compatibility_from_json(
+            _json_object(data.get("compatibility"))
+        ),
+        workflow=_workflow_template_workflow_from_json(workflow_data),
+        field_policy=_workflow_template_field_policy_from_json(
+            _json_object(data.get("field_policy"))
+        ),
+        notes=_string_list(data.get("notes")),
+        extra=extra,
+    )
+
+
+def _workflow_template_created_from_json(
+    data: JsonObject,
+) -> WorkflowTemplateCreatedFrom:
+    return WorkflowTemplateCreatedFrom(
+        dataset_id=data.get("dataset_id"),
+        preprocessing_run_id=data.get("preprocessing_run_id"),
+        epoch_run_id=data.get("epoch_run_id"),
+        erp_run_id=data.get("erp_run_id"),
+    )
+
+
+def _workflow_template_compatibility_from_json(
+    data: JsonObject,
+) -> WorkflowTemplateCompatibility:
+    return WorkflowTemplateCompatibility(
+        minimum_app_phase=str(data.get("minimum_app_phase", "C")),
+        requires_event_log=bool(data.get("requires_event_log", True)),
+        requires_completed_preprocessing=bool(
+            data.get("requires_completed_preprocessing", False)
+        ),
+        requires_completed_epoch=bool(data.get("requires_completed_epoch", False)),
+    )
+
+
+def _workflow_template_workflow_from_json(
+    data: JsonObject,
+) -> WorkflowTemplateWorkflow:
+    preprocessing_data = data.get("preprocessing")
+    epoch_data = data.get("epoch")
+    erp_data = data.get("erp")
+    return WorkflowTemplateWorkflow(
+        preprocessing=(
+            _preprocessing_config_from_json(_json_object(preprocessing_data))
+            if isinstance(preprocessing_data, dict)
+            else None
+        ),
+        epoch=(
+            _workflow_template_epoch_config_from_json(_json_object(epoch_data))
+            if isinstance(epoch_data, dict)
+            else None
+        ),
+        erp=(
+            _workflow_template_erp_config_from_json(_json_object(erp_data))
+            if isinstance(erp_data, dict)
+            else None
+        ),
+    )
+
+
+def _workflow_template_epoch_config_from_json(
+    data: JsonObject,
+) -> WorkflowTemplateEpochConfig:
+    return WorkflowTemplateEpochConfig(
+        condition_field=str(data.get("condition_field", "trial_type")),
+        tmin_seconds=float(data.get("tmin_seconds", -0.2)),
+        tmax_seconds=float(data.get("tmax_seconds", 0.8)),
+        baseline_start_seconds=_optional_float(data.get("baseline_start_seconds")),
+        baseline_end_seconds=_optional_float(data.get("baseline_end_seconds")),
+        reject_eeg_uv=_optional_float(data.get("reject_eeg_uv")),
+    )
+
+
+def _workflow_template_erp_config_from_json(
+    data: JsonObject,
+) -> WorkflowTemplateErpConfig:
+    conditions = data.get("conditions")
+    picks = data.get("picks")
+    return WorkflowTemplateErpConfig(
+        conditions=(
+            [str(condition) for condition in conditions]
+            if isinstance(conditions, list)
+            else None
+        ),
+        picks=[str(pick) for pick in picks] if isinstance(picks, list) else None,
+        method=str(data.get("method", "mean")),
+        plot_mode=str(data.get("plot_mode", "gfp")),
+        plot_channel=data.get("plot_channel"),
+    )
+
+
+def _workflow_template_field_policy_from_json(
+    data: JsonObject,
+) -> WorkflowTemplateFieldPolicy:
+    return WorkflowTemplateFieldPolicy(
+        excluded_fields=[
+            _workflow_template_field_policy_entry_from_json(entry)
+            for entry in _field_policy_entry_list(data.get("excluded_fields"))
+        ],
+        review_required_fields=[
+            _workflow_template_field_policy_entry_from_json(entry)
+            for entry in _field_policy_entry_list(data.get("review_required_fields"))
+        ],
+        channel_specific_fields=_string_list(data.get("channel_specific_fields")),
+    )
+
+
+def _field_policy_entry_list(value: Any) -> list[JsonObject]:
+    if not isinstance(value, list):
+        return []
+    entries = []
+    for item in value:
+        if isinstance(item, dict):
+            entries.append(item)
+        elif isinstance(item, str):
+            entries.append({"path": item, "reason": "legacy"})
+    return entries
+
+
+def _workflow_template_field_policy_entry_from_json(
+    data: JsonObject,
+) -> WorkflowTemplateFieldPolicyEntry:
+    return WorkflowTemplateFieldPolicyEntry(
+        path=str(data.get("path", "")),
+        reason=str(data.get("reason", "legacy")),
+        source_value=data.get("source_value"),
+        source_value_summary=data.get("source_value_summary"),
+        default_action=data.get("default_action"),
     )
 
 

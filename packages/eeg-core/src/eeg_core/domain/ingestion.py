@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 from eeg_core.domain.recording import RecordingMetadata
 
@@ -317,6 +318,106 @@ class ErpConfig:
 
 
 @dataclass(frozen=True)
+class WorkflowTemplateCreatedFrom:
+    dataset_id: str | None = None
+    preprocessing_run_id: str | None = None
+    epoch_run_id: str | None = None
+    erp_run_id: str | None = None
+
+
+@dataclass(frozen=True)
+class WorkflowTemplateCompatibility:
+    minimum_app_phase: str = "C"
+    requires_event_log: bool = True
+    requires_completed_preprocessing: bool = False
+    requires_completed_epoch: bool = False
+
+
+@dataclass(frozen=True)
+class WorkflowTemplateFieldPolicyEntry:
+    path: str
+    reason: str
+    source_value: Any = None
+    source_value_summary: str | None = None
+    default_action: str | None = None
+
+
+@dataclass(frozen=True)
+class WorkflowTemplateFieldPolicy:
+    excluded_fields: list[WorkflowTemplateFieldPolicyEntry] = field(
+        default_factory=list
+    )
+    review_required_fields: list[WorkflowTemplateFieldPolicyEntry] = field(
+        default_factory=list
+    )
+    channel_specific_fields: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class WorkflowTemplateEpochConfig:
+    condition_field: str
+    tmin_seconds: float
+    tmax_seconds: float
+    baseline_start_seconds: float | None = None
+    baseline_end_seconds: float | None = None
+    reject_eeg_uv: float | None = None
+
+
+@dataclass(frozen=True)
+class WorkflowTemplateErpConfig:
+    conditions: list[str] | None = None
+    picks: list[str] | None = None
+    method: str = "mean"
+    plot_mode: str = "gfp"
+    plot_channel: str | None = None
+
+
+@dataclass(frozen=True)
+class WorkflowTemplateWorkflow:
+    preprocessing: PreprocessingConfig | None = None
+    epoch: WorkflowTemplateEpochConfig | None = None
+    erp: WorkflowTemplateErpConfig | None = None
+
+
+@dataclass(frozen=True)
+class WorkflowTemplateValidation:
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    stale_reasons: list[str] = field(default_factory=list)
+
+    @property
+    def valid(self) -> bool:
+        return not self.errors
+
+    @property
+    def stale(self) -> bool:
+        return bool(self.stale_reasons)
+
+
+@dataclass(frozen=True)
+class WorkflowTemplate:
+    template_id: str
+    name: str
+    created_at_utc: str
+    updated_at_utc: str
+    workflow: WorkflowTemplateWorkflow
+    schema_version: int = 1
+    template_kind: str = "workflow_template"
+    description: str | None = None
+    created_from: WorkflowTemplateCreatedFrom = field(
+        default_factory=WorkflowTemplateCreatedFrom
+    )
+    compatibility: WorkflowTemplateCompatibility = field(
+        default_factory=WorkflowTemplateCompatibility
+    )
+    field_policy: WorkflowTemplateFieldPolicy = field(
+        default_factory=WorkflowTemplateFieldPolicy
+    )
+    notes: list[str] = field(default_factory=list)
+    extra: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class ComparisonConfig:
     erp_run_id: str
     condition_a: str
@@ -412,3 +513,142 @@ def diagnostic_warnings_from_strings(
         if warning
     ]
     return {"warnings": structured_warnings} if structured_warnings else {}
+
+
+SUPPORTED_WORKFLOW_TEMPLATE_SCHEMA_VERSION = 1
+WORKFLOW_TEMPLATE_KIND = "workflow_template"
+
+
+def validate_workflow_template(
+    template: WorkflowTemplate,
+) -> WorkflowTemplateValidation:
+    errors: list[str] = []
+    warnings: list[str] = []
+    stale_reasons: list[str] = []
+
+    if template.schema_version != SUPPORTED_WORKFLOW_TEMPLATE_SCHEMA_VERSION:
+        errors.append(
+            "WorkflowTemplate schema_version is not supported: "
+            f"{template.schema_version}"
+        )
+        stale_reasons.append("unsupported_schema_version")
+
+    if template.template_kind != WORKFLOW_TEMPLATE_KIND:
+        errors.append(
+            "WorkflowTemplate template_kind must be 'workflow_template'."
+        )
+
+    if not template.template_id:
+        errors.append("WorkflowTemplate template_id is required.")
+    if not template.name:
+        errors.append("WorkflowTemplate name is required.")
+    if not template.created_at_utc:
+        errors.append("WorkflowTemplate created_at_utc is required.")
+    if not template.updated_at_utc:
+        errors.append("WorkflowTemplate updated_at_utc is required.")
+
+    if (
+        template.created_at_utc
+        and template.updated_at_utc
+        and template.updated_at_utc < template.created_at_utc
+    ):
+        errors.append("WorkflowTemplate updated_at_utc cannot precede created_at_utc.")
+
+    workflow = template.workflow
+    if (
+        workflow.preprocessing is None
+        and workflow.epoch is None
+        and workflow.erp is None
+    ):
+        errors.append("WorkflowTemplate workflow must configure at least one step.")
+
+    preprocessing = workflow.preprocessing
+    if preprocessing is not None:
+        if preprocessing.manual_bad_channels:
+            errors.append(
+                "WorkflowTemplate must not store manual_bad_channels in reusable "
+                "preprocessing config."
+            )
+            stale_reasons.append("subject_specific_manual_bad_channels")
+        if preprocessing.ica.exclude_components:
+            errors.append(
+                "WorkflowTemplate must not store ica.exclude_components in reusable "
+                "preprocessing config."
+            )
+            stale_reasons.append("subject_specific_ica_exclusions")
+        _require_channel_review(
+            "workflow.preprocessing.ica.eog_channels",
+            preprocessing.ica.eog_channels,
+            template.field_policy,
+            warnings,
+            stale_reasons,
+        )
+        _require_channel_review(
+            "workflow.preprocessing.ica.ecg_channels",
+            preprocessing.ica.ecg_channels,
+            template.field_policy,
+            warnings,
+            stale_reasons,
+        )
+        _require_channel_review(
+            "workflow.preprocessing.artifact_handling.eog_channels",
+            preprocessing.artifact_handling.eog_channels,
+            template.field_policy,
+            warnings,
+            stale_reasons,
+        )
+        _require_channel_review(
+            "workflow.preprocessing.artifact_handling.ecg_channels",
+            preprocessing.artifact_handling.ecg_channels,
+            template.field_policy,
+            warnings,
+            stale_reasons,
+        )
+
+    erp = workflow.erp
+    if erp is not None:
+        _require_channel_review(
+            "workflow.erp.picks",
+            erp.picks or [],
+            template.field_policy,
+            warnings,
+            stale_reasons,
+        )
+        _require_channel_review(
+            "workflow.erp.plot_channel",
+            [erp.plot_channel] if erp.plot_channel else [],
+            template.field_policy,
+            warnings,
+            stale_reasons,
+        )
+
+    return WorkflowTemplateValidation(
+        errors=_unique_strings(errors),
+        warnings=_unique_strings(warnings),
+        stale_reasons=_unique_strings(stale_reasons),
+    )
+
+
+def _require_channel_review(
+    path: str,
+    values: list[str],
+    field_policy: WorkflowTemplateFieldPolicy,
+    warnings: list[str],
+    stale_reasons: list[str],
+) -> None:
+    if not values:
+        return
+
+    review_paths = {
+        entry.path for entry in field_policy.review_required_fields
+    }
+    channel_paths = set(field_policy.channel_specific_fields)
+    if path in review_paths or path in channel_paths:
+        return
+
+    warnings.append(f"{path} should be marked as review_required before use.")
+    stale_reasons.append(f"channel_specific_without_review:{path}")
+
+
+def _unique_strings(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(values))

@@ -27,6 +27,7 @@ data/
       datasets/          Dataset metadata plus uploaded files
   processed/            Derived EEG files and analysis outputs
   runs/                 Workflow run state, logs, and result bundles
+  templates/            Workflow template registry JSON
   cache/                Temporary files and reusable computation cache
 ```
 
@@ -40,4 +41,5 @@ The entire `data/` directory is ignored by git. Do not add `data/.gitkeep`; app 
 - Dataset-scoped upload files should go to `data/raw/uploads/datasets/{dataset_id}/eeg/` and `data/raw/uploads/datasets/{dataset_id}/events/`.
 - Processing outputs should go to `data/processed/`.
 - Workflow execution records should go to `data/runs/`.
+- Workflow templates should go to `data/templates/{template_id}/template.json`.
 - Rebuildable temporary files should go to `data/cache/`.

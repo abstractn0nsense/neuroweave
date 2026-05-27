@@ -382,6 +382,36 @@ C2 and later implementations must verify:
 - Source `preprocessing_run_id` and `epoch_run_id` never become reusable config.
 - Batch snapshots are immutable and retry-safe.
 
+## C2 Serialization Rules
+
+The JSON repository stores templates at
+`data/templates/{template_id}/template.json` through the same atomic JSON write
+and lock helpers used by run and dataset registries.
+
+Reader compatibility rules:
+
+- Missing `schema_version` defaults to `1`.
+- Missing `template_kind` defaults to `workflow_template`.
+- Legacy `id` is accepted as `template_id`.
+- Missing `updated_at_utc` defaults to `created_at_utc`.
+- Missing `field_policy`, `created_from`, `compatibility`, and `notes` use safe
+  defaults.
+- Legacy top-level `preprocessing`, `epoch`, and `erp` config fragments are
+  accepted when `workflow` is absent.
+- Source run binding fields in legacy config, such as `preprocessing_run_id` and
+  `epoch_run_id`, are ignored when loading reusable template config.
+- Unknown top-level keys are retained under template `extra` so future metadata
+  is not discarded by a read/write cycle.
+
+Stale validation rules:
+
+- Unsupported `schema_version` is invalid and stale.
+- `manual_bad_channels` in reusable preprocessing config is invalid and stale.
+- `ica.exclude_components` in reusable preprocessing config is invalid and
+  stale.
+- Non-empty channel-specific fields without a review policy are valid to load but
+  marked stale until target-dataset review is resolved.
+
 ## Relationship To Phase B Artifacts
 
 Workflow templates store intended config. They do not store Phase B diagnostic
