@@ -177,7 +177,11 @@ def test_batch_run_plan_serializes_per_subject_items():
     assert payload["template_snapshot"]["template_id"] == "template-001"
     assert payload["items"][0]["dataset_id"] == "dataset-001"
     assert payload["items"][0]["status"] == "pending"
+    assert payload["items"][0]["attempt"] == 1
+    assert payload["items"][0]["retry_of_item_id"] is None
     assert payload["items"][0]["planned_steps"] == ["preprocessing"]
+    assert payload["items"][0]["previous_run_ids"] == {}
+    assert payload["items"][0]["previous_error"] is None
     assert payload["items"][0]["configs"]["preprocessing"]["reference"] == "average"
     assert payload["items"][0]["configs"]["epoch"] is None
     assert payload["items"][0]["configs"]["erp"] is None
@@ -222,3 +226,34 @@ def test_batch_partial_status_requires_completed_and_failed_items():
     invalid_validation = validate_batch_run_plan(invalid_partial)
     assert not invalid_validation.valid
     assert "partial status requires" in invalid_validation.errors[0]
+
+
+def test_batch_subject_run_plan_supports_retry_lineage():
+    plan = _batch_plan()
+    retry_plan = BatchRunPlan(
+        **{
+            **asdict(plan),
+            "request": plan.request,
+            "template_snapshot": plan.template_snapshot,
+            "items": [
+                BatchSubjectRunPlan(
+                    **{
+                        **asdict(plan.items[0]),
+                        "configs": plan.items[0].configs,
+                        "bindings": plan.items[0].bindings,
+                        "planned_steps": plan.items[0].planned_steps,
+                        "excluded_fields": plan.items[0].excluded_fields,
+                        "review_required_fields": plan.items[0].review_required_fields,
+                        "attempt": 2,
+                        "previous_run_ids": {"preprocessing": "preprocess-failed"},
+                        "previous_error": "Previous preprocessing failed.",
+                    }
+                ),
+                plan.items[1],
+            ],
+        }
+    )
+
+    validation = validate_batch_run_plan(retry_plan)
+
+    assert validation.valid

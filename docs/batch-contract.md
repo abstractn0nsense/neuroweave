@@ -98,6 +98,8 @@ Each selected dataset gets one item:
   "item_id": "batch-001-item-001",
   "dataset_id": "dataset-001",
   "status": "pending",
+  "attempt": 1,
+  "retry_of_item_id": null,
   "configs": {
     "preprocessing": {},
     "epoch": null,
@@ -110,6 +112,8 @@ Each selected dataset gets one item:
   },
   "planned_steps": ["preprocessing"],
   "run_ids": {},
+  "previous_run_ids": {},
+  "previous_error": null,
   "excluded_fields": [],
   "review_required_fields": [],
   "warnings": [],
@@ -125,6 +129,11 @@ Rules:
 - `planned_steps` is ordered and uses existing run kinds: `preprocessing`,
   `epoch`, `erp`.
 - `run_ids` is populated as worker orchestration creates concrete runs.
+- `attempt` starts at `1`; retry paths increment it and carry the prior concrete
+  run ids in `previous_run_ids`.
+- `retry_of_item_id` is reserved for future retry records that need to point at
+  another item; in-place retries can leave it `null`.
+- `previous_error` captures the failure reason that motivated a retry.
 - `excluded_fields` and `review_required_fields` are copied from apply preview
   so the UI can explain subject-specific omissions and blocked review decisions.
 - Failed item retry must preserve the same batch-level template snapshot and
@@ -158,5 +167,31 @@ Validation rules:
 - `items[*].dataset_id` must match `dataset_selection.dataset_ids` in the same
   order.
 - `item_id` values must be unique.
+- `items[*].attempt` must be at least `1`.
+- `retry_of_item_id`, when present, must reference another item and use attempt
+  `2` or greater.
 - `completed` requires every item to be completed.
 - `partial` requires at least one completed item and at least one failed item.
+
+## C8 Repository And API
+
+C8 persists batch plans with `JsonBatchRepository` at
+`data/batches/{batch_id}/batch.json` by default. The root can be overridden with
+`NEUROWEAVE_BATCHES_DIR`. The repository validates plans before save, loads
+legacy/missing retry fields with defaults, and recomputes a missing snapshot
+digest from the embedded template for backward-compatible reads.
+
+API endpoints:
+
+```text
+POST /batches
+GET /batches
+GET /batches/{batch_id}
+POST /batches/{batch_id}/cancel
+```
+
+`POST /batches` creates the immutable template snapshot, runs apply-preview for
+each selected dataset, writes per-subject config/status records, and returns the
+persisted plan. Later edits to the workflow template registry do not change the
+embedded batch snapshot. Pending batches can be cancelled immediately; running
+batches enter `cancelling` so future workers can drain active items.

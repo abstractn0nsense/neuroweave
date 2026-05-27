@@ -34,6 +34,14 @@ from eeg_core.domain import (  # noqa: E402
     ArtifactHandlingConfig,
     BadChannelDetectionConfig,
     BadChannelInterpolationConfig,
+    BatchDatasetSelection,
+    BatchItemStatus,
+    BatchRequest,
+    BatchRunBindings,
+    BatchRunPlan,
+    BatchStatus,
+    BatchSubjectRunPlan,
+    BatchTemplateSnapshot,
     ChannelMetadata,
     ComparisonConfig,
     Dataset as IngestionDataset,
@@ -71,8 +79,11 @@ from eeg_core.domain import (  # noqa: E402
     WorkflowTemplateFieldPolicy,
     WorkflowTemplateFieldPolicyEntry,
     WorkflowTemplateWorkflow,
+    create_batch_template_snapshot,
     diagnostic_warnings_from_strings,
     validate_ingestion_dataset,
+    validate_batch_request,
+    validate_batch_run_plan,
     validate_workflow_template,
 )
 from eeg_processing import (  # noqa: E402
@@ -109,6 +120,7 @@ from eeg_io.provenance import (  # noqa: E402
 from eeg_io.qc_summary import QcSummaryError, build_qc_summary  # noqa: E402
 from eeg_io.registry import (  # noqa: E402
     JsonRegistryError,
+    JsonBatchRepository,
     JsonRegistryRepository,
     JsonRunRepository,
     JsonWorkflowTemplateRepository,
@@ -186,6 +198,10 @@ TEMPLATES_DIR = _path_from_env(
     "NEUROWEAVE_TEMPLATES_DIR",
     REPO_ROOT / "data" / "templates",
 )
+BATCHES_DIR = _path_from_env(
+    "NEUROWEAVE_BATCHES_DIR",
+    REPO_ROOT / "data" / "batches",
+)
 PROCESSED_DIR = _path_from_env(
     "NEUROWEAVE_PROCESSED_DIR",
     REPO_ROOT / "data" / "processed",
@@ -195,6 +211,7 @@ ERP_DIR = _path_from_env("NEUROWEAVE_ERP_DIR", REPO_ROOT / "data" / "erp")
 registry_repository = JsonRegistryRepository(UPLOADS_DIR)
 run_repository = JsonRunRepository(RUNS_DIR)
 template_repository = JsonWorkflowTemplateRepository(TEMPLATES_DIR)
+batch_repository = JsonBatchRepository(BATCHES_DIR)
 
 
 class WorkerSubprocessError(PreprocessingError):
@@ -849,6 +866,82 @@ class WorkflowTemplateApplyPreviewResponse(BaseModel):
     warnings: list[str]
 
 
+class BatchDatasetSelectionPayload(BaseModel):
+    dataset_ids: list[str]
+    project_id: str | None = None
+    experiment_id: str | None = None
+
+
+class BatchCreateRequest(BaseModel):
+    template_id: str
+    dataset_selection: BatchDatasetSelectionPayload
+    requested_by: str | None = None
+    continue_on_error: bool = True
+    dry_run: bool = False
+    metadata: dict[str, str | int | float | bool | None] = Field(
+        default_factory=dict
+    )
+
+
+class BatchRequestPayload(BaseModel):
+    template_id: str
+    dataset_selection: BatchDatasetSelectionPayload
+    requested_by: str | None
+    continue_on_error: bool
+    dry_run: bool
+    metadata: dict[str, str | int | float | bool | None]
+
+
+class BatchRunBindingsPayload(BaseModel):
+    preprocessing_run_id: str | None = None
+    epoch_run_id: str | None = None
+    erp_run_id: str | None = None
+
+
+class BatchTemplateSnapshotPayload(BaseModel):
+    template_id: str
+    template_name: str
+    template_updated_at_utc: str
+    captured_at_utc: str
+    template_digest_sha256: str
+    template: WorkflowTemplateResponse
+
+
+class BatchSubjectRunPlanPayload(BaseModel):
+    item_id: str
+    dataset_id: str
+    status: str
+    attempt: int
+    retry_of_item_id: str | None
+    configs: WorkflowTemplateWorkflowPayload
+    bindings: BatchRunBindingsPayload
+    planned_steps: list[str]
+    run_ids: dict[str, str]
+    previous_run_ids: dict[str, str]
+    previous_error: str | None
+    excluded_fields: list[WorkflowTemplateFieldPolicyEntryPayload]
+    review_required_fields: list[WorkflowTemplateFieldPolicyEntryPayload]
+    warnings: list[str]
+    errors: list[str]
+
+
+class BatchRunPlanResponse(BaseModel):
+    schema_version: int
+    batch_id: str
+    status: str
+    created_at_utc: str
+    updated_at_utc: str
+    request: BatchRequestPayload
+    template_snapshot: BatchTemplateSnapshotPayload
+    items: list[BatchSubjectRunPlanPayload]
+    warnings: list[str]
+    errors: list[str]
+
+
+class BatchRunsResponse(BaseModel):
+    batches: list[BatchRunPlanResponse]
+
+
 class QcSummaryResponse(BaseModel):
     dataset_id: str
     run_id: str
@@ -963,6 +1056,8 @@ def health() -> HealthResponse:
             "samples": str(SAMPLE_DATASET_DIR),
             "uploads": str(UPLOADS_DIR),
             "runs": str(RUNS_DIR),
+            "templates": str(TEMPLATES_DIR),
+            "batches": str(BATCHES_DIR),
             "processed": str(PROCESSED_DIR),
             "epochs": str(EPOCHS_DIR),
             "erp": str(ERP_DIR),
@@ -1754,6 +1849,110 @@ def delete_workflow_template(template_id: str) -> None:
     return None
 
 
+@app.post(
+    "/batches",
+    response_model=BatchRunPlanResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_batch(request: BatchCreateRequest) -> BatchRunPlanResponse:
+    batch_request = _batch_request_from_payload(request)
+    request_validation = validate_batch_request(batch_request)
+    if not request_validation.valid:
+        raise HTTPException(status_code=422, detail=request_validation.errors)
+
+    template = template_repository.get_template(request.template_id)
+    if template is None:
+        raise HTTPException(status_code=404, detail="Workflow template not found")
+
+    captured_at = _utc_now_iso()
+    batch_id = _new_id("batch")
+    snapshot = create_batch_template_snapshot(
+        template,
+        captured_at_utc=captured_at,
+    )
+    items = _batch_subject_run_plans(
+        batch_id=batch_id,
+        template=template,
+        batch_request=batch_request,
+    )
+    batch_status = _initial_batch_status(items)
+    plan = BatchRunPlan(
+        batch_id=batch_id,
+        request=batch_request,
+        template_snapshot=snapshot,
+        items=items,
+        created_at_utc=captured_at,
+        updated_at_utc=captured_at,
+        status=batch_status,
+        warnings=request_validation.warnings,
+    )
+    validation = validate_batch_run_plan(plan)
+    if not validation.valid:
+        raise HTTPException(status_code=422, detail=validation.errors)
+
+    try:
+        saved_batch = batch_repository.save_batch(plan)
+    except JsonRegistryError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _batch_run_plan_response(saved_batch)
+
+
+@app.get("/batches", response_model=BatchRunsResponse)
+def list_batches() -> BatchRunsResponse:
+    return BatchRunsResponse(
+        batches=[
+            _batch_run_plan_response(batch)
+            for batch in batch_repository.list_batches()
+        ]
+    )
+
+
+@app.get("/batches/{batch_id}", response_model=BatchRunPlanResponse)
+def get_batch(batch_id: str) -> BatchRunPlanResponse:
+    batch = batch_repository.get_batch(batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    return _batch_run_plan_response(batch)
+
+
+@app.post("/batches/{batch_id}/cancel", response_model=BatchRunPlanResponse)
+def cancel_batch(batch_id: str) -> BatchRunPlanResponse:
+    batch = batch_repository.get_batch(batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    if batch.status in {
+        BatchStatus.COMPLETED,
+        BatchStatus.FAILED,
+        BatchStatus.CANCELLED,
+    }:
+        return _batch_run_plan_response(batch)
+
+    cancel_status = (
+        BatchStatus.CANCELLED
+        if batch.status == BatchStatus.PENDING
+        else BatchStatus.CANCELLING
+    )
+    item_status = (
+        BatchItemStatus.CANCELLED
+        if cancel_status == BatchStatus.CANCELLED
+        else BatchItemStatus.CANCELLING
+    )
+    updated_batch = replace(
+        batch,
+        status=cancel_status,
+        updated_at_utc=_utc_now_iso(),
+        items=[
+            replace(item, status=item_status)
+            if item.status in {BatchItemStatus.PENDING, BatchItemStatus.RUNNING}
+            else item
+            for item in batch.items
+        ],
+    )
+    batch_repository.save_batch(updated_batch)
+    return _batch_run_plan_response(updated_batch)
+
+
 @app.get("/datasets/{dataset_id}/qc-summary", response_model=QcSummaryResponse)
 def get_dataset_qc_summary(
     dataset_id: str,
@@ -2229,6 +2428,190 @@ def _workflow_template_field_policy_payload(
             for entry in field_policy.review_required_fields
         ],
         channel_specific_fields=field_policy.channel_specific_fields,
+    )
+
+
+def _batch_request_from_payload(request: BatchCreateRequest) -> BatchRequest:
+    return BatchRequest(
+        template_id=request.template_id,
+        dataset_selection=BatchDatasetSelection(
+            dataset_ids=list(request.dataset_selection.dataset_ids),
+            project_id=request.dataset_selection.project_id,
+            experiment_id=request.dataset_selection.experiment_id,
+        ),
+        requested_by=request.requested_by,
+        continue_on_error=request.continue_on_error,
+        dry_run=request.dry_run,
+        metadata=dict(request.metadata),
+    )
+
+
+def _batch_subject_run_plans(
+    *,
+    batch_id: str,
+    template: WorkflowTemplate,
+    batch_request: BatchRequest,
+) -> list[BatchSubjectRunPlan]:
+    items: list[BatchSubjectRunPlan] = []
+    for index, dataset_id in enumerate(batch_request.dataset_selection.dataset_ids):
+        item_id = f"{batch_id}-item-{index + 1:03d}"
+        dataset = registry_repository.get_dataset(dataset_id)
+        if dataset is None:
+            items.append(
+                BatchSubjectRunPlan(
+                    item_id=item_id,
+                    dataset_id=dataset_id,
+                    status=BatchItemStatus.FAILED,
+                    errors=[f"Dataset not found: {dataset_id}"],
+                )
+            )
+            continue
+
+        preview = _workflow_template_apply_preview(
+            template=template,
+            request=WorkflowTemplateApplyPreviewRequest(
+                target_dataset_id=dataset_id,
+            ),
+            dataset=dataset,
+        )
+        configs = _workflow_template_workflow_from_payload(preview.configs)
+        planned_steps = _planned_steps_from_workflow(configs)
+        status_value = (
+            BatchItemStatus.FAILED
+            if preview.status == "invalid"
+            else BatchItemStatus.PENDING
+        )
+        warnings = list(preview.warnings)
+        if preview.status == "requires_review":
+            warnings.append("Template apply requires review before execution.")
+        if batch_request.dry_run:
+            warnings.append("Batch request is dry_run; worker execution is disabled.")
+
+        items.append(
+            BatchSubjectRunPlan(
+                item_id=item_id,
+                dataset_id=dataset_id,
+                status=status_value,
+                configs=configs,
+                bindings=_batch_run_bindings_for_preview(dataset_id=dataset_id),
+                planned_steps=planned_steps,
+                excluded_fields=[
+                    WorkflowTemplateFieldPolicyEntry(**entry.model_dump())
+                    for entry in preview.excluded_fields
+                ],
+                review_required_fields=[
+                    WorkflowTemplateFieldPolicyEntry(**entry.model_dump())
+                    for entry in preview.review_required_fields
+                ],
+                warnings=_unique_strings(warnings),
+                errors=preview.errors,
+            )
+        )
+    return items
+
+
+def _planned_steps_from_workflow(workflow: WorkflowTemplateWorkflow) -> list[RunKind]:
+    steps: list[RunKind] = []
+    if workflow.preprocessing is not None:
+        steps.append(RunKind.PREPROCESSING)
+    if workflow.epoch is not None:
+        steps.append(RunKind.EPOCH)
+    if workflow.erp is not None:
+        steps.append(RunKind.ERP)
+    return steps
+
+
+def _batch_run_bindings_for_preview(*, dataset_id: str) -> BatchRunBindings:
+    preprocessing_run = _preview_preprocessing_binding(
+        dataset_id=dataset_id,
+        requested_run_id=None,
+    )
+    epoch_run = _preview_epoch_binding(
+        dataset_id=dataset_id,
+        requested_run_id=None,
+    )
+    return BatchRunBindings(
+        preprocessing_run_id=(
+            preprocessing_run.run_id if preprocessing_run is not None else None
+        ),
+        epoch_run_id=epoch_run.run_id if epoch_run is not None else None,
+    )
+
+
+def _initial_batch_status(items: list[BatchSubjectRunPlan]) -> BatchStatus:
+    if items and all(item.status == BatchItemStatus.FAILED for item in items):
+        return BatchStatus.FAILED
+    return BatchStatus.PENDING
+
+
+def _batch_run_plan_response(plan: BatchRunPlan) -> BatchRunPlanResponse:
+    return BatchRunPlanResponse(
+        schema_version=plan.schema_version,
+        batch_id=plan.batch_id,
+        status=plan.status.value,
+        created_at_utc=plan.created_at_utc,
+        updated_at_utc=plan.updated_at_utc,
+        request=_batch_request_payload(plan.request),
+        template_snapshot=_batch_template_snapshot_payload(plan.template_snapshot),
+        items=[_batch_subject_run_plan_payload(item) for item in plan.items],
+        warnings=plan.warnings,
+        errors=plan.errors,
+    )
+
+
+def _batch_request_payload(request: BatchRequest) -> BatchRequestPayload:
+    return BatchRequestPayload(
+        template_id=request.template_id,
+        dataset_selection=BatchDatasetSelectionPayload(
+            dataset_ids=request.dataset_selection.dataset_ids,
+            project_id=request.dataset_selection.project_id,
+            experiment_id=request.dataset_selection.experiment_id,
+        ),
+        requested_by=request.requested_by,
+        continue_on_error=request.continue_on_error,
+        dry_run=request.dry_run,
+        metadata=request.metadata,
+    )
+
+
+def _batch_template_snapshot_payload(
+    snapshot: BatchTemplateSnapshot,
+) -> BatchTemplateSnapshotPayload:
+    return BatchTemplateSnapshotPayload(
+        template_id=snapshot.template_id,
+        template_name=snapshot.template_name,
+        template_updated_at_utc=snapshot.template_updated_at_utc,
+        captured_at_utc=snapshot.captured_at_utc,
+        template_digest_sha256=snapshot.template_digest_sha256,
+        template=_workflow_template_response(snapshot.template),
+    )
+
+
+def _batch_subject_run_plan_payload(
+    item: BatchSubjectRunPlan,
+) -> BatchSubjectRunPlanPayload:
+    return BatchSubjectRunPlanPayload(
+        item_id=item.item_id,
+        dataset_id=item.dataset_id,
+        status=item.status.value,
+        attempt=item.attempt,
+        retry_of_item_id=item.retry_of_item_id,
+        configs=_workflow_template_workflow_payload(item.configs),
+        bindings=BatchRunBindingsPayload(**asdict(item.bindings)),
+        planned_steps=[step.value for step in item.planned_steps],
+        run_ids=item.run_ids,
+        previous_run_ids=item.previous_run_ids,
+        previous_error=item.previous_error,
+        excluded_fields=[
+            WorkflowTemplateFieldPolicyEntryPayload(**asdict(entry))
+            for entry in item.excluded_fields
+        ],
+        review_required_fields=[
+            WorkflowTemplateFieldPolicyEntryPayload(**asdict(entry))
+            for entry in item.review_required_fields
+        ],
+        warnings=item.warnings,
+        errors=item.errors,
     )
 
 

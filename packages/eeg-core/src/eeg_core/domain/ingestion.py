@@ -477,10 +477,14 @@ class BatchSubjectRunPlan:
     item_id: str
     dataset_id: str
     status: BatchItemStatus = BatchItemStatus.PENDING
+    attempt: int = 1
+    retry_of_item_id: str | None = None
     configs: WorkflowTemplateWorkflow = field(default_factory=WorkflowTemplateWorkflow)
     bindings: BatchRunBindings = field(default_factory=BatchRunBindings)
     planned_steps: list[RunKind] = field(default_factory=list)
     run_ids: dict[str, str] = field(default_factory=dict)
+    previous_run_ids: dict[str, str] = field(default_factory=dict)
+    previous_error: str | None = None
     excluded_fields: list[WorkflowTemplateFieldPolicyEntry] = field(
         default_factory=list
     )
@@ -859,6 +863,26 @@ def validate_batch_run_plan(plan: BatchRunPlan) -> BatchRunPlanValidation:
 
     if len({item.item_id for item in plan.items}) != len(plan.items):
         errors.append("BatchRunPlan item_id values must be unique.")
+
+    item_ids = {item.item_id for item in plan.items}
+    for item in plan.items:
+        if item.attempt < 1:
+            errors.append("BatchRunPlan item attempt must be at least 1.")
+        if item.retry_of_item_id is not None:
+            if item.retry_of_item_id == item.item_id:
+                errors.append("BatchRunPlan item cannot retry itself.")
+            if item.retry_of_item_id not in item_ids:
+                errors.append(
+                    "BatchRunPlan retry_of_item_id must reference another item."
+                )
+            if item.attempt < 2:
+                errors.append(
+                    "BatchRunPlan retry item attempt must be at least 2."
+                )
+        if item.attempt == 1 and (item.previous_run_ids or item.previous_error):
+            warnings.append(
+                "BatchRunPlan first attempt has retry history; verify item lineage."
+            )
 
     if plan.status == BatchStatus.PARTIAL:
         has_completed = any(

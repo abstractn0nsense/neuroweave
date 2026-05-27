@@ -28,6 +28,7 @@ data/
   processed/            Derived EEG files and analysis outputs
   runs/                 Workflow run state, logs, and result bundles
   templates/            Workflow template registry JSON
+  batches/              Batch run plans and per-subject item state
   cache/                Temporary files and reusable computation cache
 ```
 
@@ -42,4 +43,5 @@ The entire `data/` directory is ignored by git. Do not add `data/.gitkeep`; app 
 - Processing outputs should go to `data/processed/`.
 - Workflow execution records should go to `data/runs/`.
 - Workflow templates should go to `data/templates/{template_id}/template.json`.
+- Batch run plans should go to `data/batches/{batch_id}/batch.json`.
 - Rebuildable temporary files should go to `data/cache/`.

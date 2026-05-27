@@ -20,6 +20,8 @@ def test_health_reports_workers_and_data_directories():
             "samples",
             "uploads",
             "runs",
+            "templates",
+            "batches",
             "processed",
             "epochs",
             "erp",

@@ -67,6 +67,10 @@ GET /workflow-templates
 GET /workflow-templates/{template_id}
 POST /workflow-templates/{template_id}/apply-preview
 DELETE /workflow-templates/{template_id}
+POST /batches
+GET /batches
+GET /batches/{batch_id}
+POST /batches/{batch_id}/cancel
 POST /erp-runs/{run_id}/comparison-summary
 ```
 
@@ -89,6 +93,15 @@ fields are excluded from reusable config. `POST
 /workflow-templates/{template_id}/apply-preview` dry-runs a template against a
 target dataset and returns the resolved config, errors, warnings, excluded
 fields, and review-required fields without queueing work.
+
+Batch plans are written through `eeg_io.registry.JsonBatchRepository` under
+`data/batches/`, or `NEUROWEAVE_BATCHES_DIR` when set. `POST /batches` validates
+a multi-dataset request, snapshots the current workflow template, creates one
+per-subject item per selected dataset, and persists the immutable plan without
+queueing worker execution yet. `GET /batches` and `GET /batches/{batch_id}` read
+the persisted plans. `POST /batches/{batch_id}/cancel` marks pending plans and
+items as `cancelled`; running plans move to `cancelling` for future worker
+drain behavior.
 
 Preprocessing config validation rejects invalid filter ordering, cutoff frequencies at or above Nyquist, upsampling beyond the input sampling rate, and custom reference channels that do not exist in the uploaded recording.
 

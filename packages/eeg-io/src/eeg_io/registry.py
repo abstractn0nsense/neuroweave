@@ -12,6 +12,14 @@ from eeg_core.domain import (
     ArtifactHandlingConfig,
     BadChannelDetectionConfig,
     BadChannelInterpolationConfig,
+    BatchDatasetSelection,
+    BatchItemStatus,
+    BatchRequest,
+    BatchRunBindings,
+    BatchRunPlan,
+    BatchStatus,
+    BatchSubjectRunPlan,
+    BatchTemplateSnapshot,
     Dataset,
     DatasetStatus,
     DiagnosticWarning,
@@ -46,8 +54,10 @@ from eeg_core.domain import (
     WorkflowTemplateFieldPolicy,
     WorkflowTemplateFieldPolicyEntry,
     WorkflowTemplateWorkflow,
+    workflow_template_digest_sha256,
     diagnostic_warning_from_dict,
     recording_metadata_from_dict,
+    validate_batch_run_plan,
     validate_workflow_template,
 )
 
@@ -451,6 +461,44 @@ class JsonWorkflowTemplateRepository:
 
     def template_path(self, template_id: str) -> Path:
         return self.template_directory(template_id) / "template.json"
+
+
+class JsonBatchRepository:
+    def __init__(self, batches_root: Path):
+        self.batches_root = batches_root
+
+    def initialize(self) -> None:
+        self.batches_root.mkdir(parents=True, exist_ok=True)
+
+    def save_batch(self, plan: BatchRunPlan) -> BatchRunPlan:
+        validation = validate_batch_run_plan(plan)
+        if not validation.valid:
+            raise JsonRegistryError(
+                "Invalid batch run plan: " + "; ".join(validation.errors)
+            )
+        self.initialize()
+        _write_json(self.batch_path(plan.batch_id), asdict(plan))
+        return plan
+
+    def get_batch(self, batch_id: str) -> BatchRunPlan | None:
+        path = self.batch_path(batch_id)
+        if not path.exists():
+            return None
+        return _batch_run_plan_from_json(_read_json_object(path))
+
+    def list_batches(self) -> list[BatchRunPlan]:
+        self.initialize()
+        batches = [
+            _batch_run_plan_from_json(_read_json_object(path))
+            for path in sorted(self.batches_root.glob("*/batch.json"))
+        ]
+        return sorted(batches, key=lambda batch: batch.created_at_utc, reverse=True)
+
+    def batch_directory(self, batch_id: str) -> Path:
+        return self.batches_root / batch_id
+
+    def batch_path(self, batch_id: str) -> Path:
+        return self.batch_directory(batch_id) / "batch.json"
 
 
 def _project_from_json(data: JsonObject) -> Project:
@@ -869,6 +917,114 @@ def _workflow_template_field_policy_entry_from_json(
         source_value=data.get("source_value"),
         source_value_summary=data.get("source_value_summary"),
         default_action=data.get("default_action"),
+    )
+
+
+def _batch_run_plan_from_json(data: JsonObject) -> BatchRunPlan:
+    return BatchRunPlan(
+        batch_id=str(data.get("batch_id", data.get("id", ""))),
+        request=_batch_request_from_json(_json_object(data.get("request"))),
+        template_snapshot=_batch_template_snapshot_from_json(
+            _json_object(data.get("template_snapshot"))
+        ),
+        items=[
+            _batch_subject_run_plan_from_json(item)
+            for item in data.get("items", [])
+            if isinstance(item, dict)
+        ],
+        created_at_utc=str(data.get("created_at_utc", "")),
+        updated_at_utc=str(
+            data.get("updated_at_utc", data.get("created_at_utc", ""))
+        ),
+        schema_version=int(data.get("schema_version", 1)),
+        status=BatchStatus(data.get("status", BatchStatus.PENDING)),
+        warnings=_string_list(data.get("warnings")),
+        errors=_string_list(data.get("errors")),
+    )
+
+
+def _batch_request_from_json(data: JsonObject) -> BatchRequest:
+    return BatchRequest(
+        template_id=str(data.get("template_id", "")),
+        dataset_selection=_batch_dataset_selection_from_json(
+            _json_object(data.get("dataset_selection"))
+        ),
+        requested_by=data.get("requested_by"),
+        continue_on_error=bool(data.get("continue_on_error", True)),
+        dry_run=bool(data.get("dry_run", False)),
+        metadata=dict(data.get("metadata", {})),
+    )
+
+
+def _batch_dataset_selection_from_json(data: JsonObject) -> BatchDatasetSelection:
+    return BatchDatasetSelection(
+        dataset_ids=_string_list(data.get("dataset_ids")),
+        project_id=data.get("project_id"),
+        experiment_id=data.get("experiment_id"),
+    )
+
+
+def _batch_template_snapshot_from_json(data: JsonObject) -> BatchTemplateSnapshot:
+    template = _workflow_template_from_json(_json_object(data.get("template")))
+    digest = data.get("template_digest_sha256")
+    return BatchTemplateSnapshot(
+        template_id=str(data.get("template_id", template.template_id)),
+        template_name=str(data.get("template_name", template.name)),
+        template_updated_at_utc=str(
+            data.get("template_updated_at_utc", template.updated_at_utc)
+        ),
+        captured_at_utc=str(
+            data.get("captured_at_utc", data.get("created_at_utc", ""))
+        ),
+        template_digest_sha256=(
+            str(digest) if digest else workflow_template_digest_sha256(template)
+        ),
+        template=template,
+    )
+
+
+def _batch_subject_run_plan_from_json(data: JsonObject) -> BatchSubjectRunPlan:
+    return BatchSubjectRunPlan(
+        item_id=str(data.get("item_id", "")),
+        dataset_id=str(data.get("dataset_id", "")),
+        status=BatchItemStatus(data.get("status", BatchItemStatus.PENDING)),
+        attempt=int(data.get("attempt", 1)),
+        retry_of_item_id=data.get("retry_of_item_id"),
+        configs=_workflow_template_workflow_from_json(
+            _json_object(data.get("configs"))
+        ),
+        bindings=_batch_run_bindings_from_json(_json_object(data.get("bindings"))),
+        planned_steps=[
+            RunKind(str(step))
+            for step in data.get("planned_steps", [])
+        ],
+        run_ids={
+            str(key): str(value)
+            for key, value in _json_object(data.get("run_ids")).items()
+        },
+        previous_run_ids={
+            str(key): str(value)
+            for key, value in _json_object(data.get("previous_run_ids")).items()
+        },
+        previous_error=data.get("previous_error"),
+        excluded_fields=[
+            _workflow_template_field_policy_entry_from_json(entry)
+            for entry in _field_policy_entry_list(data.get("excluded_fields"))
+        ],
+        review_required_fields=[
+            _workflow_template_field_policy_entry_from_json(entry)
+            for entry in _field_policy_entry_list(data.get("review_required_fields"))
+        ],
+        warnings=_string_list(data.get("warnings")),
+        errors=_string_list(data.get("errors")),
+    )
+
+
+def _batch_run_bindings_from_json(data: JsonObject) -> BatchRunBindings:
+    return BatchRunBindings(
+        preprocessing_run_id=data.get("preprocessing_run_id"),
+        epoch_run_id=data.get("epoch_run_id"),
+        erp_run_id=data.get("erp_run_id"),
     )
 
 
