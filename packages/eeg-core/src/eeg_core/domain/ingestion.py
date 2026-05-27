@@ -1,6 +1,8 @@
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from typing import Any
+import hashlib
+import json
 
 from eeg_core.domain.recording import RecordingMetadata
 
@@ -60,6 +62,25 @@ class ErpRunStatus(StrEnum):
     CANCELLED = "cancelled"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+class BatchStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    PARTIAL = "partial"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLING = "cancelling"
+    CANCELLED = "cancelled"
+
+
+class BatchItemStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLING = "cancelling"
+    CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True)
@@ -418,6 +439,83 @@ class WorkflowTemplate:
 
 
 @dataclass(frozen=True)
+class BatchDatasetSelection:
+    dataset_ids: list[str]
+    project_id: str | None = None
+    experiment_id: str | None = None
+
+
+@dataclass(frozen=True)
+class BatchRequest:
+    template_id: str
+    dataset_selection: BatchDatasetSelection
+    requested_by: str | None = None
+    continue_on_error: bool = True
+    dry_run: bool = False
+    metadata: Metadata = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class BatchTemplateSnapshot:
+    template_id: str
+    template_name: str
+    template_updated_at_utc: str
+    captured_at_utc: str
+    template_digest_sha256: str
+    template: WorkflowTemplate
+
+
+@dataclass(frozen=True)
+class BatchRunBindings:
+    preprocessing_run_id: str | None = None
+    epoch_run_id: str | None = None
+    erp_run_id: str | None = None
+
+
+@dataclass(frozen=True)
+class BatchSubjectRunPlan:
+    item_id: str
+    dataset_id: str
+    status: BatchItemStatus = BatchItemStatus.PENDING
+    configs: WorkflowTemplateWorkflow = field(default_factory=WorkflowTemplateWorkflow)
+    bindings: BatchRunBindings = field(default_factory=BatchRunBindings)
+    planned_steps: list[RunKind] = field(default_factory=list)
+    run_ids: dict[str, str] = field(default_factory=dict)
+    excluded_fields: list[WorkflowTemplateFieldPolicyEntry] = field(
+        default_factory=list
+    )
+    review_required_fields: list[WorkflowTemplateFieldPolicyEntry] = field(
+        default_factory=list
+    )
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class BatchRunPlanValidation:
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    @property
+    def valid(self) -> bool:
+        return not self.errors
+
+
+@dataclass(frozen=True)
+class BatchRunPlan:
+    batch_id: str
+    request: BatchRequest
+    template_snapshot: BatchTemplateSnapshot
+    items: list[BatchSubjectRunPlan]
+    created_at_utc: str
+    updated_at_utc: str
+    schema_version: int = 1
+    status: BatchStatus = BatchStatus.PENDING
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class ComparisonConfig:
     erp_run_id: str
     condition_a: str
@@ -517,6 +615,7 @@ def diagnostic_warnings_from_strings(
 
 SUPPORTED_WORKFLOW_TEMPLATE_SCHEMA_VERSION = 1
 WORKFLOW_TEMPLATE_KIND = "workflow_template"
+SUPPORTED_BATCH_RUN_PLAN_SCHEMA_VERSION = 1
 
 
 def validate_workflow_template(
@@ -652,3 +751,139 @@ def _require_channel_review(
 
 def _unique_strings(values: list[str]) -> list[str]:
     return list(dict.fromkeys(values))
+
+
+def create_batch_template_snapshot(
+    template: WorkflowTemplate,
+    *,
+    captured_at_utc: str,
+) -> BatchTemplateSnapshot:
+    return BatchTemplateSnapshot(
+        template_id=template.template_id,
+        template_name=template.name,
+        template_updated_at_utc=template.updated_at_utc,
+        captured_at_utc=captured_at_utc,
+        template_digest_sha256=workflow_template_digest_sha256(template),
+        template=template,
+    )
+
+
+def workflow_template_digest_sha256(template: WorkflowTemplate) -> str:
+    payload = json.dumps(
+        asdict(template),
+        default=str,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def validate_batch_request(request: BatchRequest) -> BatchRunPlanValidation:
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    if not request.template_id:
+        errors.append("BatchRequest template_id is required.")
+
+    dataset_ids = request.dataset_selection.dataset_ids
+    if not dataset_ids:
+        errors.append("BatchRequest dataset_selection.dataset_ids must not be empty.")
+
+    if any(not dataset_id for dataset_id in dataset_ids):
+        errors.append("BatchRequest dataset ids must be non-empty strings.")
+
+    if len(dataset_ids) != len(set(dataset_ids)):
+        errors.append("BatchRequest dataset_selection.dataset_ids must be unique.")
+
+    if request.dry_run:
+        warnings.append("BatchRequest dry_run does not create runnable batch items.")
+
+    return BatchRunPlanValidation(
+        errors=_unique_strings(errors),
+        warnings=_unique_strings(warnings),
+    )
+
+
+def validate_batch_run_plan(plan: BatchRunPlan) -> BatchRunPlanValidation:
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    if plan.schema_version != SUPPORTED_BATCH_RUN_PLAN_SCHEMA_VERSION:
+        errors.append(
+            "BatchRunPlan schema_version is not supported: "
+            f"{plan.schema_version}"
+        )
+
+    if not plan.batch_id:
+        errors.append("BatchRunPlan batch_id is required.")
+
+    if not plan.created_at_utc:
+        errors.append("BatchRunPlan created_at_utc is required.")
+    if not plan.updated_at_utc:
+        errors.append("BatchRunPlan updated_at_utc is required.")
+    if (
+        plan.created_at_utc
+        and plan.updated_at_utc
+        and plan.updated_at_utc < plan.created_at_utc
+    ):
+        errors.append("BatchRunPlan updated_at_utc cannot precede created_at_utc.")
+
+    request_validation = validate_batch_request(plan.request)
+    errors.extend(request_validation.errors)
+    warnings.extend(request_validation.warnings)
+
+    if plan.template_snapshot.template_id != plan.request.template_id:
+        errors.append("BatchRunPlan template snapshot must match request template_id.")
+
+    expected_digest = workflow_template_digest_sha256(plan.template_snapshot.template)
+    if plan.template_snapshot.template_digest_sha256 != expected_digest:
+        errors.append("BatchRunPlan template snapshot digest does not match template.")
+
+    template_validation = validate_workflow_template(plan.template_snapshot.template)
+    errors.extend(
+        f"BatchRunPlan template snapshot invalid: {error}"
+        for error in template_validation.errors
+    )
+    warnings.extend(
+        f"BatchRunPlan template snapshot warning: {warning}"
+        for warning in template_validation.warnings
+    )
+
+    item_dataset_ids = [item.dataset_id for item in plan.items]
+    selected_dataset_ids = plan.request.dataset_selection.dataset_ids
+    if item_dataset_ids != selected_dataset_ids:
+        errors.append(
+            "BatchRunPlan items must match dataset_selection.dataset_ids order."
+        )
+
+    if len({item.item_id for item in plan.items}) != len(plan.items):
+        errors.append("BatchRunPlan item_id values must be unique.")
+
+    if plan.status == BatchStatus.PARTIAL:
+        has_completed = any(
+            item.status == BatchItemStatus.COMPLETED for item in plan.items
+        )
+        has_failed = any(item.status == BatchItemStatus.FAILED for item in plan.items)
+        if not (has_completed and has_failed):
+            errors.append(
+                "BatchRunPlan partial status requires at least one completed and "
+                "one failed item."
+            )
+
+    if plan.status == BatchStatus.COMPLETED and any(
+        item.status != BatchItemStatus.COMPLETED for item in plan.items
+    ):
+        errors.append("BatchRunPlan completed status requires all items completed.")
+
+    if plan.status == BatchStatus.FAILED and any(
+        item.status == BatchItemStatus.COMPLETED for item in plan.items
+    ):
+        warnings.append(
+            "BatchRunPlan failed status has completed items; partial may be more precise."
+        )
+
+    return BatchRunPlanValidation(
+        errors=_unique_strings(errors),
+        warnings=_unique_strings(warnings),
+    )
