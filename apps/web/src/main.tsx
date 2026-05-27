@@ -176,6 +176,13 @@ type PreprocessingConfig = {
     enabled: boolean;
     reset_bads: boolean;
   };
+  artifact_handling: {
+    eog_enabled: boolean;
+    ecg_enabled: boolean;
+    eog_channels: string[];
+    ecg_channels: string[];
+    create_annotations: boolean;
+  };
 };
 
 type BadChannelDetectionMethod =
@@ -456,6 +463,13 @@ const DEFAULT_PREPROCESSING_CONFIG = {
   bad_channel_interpolation: {
     enabled: false,
     reset_bads: true,
+  },
+  artifact_handling: {
+    eog_enabled: false,
+    ecg_enabled: false,
+    eog_channels: "",
+    ecg_channels: "",
+    create_annotations: false,
   },
   bad_channel_detection: {
     enabled: false,
@@ -2925,6 +2939,80 @@ function IntakeSection({
               value={preprocessingConfig.bad_channel_detection.minimum_correlation}
             />
           </label>
+          <label>
+            <span>EOG report</span>
+            <input
+              checked={preprocessingConfig.artifact_handling.eog_enabled}
+              disabled={!canContinue}
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  artifact_handling: {
+                    ...preprocessingConfig.artifact_handling,
+                    eog_enabled: event.target.checked,
+                  },
+                })
+              }
+              type="checkbox"
+            />
+          </label>
+          <label>
+            <span>EOG channels</span>
+            <input
+              disabled={
+                !canContinue || !preprocessingConfig.artifact_handling.eog_enabled
+              }
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  artifact_handling: {
+                    ...preprocessingConfig.artifact_handling,
+                    eog_channels: event.target.value,
+                  },
+                })
+              }
+              placeholder={channelNames.slice(0, 2).join(", ")}
+              type="text"
+              value={preprocessingConfig.artifact_handling.eog_channels}
+            />
+          </label>
+          <label>
+            <span>ECG report</span>
+            <input
+              checked={preprocessingConfig.artifact_handling.ecg_enabled}
+              disabled={!canContinue}
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  artifact_handling: {
+                    ...preprocessingConfig.artifact_handling,
+                    ecg_enabled: event.target.checked,
+                  },
+                })
+              }
+              type="checkbox"
+            />
+          </label>
+          <label>
+            <span>ECG channels</span>
+            <input
+              disabled={
+                !canContinue || !preprocessingConfig.artifact_handling.ecg_enabled
+              }
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  artifact_handling: {
+                    ...preprocessingConfig.artifact_handling,
+                    ecg_channels: event.target.value,
+                  },
+                })
+              }
+              placeholder={channelNames.slice(0, 2).join(", ")}
+              type="text"
+              value={preprocessingConfig.artifact_handling.ecg_channels}
+            />
+          </label>
         </div>
         <button
           className="primary-button"
@@ -3728,6 +3816,8 @@ function PreprocessingQc({ summary }: { summary: Record<string, unknown> }) {
   const resample = asRecord(summary.resample);
   const channelStatus = asRecord(summary.channel_status);
   const artifactRejection = asRecord(summary.artifact_rejection);
+  const eogArtifacts = asRecord(artifactRejection.eog);
+  const ecgArtifacts = asRecord(artifactRejection.ecg);
   const beforeAfter = asRecord(summary.before_after);
   const delta = asRecord(beforeAfter.delta);
 
@@ -3751,6 +3841,14 @@ function PreprocessingQc({ summary }: { summary: Record<string, unknown> }) {
         <QcMetric
           label="Artifact Reject"
           value={artifactRejection.enabled === true ? "enabled" : "off"}
+        />
+        <QcMetric
+          label="Blink Candidates"
+          value={stringValue(eogArtifacts.candidate_count)}
+        />
+        <QcMetric
+          label="Heartbeat Candidates"
+          value={stringValue(ecgArtifacts.candidate_count)}
         />
         <QcMetric
           label="Bad Ch Delta"
@@ -4638,6 +4736,13 @@ function normalizePreprocessingConfig(
       zscore_threshold: detectionEnabled
         ? parseOptionalNumber(config.bad_channel_detection.zscore_threshold)
         : null,
+    },
+    artifact_handling: {
+      eog_enabled: config.artifact_handling.eog_enabled,
+      ecg_enabled: config.artifact_handling.ecg_enabled,
+      eog_channels: parseOptionalCsv(config.artifact_handling.eog_channels) ?? [],
+      ecg_channels: parseOptionalCsv(config.artifact_handling.ecg_channels) ?? [],
+      create_annotations: false,
     },
   };
 }

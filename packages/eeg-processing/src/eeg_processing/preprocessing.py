@@ -68,6 +68,9 @@ def preprocess_raw_eeg(
             bad_channel_interpolation = _interpolate_bad_channels(raw, config)
             manual_warnings.extend(bad_channel_interpolation.get("warnings", []))
             _check_cancelled(should_cancel, manual_warnings)
+            artifact_rejection = _artifact_rejection_report(raw, config)
+            manual_warnings.extend(artifact_rejection.get("warnings", []))
+            _check_cancelled(should_cancel, manual_warnings)
 
             if config.high_pass_hz is not None or config.low_pass_hz is not None:
                 _check_cancelled(should_cancel, manual_warnings)
@@ -208,12 +211,7 @@ def preprocess_raw_eeg(
                     detection=bad_channel_detection,
                     interpolation=bad_channel_interpolation,
                 ),
-                "artifact_rejection": {
-                    "enabled": False,
-                    "schema_version": config.artifact_schema_version,
-                    "config": asdict(config.artifact_handling),
-                    "reason": "Artifact detection and rejection are configured by contract but not executed in Phase B1.",
-                },
+                "artifact_rejection": artifact_rejection,
                 "ica": _ica_contract_summary(config),
                 "qc": {
                     "schema_version": config.artifact_schema_version,
@@ -565,6 +563,235 @@ def _ensure_interpolation_montage(raw: Any) -> str:
     return "standard_1020"
 
 
+def _artifact_rejection_report(raw: Any, config: PreprocessingConfig) -> dict[str, Any]:
+    artifact_config = config.artifact_handling
+    eog_report = _physiological_artifact_report(
+        raw,
+        config,
+        kind="eog",
+        enabled=artifact_config.eog_enabled,
+        requested_channels=artifact_config.eog_channels,
+        event_label="blink",
+        minimum_distance_seconds=0.25,
+        duration_seconds=0.25,
+    )
+    ecg_report = _physiological_artifact_report(
+        raw,
+        config,
+        kind="ecg",
+        enabled=artifact_config.ecg_enabled,
+        requested_channels=artifact_config.ecg_channels,
+        event_label="heartbeat",
+        minimum_distance_seconds=0.4,
+        duration_seconds=0.1,
+    )
+    warnings = [
+        *eog_report.get("warnings", []),
+        *ecg_report.get("warnings", []),
+    ]
+    enabled = artifact_config.eog_enabled or artifact_config.ecg_enabled
+    statuses = [
+        report["status"]
+        for report in (eog_report, ecg_report)
+        if report["status"] != "not_requested"
+    ]
+    status = "not_requested"
+    if statuses:
+        status = "completed" if all(item == "completed" for item in statuses) else "partial"
+
+    return {
+        "enabled": enabled,
+        "schema_version": config.artifact_schema_version,
+        "config": asdict(artifact_config),
+        "status": status,
+        "mode": "report_only",
+        "annotations_created": False,
+        "create_annotations_requested": artifact_config.create_annotations,
+        "eog": eog_report,
+        "ecg": ecg_report,
+        "warnings": warnings,
+        "reason": (
+            "EOG/ECG artifact candidates are reported without modifying raw annotations."
+            if enabled
+            else "EOG/ECG artifact detection was not requested."
+        ),
+    }
+
+
+def _physiological_artifact_report(
+    raw: Any,
+    config: PreprocessingConfig,
+    *,
+    kind: str,
+    enabled: bool,
+    requested_channels: list[str],
+    event_label: str,
+    minimum_distance_seconds: float,
+    duration_seconds: float,
+) -> dict[str, Any]:
+    base_report: dict[str, Any] = {
+        "schema_version": config.artifact_schema_version,
+        "enabled": enabled,
+        "status": "not_requested",
+        "channel_source": "not_requested",
+        "channels": [],
+        "candidate_count": 0,
+        "candidates": [],
+        "warnings": [],
+    }
+    if not enabled:
+        return base_report
+
+    resolved = _resolve_artifact_channels(raw, kind, requested_channels)
+    if not resolved["channels"]:
+        return {
+            **base_report,
+            "status": "no_channels",
+            "channel_source": resolved["source"],
+            "warnings": [
+                f"No {kind.upper()} channels were specified or inferred; no {event_label} candidates were generated."
+            ],
+        }
+
+    channel_names = resolved["channels"]
+    data = raw.get_data(picks=channel_names)
+    candidates = _peak_candidates(
+        data,
+        channel_names,
+        sampling_rate=float(raw.info["sfreq"]),
+        event_label=event_label,
+        minimum_distance_seconds=minimum_distance_seconds,
+        duration_seconds=duration_seconds,
+    )
+    return {
+        **base_report,
+        "status": "completed",
+        "channel_source": resolved["source"],
+        "channels": channel_names,
+        "candidate_count": len(candidates),
+        "candidates": candidates,
+    }
+
+
+def _resolve_artifact_channels(
+    raw: Any,
+    kind: str,
+    requested_channels: list[str],
+) -> dict[str, Any]:
+    requested = list(dict.fromkeys(requested_channels))
+    if requested:
+        return {"channels": requested, "source": "config"}
+
+    import mne
+
+    type_picks = mne.pick_types(
+        raw.info,
+        eeg=False,
+        meg=False,
+        eog=kind == "eog",
+        ecg=kind == "ecg",
+        stim=False,
+        exclude=[],
+    )
+    if len(type_picks) > 0:
+        return {
+            "channels": [raw.ch_names[pick] for pick in type_picks],
+            "source": "channel_type",
+        }
+
+    tokens = {
+        "eog": ("eog", "veog", "heog", "blink"),
+        "ecg": ("ecg", "ekg"),
+    }[kind]
+    inferred = [
+        channel
+        for channel in raw.ch_names
+        if any(
+            token in channel.lower().replace("-", "").replace("_", "")
+            for token in tokens
+        )
+    ]
+    return {"channels": inferred, "source": "name_inference" if inferred else "none"}
+
+
+def _peak_candidates(
+    data: Any,
+    channel_names: list[str],
+    *,
+    sampling_rate: float,
+    event_label: str,
+    minimum_distance_seconds: float,
+    duration_seconds: float,
+) -> list[dict[str, Any]]:
+    import numpy as np
+
+    if data.shape[1] == 0 or sampling_rate <= 0:
+        return []
+
+    candidates: list[dict[str, Any]] = []
+    minimum_distance_samples = max(int(minimum_distance_seconds * sampling_rate), 1)
+    for channel_index, channel_name in enumerate(channel_names):
+        signal = data[channel_index]
+        absolute_signal = np.abs(signal)
+        baseline = float(np.median(absolute_signal))
+        mad = float(np.median(np.abs(absolute_signal - baseline)))
+        scale = 1.4826 * mad if mad > 0 else float(np.std(absolute_signal))
+        if scale <= 0:
+            continue
+        scores = (absolute_signal - baseline) / scale
+        threshold = max(4.0, float(np.percentile(scores, 99)))
+        peak_indices = _local_peak_indices(
+            scores,
+            threshold=threshold,
+            minimum_distance_samples=minimum_distance_samples,
+        )
+        for sample_index in peak_indices:
+            candidates.append(
+                {
+                    "type": event_label,
+                    "channel": channel_name,
+                    "onset_seconds": float(sample_index / sampling_rate),
+                    "duration_seconds": duration_seconds,
+                    "peak_amplitude_uv": float(signal[sample_index] * 1_000_000),
+                    "score": float(scores[sample_index]),
+                }
+            )
+
+    return sorted(
+        candidates,
+        key=lambda candidate: (
+            float(candidate["onset_seconds"]),
+            str(candidate["channel"]),
+        ),
+    )
+
+
+def _local_peak_indices(
+    scores: Any,
+    *,
+    threshold: float,
+    minimum_distance_samples: int,
+) -> list[int]:
+    import numpy as np
+
+    candidate_indices = np.where(scores >= threshold)[0]
+    peaks: list[int] = []
+    last_peak = -minimum_distance_samples
+    for index in candidate_indices:
+        left = scores[index - 1] if index > 0 else -np.inf
+        right = scores[index + 1] if index < len(scores) - 1 else -np.inf
+        if scores[index] < left or scores[index] < right:
+            continue
+        if index - last_peak < minimum_distance_samples:
+            if peaks and scores[index] > scores[peaks[-1]]:
+                peaks[-1] = int(index)
+                last_peak = int(index)
+            continue
+        peaks.append(int(index))
+        last_peak = int(index)
+    return peaks
+
+
 def _bad_channel_detection_report(raw: Any, config: PreprocessingConfig) -> dict[str, Any]:
     detection_config = config.bad_channel_detection
     base_report: dict[str, Any] = {
@@ -717,10 +944,6 @@ def _ica_contract_summary(config: PreprocessingConfig) -> dict[str, Any]:
 
 def _artifact_contract_warnings(config: PreprocessingConfig) -> list[str]:
     warnings: list[str] = []
-    if config.artifact_handling.eog_enabled or config.artifact_handling.ecg_enabled:
-        warnings.append(
-            "EOG/ECG artifact handling config was captured but is not executed until Phase B6."
-        )
     if config.ica.enabled:
         warnings.append("ICA config was captured but is not executed until Phase B7.")
     return warnings

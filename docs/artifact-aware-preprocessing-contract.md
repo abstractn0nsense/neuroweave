@@ -63,7 +63,7 @@ Allowed methods:
 Channel-list fields must reference uploaded recording channel names. The API
 rejects unknown channels before queueing a run.
 
-## Phase B5 Execution Status
+## Phase B6 Execution Status
 
 B2 executes automatic bad-channel detection in report-only mode. It records
 candidates and metrics in diagnostics, but does not mutate `raw.info["bads"]`,
@@ -82,9 +82,13 @@ B5 writes a before/after QC comparison for preprocessing. The comparison records
 input raw state and final preprocessed output state for bad-channel counts,
 annotation counts, variance summaries, and PSD band-power summaries.
 
+B6 executes EOG/ECG artifact detection in report-only mode. EOG/ECG channels can
+be user-specified, inferred from channel types, or inferred from channel names.
+The worker records blink and heartbeat candidate events in diagnostics, but does
+not add annotations, reject data, or mutate the raw signal.
+
 Other artifact-aware fields remain schema-only until later B subphases:
 
-- B6: EOG/ECG artifact handling
 - B7: ICA
 
 Bad-channel detection methods:
@@ -172,16 +176,59 @@ enabled. This gives the UI, export bundle, and future QC views a stable schema.
     }
   },
   "artifact_rejection": {
-    "enabled": false,
+    "enabled": true,
     "schema_version": 1,
     "config": {
-      "eog_enabled": false,
-      "ecg_enabled": false,
+      "eog_enabled": true,
+      "ecg_enabled": true,
       "eog_channels": [],
       "ecg_channels": [],
       "create_annotations": true
     },
-    "reason": "Artifact detection and rejection are configured by contract but not executed in Phase B1."
+    "status": "completed",
+    "mode": "report_only",
+    "annotations_created": false,
+    "create_annotations_requested": true,
+    "eog": {
+      "schema_version": 1,
+      "enabled": true,
+      "status": "completed",
+      "channel_source": "channel_type",
+      "channels": ["VEOG"],
+      "candidate_count": 1,
+      "candidates": [
+        {
+          "type": "blink",
+          "channel": "VEOG",
+          "onset_seconds": 2.34,
+          "duration_seconds": 0.25,
+          "peak_amplitude_uv": 142.1,
+          "score": 9.6
+        }
+      ],
+      "warnings": []
+    },
+    "ecg": {
+      "schema_version": 1,
+      "enabled": true,
+      "status": "completed",
+      "channel_source": "channel_type",
+      "channels": ["ECG"],
+      "candidate_count": 1,
+      "candidates": [
+        {
+          "type": "heartbeat",
+          "channel": "ECG",
+          "onset_seconds": 1.02,
+          "duration_seconds": 0.1,
+          "peak_amplitude_uv": 88.5,
+          "score": 7.8
+        }
+      ],
+      "warnings": []
+    },
+    "warnings": [],
+    "reason": "EOG/ECG artifact candidates are reported without modifying raw annotations."
   },
   "ica": {
     "schema_version": 1,

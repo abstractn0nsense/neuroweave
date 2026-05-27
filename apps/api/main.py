@@ -2567,6 +2567,11 @@ def _write_preprocessing_diagnostics(
         if isinstance(bad_channels, dict)
         else {}
     )
+    artifact_rejection = (
+        artifact_summary.get("artifact_rejection", {})
+        if isinstance(artifact_summary, dict)
+        else {}
+    )
     qc_summary = (
         artifact_summary.get("qc", {})
         if isinstance(artifact_summary, dict)
@@ -2633,7 +2638,31 @@ def _write_preprocessing_diagnostics(
         "qc_psd_total_power_ratio": qc_delta.get("psd_total_power_ratio")
         if isinstance(qc_delta, dict)
         else None,
+        "artifact_rejection_status": artifact_rejection.get("status")
+        if isinstance(artifact_rejection, dict)
+        else None,
+        "artifact_eog_candidate_count": _artifact_candidate_count(
+            artifact_rejection,
+            "eog",
+        ),
+        "artifact_ecg_candidate_count": _artifact_candidate_count(
+            artifact_rejection,
+            "ecg",
+        ),
     }
+
+
+def _artifact_candidate_count(
+    artifact_rejection: object,
+    artifact_kind: str,
+) -> int | None:
+    if not isinstance(artifact_rejection, dict):
+        return None
+    artifact_report = artifact_rejection.get(artifact_kind)
+    if not isinstance(artifact_report, dict):
+        return None
+    candidate_count = artifact_report.get("candidate_count")
+    return candidate_count if isinstance(candidate_count, int) else None
 
 
 def _write_artifact_manifest(

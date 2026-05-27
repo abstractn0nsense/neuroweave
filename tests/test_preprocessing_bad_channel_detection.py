@@ -4,6 +4,7 @@ import mne
 import numpy as np
 
 from eeg_core.domain import (
+    ArtifactHandlingConfig,
     BadChannelDetectionConfig,
     BadChannelInterpolationConfig,
     PreprocessingConfig,
@@ -189,6 +190,56 @@ def test_preprocessing_reports_deviation_bad_channel_candidate(tmp_path):
     assert "Oz" in channels
     oz_candidate = candidates[channels.index("Oz")]
     assert oz_candidate["reasons"] == ["variance_deviation"]
+
+
+def test_preprocessing_reports_eog_ecg_candidates_without_raw_mutation(tmp_path):
+    input_path = tmp_path / "input_raw.fif"
+    output_path = tmp_path / "output_raw.fif"
+    sampling_rate = 100.0
+    times = np.arange(0, 10, 1 / sampling_rate)
+    eeg = np.sin(2 * np.pi * 8 * times) * 1e-6
+    eog = np.zeros_like(times)
+    ecg = np.zeros_like(times)
+    eog[[200, 650]] = [150e-6, -140e-6]
+    ecg[[120, 220, 320, 420, 520, 620, 720, 820]] = 90e-6
+    raw = mne.io.RawArray(
+        np.vstack([eeg, eog, ecg]),
+        mne.create_info(
+            ["Fz", "VEOG", "ECG"],
+            sampling_rate,
+            ch_types=["eeg", "eog", "ecg"],
+        ),
+        verbose=False,
+    )
+    raw.save(input_path, overwrite=True, verbose=False)
+
+    metadata = preprocess_raw_eeg(
+        input_path,
+        output_path,
+        PreprocessingConfig(
+            artifact_handling=ArtifactHandlingConfig(
+                eog_enabled=True,
+                ecg_enabled=True,
+            )
+        ),
+    )
+
+    output_raw = mne.io.read_raw_fif(output_path, preload=False, verbose=False)
+    artifact_rejection = metadata["diagnostics"]["artifact_summary"][
+        "artifact_rejection"
+    ]
+    assert len(output_raw.annotations) == 0
+    assert artifact_rejection["status"] == "completed"
+    assert artifact_rejection["mode"] == "report_only"
+    assert artifact_rejection["annotations_created"] is False
+    assert artifact_rejection["eog"]["channel_source"] == "channel_type"
+    assert artifact_rejection["eog"]["channels"] == ["VEOG"]
+    assert artifact_rejection["eog"]["candidate_count"] >= 1
+    assert artifact_rejection["eog"]["candidates"][0]["type"] == "blink"
+    assert artifact_rejection["ecg"]["channel_source"] == "channel_type"
+    assert artifact_rejection["ecg"]["channels"] == ["ECG"]
+    assert artifact_rejection["ecg"]["candidate_count"] >= 1
+    assert artifact_rejection["ecg"]["candidates"][0]["type"] == "heartbeat"
 
 
 def test_preprocessing_report_is_json_serializable(tmp_path):

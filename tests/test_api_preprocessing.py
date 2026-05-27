@@ -196,6 +196,9 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert metadata["qc_annotation_count_delta"] == 0
     assert metadata["qc_variance_mean_ratio"] is not None
     assert metadata["qc_psd_total_power_ratio"] is not None
+    assert metadata["artifact_rejection_status"] == "not_requested"
+    assert metadata["artifact_eog_candidate_count"] == 0
+    assert metadata["artifact_ecg_candidate_count"] == 0
     assert metadata["worker_schema_version"] == 1
     assert metadata["worker_exit_code"] == 0
 
@@ -353,6 +356,16 @@ def test_create_preprocessing_run_accepts_artifact_aware_contract(
     }
     assert payload["output_metadata"]["qc_before_after_available"] is True
     assert payload["output_metadata"]["qc_bad_channel_count_delta"] == 0
+    assert payload["output_metadata"]["artifact_rejection_status"] == "completed"
+    assert payload["output_metadata"]["artifact_eog_candidate_count"] == (
+        artifact_summary["artifact_rejection"]["eog"]["candidate_count"]
+    )
+    assert payload["output_metadata"]["artifact_ecg_candidate_count"] == 0
+    assert artifact_summary["artifact_rejection"]["status"] == "completed"
+    assert artifact_summary["artifact_rejection"]["mode"] == "report_only"
+    assert artifact_summary["artifact_rejection"]["annotations_created"] is False
+    assert artifact_summary["artifact_rejection"]["eog"]["status"] == "completed"
+    assert artifact_summary["artifact_rejection"]["eog"]["channels"] == [channel_name]
     assert artifact_summary["qc"]["status"] == "completed"
     assert artifact_summary["qc"]["before_after"]["before"]["variance"]["mean_uv2"] is not None
     assert artifact_summary["qc"]["before_after"]["after"]["variance"]["mean_uv2"] is not None
