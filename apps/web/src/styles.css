@@ -846,6 +846,82 @@ input[type="file"] {
   font-size: 12px;
 }
 
+.batch-panel {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.batch-controls {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto auto;
+  gap: var(--space-3);
+  align-items: end;
+}
+
+.batch-summary-meta {
+  justify-content: flex-start;
+}
+
+.batch-filter-tabs {
+  width: fit-content;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(82px, 1fr));
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-subtle);
+}
+
+.batch-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.batch-run-table {
+  width: 100%;
+  min-width: 900px;
+  border-collapse: collapse;
+}
+
+.batch-run-table th,
+.batch-run-table td {
+  border-bottom: 1px solid var(--color-border);
+  padding: var(--space-3);
+  text-align: left;
+  vertical-align: top;
+}
+
+.batch-run-table th {
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.batch-run-table td {
+  color: var(--color-muted-strong);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.batch-run-table td strong,
+.batch-run-table td small,
+.batch-output strong,
+.batch-output small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.batch-run-table td strong,
+.batch-output strong {
+  color: var(--color-text);
+}
+
+.batch-run-table td small,
+.batch-output small {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
 .qc-dashboard {
   display: grid;
   gap: var(--space-4);
@@ -1312,6 +1388,25 @@ input[type="file"] {
   color: var(--color-danger);
 }
 
+.badge-completed {
+  border-color: var(--color-success);
+  color: var(--color-success);
+}
+
+.badge-failed,
+.badge-cancelled {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
+.badge-pending,
+.badge-running,
+.badge-cancelling,
+.badge-partial {
+  border-color: var(--color-warning);
+  color: var(--color-warning);
+}
+
 .sample-grid {
   display: grid;
   grid-template-columns: minmax(260px, 0.8fr) minmax(0, 1fr);
@@ -1429,6 +1524,7 @@ dd {
   }
 
   .template-controls,
+  .batch-controls,
   .template-policy-grid {
     grid-template-columns: 1fr;
   }
@@ -1465,7 +1561,8 @@ dd {
   .dataset-form,
   .preprocessing-grid,
   .epoch-grid,
-  .run-summary-grid {
+  .run-summary-grid,
+  .batch-filter-tabs {
     grid-template-columns: 1fr;
   }
 

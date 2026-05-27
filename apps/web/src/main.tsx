@@ -349,6 +349,69 @@ type WorkflowTemplateApplyPreview = {
   warnings: string[];
 };
 
+type BatchDatasetSelection = {
+  dataset_ids: string[];
+  project_id: string | null;
+  experiment_id: string | null;
+};
+
+type BatchRunBindings = {
+  preprocessing_run_id: string | null;
+  epoch_run_id: string | null;
+  erp_run_id: string | null;
+};
+
+type BatchSubjectRunPlan = {
+  item_id: string;
+  dataset_id: string;
+  status: string;
+  attempt: number;
+  retry_of_item_id: string | null;
+  configs: WorkflowTemplateWorkflow;
+  bindings: BatchRunBindings;
+  planned_steps: string[];
+  run_ids: Record<string, string>;
+  previous_run_ids: Record<string, string>;
+  previous_error: string | null;
+  excluded_fields: WorkflowTemplateFieldPolicyEntry[];
+  review_required_fields: WorkflowTemplateFieldPolicyEntry[];
+  warnings: string[];
+  errors: string[];
+};
+
+type BatchRunPlan = {
+  schema_version: number;
+  batch_id: string;
+  status: string;
+  created_at_utc: string;
+  updated_at_utc: string;
+  request: {
+    template_id: string;
+    dataset_selection: BatchDatasetSelection;
+    requested_by: string | null;
+    continue_on_error: boolean;
+    dry_run: boolean;
+    metadata: Record<string, MetadataValue>;
+  };
+  template_snapshot: {
+    template_id: string;
+    template_name: string;
+    template_updated_at_utc: string;
+    captured_at_utc: string;
+    template_digest_sha256: string;
+    template: WorkflowTemplate;
+  };
+  items: BatchSubjectRunPlan[];
+  warnings: string[];
+  errors: string[];
+};
+
+type BatchRunsResponse = {
+  batches: BatchRunPlan[];
+};
+
+type BatchItemFilter = "all" | "pending" | "completed" | "failed";
+
 type DiagnosticWarning = {
   severity: string;
   source: string;
@@ -707,6 +770,17 @@ function App() {
     useState("");
   const [lastWorkflowTemplatePreview, setLastWorkflowTemplatePreview] =
     useState<WorkflowTemplateApplyPreview | null>(null);
+  const [batchRuns, setBatchRuns] = useState<LoadState<BatchRunPlan[]>>({
+    status: "idle",
+    data: null,
+    error: null,
+  });
+  const [selectedBatchId, setSelectedBatchId] = useState("");
+  const [batchItemFilter, setBatchItemFilter] =
+    useState<BatchItemFilter>("all");
+  const [batchPreprocessingRuns, setBatchPreprocessingRuns] = useState<
+    Record<string, PreprocessingRun>
+  >({});
   const [comparisonConfig, setComparisonConfig] = useState(
     DEFAULT_COMPARISON_CONFIG,
   );
@@ -765,6 +839,31 @@ function App() {
       }),
     [erpRuns.data],
   );
+  const batchEligibleDatasets = useMemo(
+    () =>
+      (datasets.data ?? []).filter(
+        (dataset) =>
+          dataset.status === "valid" &&
+          (!activeDataset ||
+            (dataset.project_id === activeDataset.project_id &&
+              dataset.experiment_id === activeDataset.experiment_id)),
+      ),
+    [activeDataset, datasets.data],
+  );
+  const datasetsById = useMemo(
+    () =>
+      Object.fromEntries(
+        (datasets.data ?? []).map((dataset) => [dataset.dataset_id, dataset]),
+      ),
+    [datasets.data],
+  );
+  const selectedBatch = useMemo(
+    () =>
+      batchRuns.data?.find((batch) => batch.batch_id === selectedBatchId) ??
+      batchRuns.data?.[0] ??
+      null,
+    [batchRuns.data, selectedBatchId],
+  );
 
   function chooseWorkspaceMode(mode: WorkspaceMode) {
     workspaceModeChosenRef.current = true;
@@ -791,6 +890,7 @@ function App() {
   useEffect(() => {
     void refreshWorkspace();
     void refreshWorkflowTemplates();
+    void refreshBatches();
   }, []);
 
   useEffect(() => {
@@ -996,6 +1096,24 @@ function App() {
   }, [workflowTemplates]);
 
   useEffect(() => {
+    if (batchRuns.status !== "success") {
+      return;
+    }
+    setSelectedBatchId((current) =>
+      batchRuns.data.some((batch) => batch.batch_id === current)
+        ? current
+        : batchRuns.data[0]?.batch_id ?? "",
+    );
+  }, [batchRuns]);
+
+  useEffect(() => {
+    if (!selectedBatch) {
+      return;
+    }
+    void refreshBatchRunOutputs(selectedBatch);
+  }, [selectedBatch]);
+
+  useEffect(() => {
     const hasActiveRun =
       preprocessingRuns.data?.some((run) =>
         ["pending", "running", "cancelling"].includes(run.status),
@@ -1043,20 +1161,39 @@ function App() {
     return () => window.clearInterval(intervalId);
   }, [activeDatasetId, erpRuns.data]);
 
+  useEffect(() => {
+    if (!selectedBatch || !isActiveBatchStatus(selectedBatch.status)) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void refreshBatchDetail(selectedBatch.batch_id, { silent: true });
+    }, 2000);
+
+    return () => window.clearInterval(intervalId);
+  }, [selectedBatch]);
+
   async function refreshWorkspace() {
     setNotice(null);
     setHealth({ status: "loading", data: null, error: null });
     setSamples({ status: "loading", data: null, error: null });
     setProjects({ status: "loading", data: null, error: null });
     setDatasets({ status: "loading", data: null, error: null });
+    setBatchRuns({ status: "loading", data: null, error: null });
 
-    const [healthResult, samplesResult, projectsResult, datasetsResult] =
-      await Promise.allSettled([
-        fetchJson<HealthResponse>("/health"),
-        fetchJson<SampleDatasetsResponse>("/datasets/samples"),
-        fetchJson<ProjectsResponse>("/projects"),
-        fetchJson<DatasetsResponse>("/datasets"),
-      ]);
+    const [
+      healthResult,
+      samplesResult,
+      projectsResult,
+      datasetsResult,
+      batchesResult,
+    ] = await Promise.allSettled([
+      fetchJson<HealthResponse>("/health"),
+      fetchJson<SampleDatasetsResponse>("/datasets/samples"),
+      fetchJson<ProjectsResponse>("/projects"),
+      fetchJson<DatasetsResponse>("/datasets"),
+      fetchJson<BatchRunsResponse>("/batches"),
+    ]);
 
     if (healthResult.status === "fulfilled") {
       setHealth({ status: "success", data: healthResult.value, error: null });
@@ -1116,6 +1253,20 @@ function App() {
         status: "error",
         data: null,
         error: getErrorMessage(datasetsResult.reason),
+      });
+    }
+
+    if (batchesResult.status === "fulfilled") {
+      setBatchRuns({
+        status: "success",
+        data: batchesResult.value.batches,
+        error: null,
+      });
+    } else {
+      setBatchRuns({
+        status: "error",
+        data: null,
+        error: getErrorMessage(batchesResult.reason),
       });
     }
   }
@@ -1540,6 +1691,60 @@ function App() {
     });
   }
 
+  async function beginBatchRun() {
+    if (!selectedWorkflowTemplateId) {
+      setNotice({ tone: "error", message: "Select a workflow template first." });
+      return;
+    }
+    if (batchEligibleDatasets.length === 0) {
+      setNotice({
+        tone: "error",
+        message: "No valid datasets are available for this batch.",
+      });
+      return;
+    }
+
+    await runAction("batch-create", async () => {
+      const batch = await postJson<BatchRunPlan>("/batches", {
+        template_id: selectedWorkflowTemplateId,
+        dataset_selection: {
+          dataset_ids: batchEligibleDatasets.map((dataset) => dataset.dataset_id),
+          project_id: (activeDataset?.project_id ?? selectedProjectId) || null,
+          experiment_id:
+            (activeDataset?.experiment_id ?? selectedExperimentId) || null,
+        },
+      });
+      setBatchRuns((current) => ({
+        status: "success",
+        data: [
+          batch,
+          ...(current.data ?? []).filter((item) => item.batch_id !== batch.batch_id),
+        ],
+        error: null,
+      }));
+      setSelectedBatchId(batch.batch_id);
+      await refreshBatchRunOutputs(batch);
+      setNotice({
+        tone: "neutral",
+        message: `Batch ${batch.batch_id} queued for ${batch.items.length} dataset(s).`,
+      });
+    });
+  }
+
+  async function cancelBatchRun(batchId: string) {
+    await runAction(`batch-cancel-${batchId}`, async () => {
+      const batch = await requestJson<BatchRunPlan>(
+        `/batches/${encodeURIComponent(batchId)}/cancel`,
+        { method: "POST" },
+      );
+      updateBatchInState(batch);
+      setNotice({
+        tone: batch.status === "cancelled" ? "ok" : "neutral",
+        message: `Batch ${batch.batch_id} ${batch.status}.`,
+      });
+    });
+  }
+
   async function beginComparisonSummary() {
     const configError = getComparisonConfigError(comparisonConfig);
     if (configError) {
@@ -1747,6 +1952,76 @@ function App() {
     }
   }
 
+  async function refreshBatches(options: { silent?: boolean } = {}): Promise<void> {
+    if (!options.silent) {
+      setBatchRuns({ status: "loading", data: null, error: null });
+    }
+    try {
+      const response = await fetchJson<BatchRunsResponse>("/batches");
+      setBatchRuns({
+        status: "success",
+        data: response.batches,
+        error: null,
+      });
+      const selected =
+        response.batches.find((batch) => batch.batch_id === selectedBatchId) ??
+        response.batches[0] ??
+        null;
+      if (selected) {
+        await refreshBatchRunOutputs(selected);
+      }
+    } catch (error: unknown) {
+      setBatchRuns({
+        status: "error",
+        data: null,
+        error: getErrorMessage(error),
+      });
+    }
+  }
+
+  async function refreshBatchDetail(
+    batchId: string,
+    options: { silent?: boolean } = {},
+  ): Promise<void> {
+    try {
+      const batch = await fetchJson<BatchRunPlan>(
+        `/batches/${encodeURIComponent(batchId)}`,
+      );
+      updateBatchInState(batch);
+      await refreshBatchRunOutputs(batch);
+    } catch (error: unknown) {
+      if (!options.silent) {
+        setNotice({ tone: "error", message: getErrorMessage(error) });
+      }
+    }
+  }
+
+  async function refreshBatchRunOutputs(batch: BatchRunPlan): Promise<void> {
+    const runIds = batch.items
+      .map((item) => item.run_ids.preprocessing)
+      .filter((runId): runId is string => Boolean(runId));
+    if (runIds.length === 0) {
+      return;
+    }
+    const responses = await Promise.allSettled(
+      runIds.map((runId) =>
+        fetchJson<PreprocessingRun>(
+          `/preprocessing-runs/${encodeURIComponent(runId)}`,
+        ),
+      ),
+    );
+    const nextRuns: Record<string, PreprocessingRun> = {};
+    responses.forEach((response) => {
+      if (response.status === "fulfilled") {
+        nextRuns[response.value.run_id] = response.value;
+      }
+    });
+    if (Object.keys(nextRuns).length === 0) {
+      return;
+    }
+    setBatchPreprocessingRuns((current) => ({ ...current, ...nextRuns }));
+  }
+
   async function loadDatasetContext(datasetId: string): Promise<DatasetContext> {
     const encodedDatasetId = encodeURIComponent(datasetId);
     const [
@@ -1889,6 +2164,16 @@ function App() {
             item.dataset_id === dataset.dataset_id ? dataset : item,
           )
         : [dataset, ...data];
+      return { status: "success", data: nextData, error: null };
+    });
+  }
+
+  function updateBatchInState(batch: BatchRunPlan) {
+    setBatchRuns((current) => {
+      const data = current.data ?? [];
+      const nextData = data.some((item) => item.batch_id === batch.batch_id)
+        ? data.map((item) => (item.batch_id === batch.batch_id ? batch : item))
+        : [batch, ...data];
       return { status: "success", data: nextData, error: null };
     });
   }
@@ -2157,6 +2442,36 @@ function App() {
                   }}
                   selectedTemplateId={selectedWorkflowTemplateId}
                   templates={workflowTemplates}
+                />
+              </section>
+
+              <section className="panel" aria-labelledby="batch-runs-title">
+                <div className="panel-header">
+                  <div>
+                    <h2 id="batch-runs-title">Batch Runs</h2>
+                    <p className="subtle">
+                      {activeDataset
+                        ? "Per-subject preprocessing progress and outputs"
+                        : "Create or select a dataset"}
+                    </p>
+                  </div>
+                </div>
+                <BatchRunsPanel
+                  activeDataset={activeDataset}
+                  batchEligibleDatasets={batchEligibleDatasets}
+                  batchFilter={batchItemFilter}
+                  batchRuns={batchRuns}
+                  busyAction={busyAction}
+                  onCancelBatch={cancelBatchRun}
+                  onCreateBatch={beginBatchRun}
+                  onFilterChange={setBatchItemFilter}
+                  onRefreshBatches={() => refreshBatches({ silent: false })}
+                  onSelectBatch={setSelectedBatchId}
+                  datasetsById={datasetsById}
+                  preprocessingRunsById={batchPreprocessingRuns}
+                  selectedBatch={selectedBatch}
+                  selectedBatchId={selectedBatchId}
+                  selectedTemplateId={selectedWorkflowTemplateId}
                 />
               </section>
 
@@ -2462,6 +2777,228 @@ function TemplatePolicyList({
         </div>
       ))}
     </div>
+  );
+}
+
+function BatchRunsPanel({
+  activeDataset,
+  batchEligibleDatasets,
+  batchFilter,
+  batchRuns,
+  busyAction,
+  onCancelBatch,
+  onCreateBatch,
+  onFilterChange,
+  onRefreshBatches,
+  onSelectBatch,
+  datasetsById,
+  preprocessingRunsById,
+  selectedBatch,
+  selectedBatchId,
+  selectedTemplateId,
+}: {
+  activeDataset: Dataset | null;
+  batchEligibleDatasets: Dataset[];
+  batchFilter: BatchItemFilter;
+  batchRuns: LoadState<BatchRunPlan[]>;
+  busyAction: string | null;
+  onCancelBatch: (batchId: string) => void;
+  onCreateBatch: () => void;
+  onFilterChange: (filter: BatchItemFilter) => void;
+  onRefreshBatches: () => void;
+  onSelectBatch: (batchId: string) => void;
+  datasetsById: Record<string, Dataset>;
+  preprocessingRunsById: Record<string, PreprocessingRun>;
+  selectedBatch: BatchRunPlan | null;
+  selectedBatchId: string;
+  selectedTemplateId: string;
+}) {
+  if (batchRuns.status === "loading" || batchRuns.status === "idle") {
+    return <p className="muted">Loading batch runs...</p>;
+  }
+
+  if (batchRuns.status === "error") {
+    return <p className="error-text">{batchRuns.error}</p>;
+  }
+
+  const batches = batchRuns.data ?? [];
+  const selectedItems = selectedBatch?.items ?? [];
+  const filteredItems = selectedItems.filter((item) =>
+    batchItemMatchesFilter(item, batchFilter),
+  );
+  const batchSummary = selectedBatch ? summarizeBatchItems(selectedBatch.items) : null;
+  const canCreateBatch =
+    Boolean(activeDataset) &&
+    Boolean(selectedTemplateId) &&
+    batchEligibleDatasets.length > 0;
+
+  return (
+    <div className="batch-panel" data-testid="batch-runs-panel">
+      <div className="batch-controls">
+        <label className="wide-field">
+          <span>Batch</span>
+          <select
+            data-testid="batch-select"
+            disabled={batches.length === 0}
+            onChange={(event) => onSelectBatch(event.target.value)}
+            value={selectedBatchId}
+          >
+            <option value="">Select batch</option>
+            {batches.map((batch) => (
+              <option key={batch.batch_id} value={batch.batch_id}>
+                {batch.batch_id} / {batch.status}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          className="primary-button"
+          data-testid="start-batch-button"
+          disabled={!canCreateBatch || busyAction === "batch-create"}
+          onClick={onCreateBatch}
+          type="button"
+        >
+          {busyAction === "batch-create" ? "Queueing..." : "Start Batch"}
+        </button>
+        <button className="secondary-button" onClick={onRefreshBatches} type="button">
+          Refresh
+        </button>
+      </div>
+
+      <div className="run-meta batch-summary-meta">
+        <span>{batchEligibleDatasets.length} dataset(s)</span>
+        <span>{selectedBatch?.status ?? "no batch"}</span>
+        {batchSummary ? <span>{batchSummary}</span> : null}
+        {selectedBatch ? <span>{selectedBatch.template_snapshot.template_name}</span> : null}
+      </div>
+
+      <div className="batch-filter-tabs" aria-label="Batch item status filter">
+        {(["all", "pending", "completed", "failed"] as BatchItemFilter[]).map(
+          (filter) => (
+            <button
+              aria-pressed={batchFilter === filter}
+              className="workspace-mode-button"
+              key={filter}
+              onClick={() => onFilterChange(filter)}
+              type="button"
+            >
+              {filter}
+            </button>
+          ),
+        )}
+      </div>
+
+      {selectedBatch ? (
+        <>
+          {isActiveBatchStatus(selectedBatch.status) ? (
+            <p className="muted">Polling batch detail until execution settles.</p>
+          ) : null}
+          {isActiveBatchStatus(selectedBatch.status) ? (
+            <button
+              className="secondary-button compact-button"
+              disabled={busyAction === `batch-cancel-${selectedBatch.batch_id}`}
+              onClick={() => onCancelBatch(selectedBatch.batch_id)}
+              type="button"
+            >
+              {busyAction === `batch-cancel-${selectedBatch.batch_id}`
+                ? "Cancelling..."
+                : "Cancel Batch"}
+            </button>
+          ) : null}
+          <BatchSubjectTable
+            datasetsById={datasetsById}
+            filter={batchFilter}
+            items={filteredItems}
+            preprocessingRunsById={preprocessingRunsById}
+          />
+        </>
+      ) : (
+        <p className="muted">
+          No batch runs yet. Select a template and start a batch for valid datasets.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function BatchSubjectTable({
+  datasetsById,
+  filter,
+  items,
+  preprocessingRunsById,
+}: {
+  datasetsById: Record<string, Dataset>;
+  filter: BatchItemFilter;
+  items: BatchSubjectRunPlan[];
+  preprocessingRunsById: Record<string, PreprocessingRun>;
+}) {
+  if (items.length === 0) {
+    return <p className="muted">No {filter} subject items.</p>;
+  }
+
+  return (
+    <div className="batch-table-wrap" data-testid="batch-run-table">
+      <table className="batch-run-table">
+        <thead>
+          <tr>
+            <th>Dataset / Subject</th>
+            <th>Status</th>
+            <th>Current Step</th>
+            <th>Output</th>
+            <th>Warnings</th>
+            <th>Errors</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((item) => {
+            const preprocessingRunId = item.run_ids.preprocessing;
+            const preprocessingRun = preprocessingRunId
+              ? preprocessingRunsById[preprocessingRunId]
+              : null;
+            const dataset = datasetsById[item.dataset_id] ?? null;
+            return (
+              <tr key={item.item_id}>
+                <td>
+                  <strong>{item.dataset_id}</strong>
+                  <small>{dataset?.participant_id ?? item.item_id}</small>
+                </td>
+                <td>
+                  <span className={`status-badge badge-${item.status}`}>
+                    {item.status}
+                  </span>
+                </td>
+                <td>{formatBatchCurrentStep(item, preprocessingRun)}</td>
+                <td>
+                  <BatchOutputCell item={item} run={preprocessingRun} />
+                </td>
+                <td>{formatBatchMessages(item.warnings, preprocessingRun?.warnings)}</td>
+                <td>{formatBatchMessages(item.errors, preprocessingRun?.errors)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function BatchOutputCell({
+  item,
+  run,
+}: {
+  item: BatchSubjectRunPlan;
+  run: PreprocessingRun | null;
+}) {
+  const runId = item.run_ids.preprocessing;
+  const outputPath = run?.output_path;
+  if (!runId && !outputPath) {
+    return <span className="muted">No output yet</span>;
+  }
+  return (
+    <span className="batch-output">
+      <strong>{runId ?? "pending run"}</strong>
+      <small>{outputPath ?? "Output pending"}</small>
+    </span>
   );
 }
 
@@ -5917,6 +6454,62 @@ function formatTemplatePolicySummary(policy: WorkflowTemplateFieldPolicy): strin
       : null,
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(" / ") : "";
+}
+
+function isActiveBatchStatus(status: string): boolean {
+  return ["pending", "running", "cancelling"].includes(status);
+}
+
+function batchItemMatchesFilter(
+  item: BatchSubjectRunPlan,
+  filter: BatchItemFilter,
+): boolean {
+  if (filter === "all") {
+    return true;
+  }
+  if (filter === "pending") {
+    return ["pending", "running", "cancelling"].includes(item.status);
+  }
+  if (filter === "failed") {
+    return ["failed", "cancelled"].includes(item.status);
+  }
+  return item.status === filter;
+}
+
+function summarizeBatchItems(items: BatchSubjectRunPlan[]): string {
+  const completed = items.filter((item) => item.status === "completed").length;
+  const failed = items.filter((item) => item.status === "failed").length;
+  const pending = items.filter((item) =>
+    ["pending", "running", "cancelling"].includes(item.status),
+  ).length;
+  return `${completed} completed / ${failed} failed / ${pending} pending`;
+}
+
+function formatBatchCurrentStep(
+  item: BatchSubjectRunPlan,
+  preprocessingRun: PreprocessingRun | null,
+): string {
+  if (preprocessingRun && ["pending", "running", "cancelling"].includes(preprocessingRun.status)) {
+    return `preprocessing / ${preprocessingRun.status}`;
+  }
+  if (item.status === "completed") {
+    return "completed";
+  }
+  if (item.status === "failed") {
+    return "failed";
+  }
+  if (item.status === "cancelled") {
+    return "cancelled";
+  }
+  return item.planned_steps[0] ?? "pending";
+}
+
+function formatBatchMessages(
+  itemMessages: string[],
+  runMessages: string[] | undefined,
+): string {
+  const messages = [...itemMessages, ...(runMessages ?? [])].filter(Boolean);
+  return messages.length > 0 ? messages.join(" ") : "-";
 }
 
 function operationStatus(value: unknown): string {

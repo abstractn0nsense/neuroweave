@@ -75,4 +75,12 @@ test("uploads, validates, and completes preprocessing from the browser UI", asyn
     page.getByText("Workflow template applied to the current dataset config."),
   ).toBeVisible();
   await expect(page.getByTestId("resample-hz-input")).toHaveValue("50");
+
+  await page.getByTestId("start-batch-button").click();
+  await expect(page.getByText(/Batch .* queued for 1 dataset/)).toBeVisible();
+  await expect(page.getByTestId("batch-run-table")).toContainText(datasetId);
+  await expect(page.getByTestId("batch-run-table")).toContainText("completed", {
+    timeout: 60_000,
+  });
+  await expect(page.getByTestId("batch-run-table")).toContainText("preprocess-");
 });
