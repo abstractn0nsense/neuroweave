@@ -1,7 +1,9 @@
 from pathlib import Path
 from time import sleep
 from dataclasses import replace
+from io import BytesIO
 import json
+import zipfile
 
 from fastapi.testclient import TestClient
 import pytest
@@ -174,7 +176,7 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert metadata["primary_artifact_path"] == payload["output_path"]
     assert metadata["primary_artifact_size_bytes"] > 0
     assert metadata["primary_artifact_checksum_sha256"]
-    assert metadata["artifact_count"] == 5
+    assert metadata["artifact_count"] == 9
     assert metadata["provenance_available"] is True
     assert metadata["provenance_schema_version"] == 1
     assert metadata["output_path"] == payload["output_path"]
@@ -184,7 +186,7 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert metadata["output_duration_seconds"] > 0
     assert metadata["mne_version"]
     assert metadata["diagnostics_available"] is True
-    assert metadata["diagnostics_file_count"] == 3
+    assert metadata["diagnostics_file_count"] == 7
     assert metadata["artifact_bad_channel_count"] == 0
     assert metadata["artifact_annotation_count"] == 0
     assert metadata["artifact_bad_channel_detection_status"] == "not_requested"
@@ -208,6 +210,12 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     summary_path = Path(str(metadata["preprocessing_summary_path"]))
     filter_report_path = Path(str(metadata["filter_report_path"]))
     artifact_summary_path = Path(str(metadata["artifact_summary_path"]))
+    bad_channel_report_path = Path(str(metadata["bad_channel_report_path"]))
+    artifact_rejection_report_path = Path(
+        str(metadata["artifact_rejection_report_path"])
+    )
+    ica_report_path = Path(str(metadata["ica_report_path"]))
+    before_after_qc_path = Path(str(metadata["before_after_qc_path"]))
     artifact_manifest_path = Path(str(metadata["artifact_manifest_path"]))
     provenance_path = Path(str(metadata["provenance_path"]))
     worker_payload_path = Path(str(metadata["worker_payload_path"]))
@@ -217,6 +225,10 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert summary_path.is_file()
     assert filter_report_path.is_file()
     assert artifact_summary_path.is_file()
+    assert bad_channel_report_path.is_file()
+    assert artifact_rejection_report_path.is_file()
+    assert ica_report_path.is_file()
+    assert before_after_qc_path.is_file()
     assert artifact_manifest_path.is_file()
     assert provenance_path.is_file()
     assert worker_payload_path.is_file()
@@ -227,6 +239,12 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     filter_report = json.loads(filter_report_path.read_text(encoding="utf-8"))
     artifact_summary = json.loads(artifact_summary_path.read_text(encoding="utf-8"))
+    bad_channel_report = json.loads(bad_channel_report_path.read_text(encoding="utf-8"))
+    artifact_rejection_report = json.loads(
+        artifact_rejection_report_path.read_text(encoding="utf-8")
+    )
+    ica_report = json.loads(ica_report_path.read_text(encoding="utf-8"))
+    before_after_qc = json.loads(before_after_qc_path.read_text(encoding="utf-8"))
     artifact_manifest = json.loads(artifact_manifest_path.read_text(encoding="utf-8"))
     provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
     worker_payload = json.loads(worker_payload_path.read_text(encoding="utf-8"))
@@ -236,6 +254,10 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert filter_report["resample"]["status"] == "applied"
     assert filter_report["reference"]["status"] == "applied"
     assert artifact_summary["artifact_rejection"]["enabled"] is False
+    assert bad_channel_report == artifact_summary["bad_channels"]
+    assert artifact_rejection_report == artifact_summary["artifact_rejection"]
+    assert ica_report == artifact_summary["ica"]
+    assert before_after_qc == artifact_summary["qc"]["before_after"]
     assert worker_payload["schema_version"] == 1
     assert worker_payload["job"] == "preprocessing"
     assert worker_payload["run_id"] == payload["run_id"]
@@ -245,7 +267,7 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert worker_result["error"] is None
     assert artifact_manifest["schema_version"] == 1
     assert artifact_manifest["artifact_root"] == str(Path(payload["output_path"]).parent)
-    assert artifact_manifest["artifact_count"] == 5
+    assert artifact_manifest["artifact_count"] == 9
     assert {
         artifact["logical_name"] for artifact in artifact_manifest["artifacts"]
     } == {
@@ -253,6 +275,10 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
         "preprocessing_summary",
         "filter_report",
         "artifact_summary",
+        "bad_channel_report",
+        "artifact_rejection_report",
+        "ica_report",
+        "before_after_qc",
         "provenance",
     }
     assert provenance["run"]["run_id"] == payload["run_id"]
@@ -268,6 +294,38 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
 
     assert list_response.status_code == 200
     assert list_response.json()["runs"] == [payload]
+
+    integrity_response = client.get(f"/runs/{payload['run_id']}/artifact-integrity")
+    assert integrity_response.status_code == 200
+    integrity_payload = integrity_response.json()["integrity"]
+    assert integrity_payload["status"] == "ok"
+    assert integrity_payload["artifact_count"] == 9
+    assert {
+        artifact["logical_name"] for artifact in integrity_payload["artifacts"]
+    } >= {
+        "bad_channel_report",
+        "artifact_rejection_report",
+        "ica_report",
+        "before_after_qc",
+    }
+
+    export_response = client.get(
+        f"/datasets/dataset-001/export-bundle?run_id={payload['run_id']}"
+    )
+    assert export_response.status_code == 200
+    with zipfile.ZipFile(BytesIO(export_response.content)) as bundle:
+        names = set(bundle.namelist())
+        analysis_report = json.loads(bundle.read("analysis_report.json"))
+
+    assert {
+        "diagnostics/bad_channel_report.json",
+        "diagnostics/artifact_rejection_report.json",
+        "diagnostics/ica_report.json",
+        "diagnostics/before_after_qc.json",
+    }.issubset(names)
+    assert analysis_report["qc_summary"]["preprocessing"]["phase_b_artifacts"][
+        "before_after_qc"
+    ] == before_after_qc
 
 
 def test_create_preprocessing_run_accepts_artifact_aware_contract(

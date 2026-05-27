@@ -63,7 +63,7 @@ Allowed methods:
 Channel-list fields must reference uploaded recording channel names. The API
 rejects unknown channels before queueing a run.
 
-## Phase B8 Execution Status
+## Phase B9 Execution Status
 
 B2 executes automatic bad-channel detection in report-only mode. It records
 candidates and metrics in diagnostics, but does not mutate `raw.info["bads"]`,
@@ -97,6 +97,12 @@ association scores when those channels are configured or inferred. The QC view
 lists components and lets the user select excluded components for the next
 preprocessing run.
 
+B9 hardens integration by writing Phase B sections as standalone diagnostic
+artifacts in addition to `artifact_summary.json`. The preprocessing manifest,
+artifact integrity endpoint, analysis report QC summary, and export bundle now
+include `bad_channel_report.json`, `artifact_rejection_report.json`,
+`ica_report.json`, and `before_after_qc.json`.
+
 Bad-channel detection methods:
 
 - `flat`: marks channels with near-zero peak-to-peak amplitude.
@@ -110,6 +116,8 @@ Bad-channel detection methods:
 
 `artifact_summary.json` includes the Phase B sections even when execution is not
 enabled. This gives the UI, export bundle, and future QC views a stable schema.
+The same sections are also emitted as standalone diagnostic artifacts for
+manifest-level integrity and export checks.
 
 ```json
 {

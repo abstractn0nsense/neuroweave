@@ -2471,6 +2471,19 @@ def _preprocessing_completed_provenance(
                     "artifact_summary",
                     diagnostics_metadata.get("artifact_summary_path"),
                 ),
+                (
+                    "bad_channel_report",
+                    diagnostics_metadata.get("bad_channel_report_path"),
+                ),
+                (
+                    "artifact_rejection_report",
+                    diagnostics_metadata.get("artifact_rejection_report_path"),
+                ),
+                ("ica_report", diagnostics_metadata.get("ica_report_path")),
+                (
+                    "before_after_qc",
+                    diagnostics_metadata.get("before_after_qc_path"),
+                ),
             )
             if isinstance(path_value, str) and Path(path_value).is_file()
         ],
@@ -2534,19 +2547,53 @@ def _write_preprocessing_diagnostics(
         }
 
     output_directory.mkdir(parents=True, exist_ok=True)
+    artifact_summary = diagnostics.get("artifact_summary")
+    artifact_summary_payload = (
+        artifact_summary if isinstance(artifact_summary, dict) else {}
+    )
+    qc_summary_payload = (
+        artifact_summary_payload.get("qc", {})
+        if isinstance(artifact_summary_payload, dict)
+        else {}
+    )
     files = {
-        "preprocessing_summary": output_directory / "preprocessing_summary.json",
-        "filter_report": output_directory / "filter_report.json",
-        "artifact_summary": output_directory / "artifact_summary.json",
+        "preprocessing_summary": (
+            output_directory / "preprocessing_summary.json",
+            diagnostics.get("preprocessing_summary"),
+        ),
+        "filter_report": (
+            output_directory / "filter_report.json",
+            diagnostics.get("filter_report"),
+        ),
+        "artifact_summary": (
+            output_directory / "artifact_summary.json",
+            artifact_summary_payload,
+        ),
+        "bad_channel_report": (
+            output_directory / "bad_channel_report.json",
+            artifact_summary_payload.get("bad_channels", {}),
+        ),
+        "artifact_rejection_report": (
+            output_directory / "artifact_rejection_report.json",
+            artifact_summary_payload.get("artifact_rejection", {}),
+        ),
+        "ica_report": (
+            output_directory / "ica_report.json",
+            artifact_summary_payload.get("ica", {}),
+        ),
+        "before_after_qc": (
+            output_directory / "before_after_qc.json",
+            qc_summary_payload.get("before_after", {})
+            if isinstance(qc_summary_payload, dict)
+            else {},
+        ),
     }
     written_paths: dict[str, Path] = {}
-    for key, path in files.items():
-        payload = diagnostics.get(key)
+    for key, (path, payload) in files.items():
         if isinstance(payload, dict):
             _write_json_file(path, payload)
             written_paths[key] = path
 
-    artifact_summary = diagnostics.get("artifact_summary")
     output_artifacts = (
         artifact_summary.get("output", {})
         if isinstance(artifact_summary, dict)
@@ -2604,6 +2651,20 @@ def _write_preprocessing_diagnostics(
         else None,
         "artifact_summary_path": str(written_paths.get("artifact_summary"))
         if "artifact_summary" in written_paths
+        else None,
+        "bad_channel_report_path": str(written_paths.get("bad_channel_report"))
+        if "bad_channel_report" in written_paths
+        else None,
+        "artifact_rejection_report_path": str(
+            written_paths.get("artifact_rejection_report")
+        )
+        if "artifact_rejection_report" in written_paths
+        else None,
+        "ica_report_path": str(written_paths.get("ica_report"))
+        if "ica_report" in written_paths
+        else None,
+        "before_after_qc_path": str(written_paths.get("before_after_qc"))
+        if "before_after_qc" in written_paths
         else None,
         "artifact_bad_channel_count": output_artifacts.get("bad_channel_count")
         if isinstance(output_artifacts, dict)
