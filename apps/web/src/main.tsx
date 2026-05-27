@@ -281,6 +281,74 @@ type ErpRunsResponse = {
   runs: ErpRun[];
 };
 
+type WorkflowTemplateFieldPolicyEntry = {
+  path: string;
+  reason: string;
+  source_value: unknown;
+  source_value_summary: string | null;
+  default_action: string | null;
+};
+
+type WorkflowTemplateFieldPolicy = {
+  excluded_fields: WorkflowTemplateFieldPolicyEntry[];
+  review_required_fields: WorkflowTemplateFieldPolicyEntry[];
+  channel_specific_fields: string[];
+};
+
+type WorkflowTemplateEpochConfig = Omit<EpochConfig, "preprocessing_run_id">;
+
+type WorkflowTemplateErpConfig = Omit<ErpConfig, "epoch_run_id">;
+
+type WorkflowTemplateWorkflow = {
+  preprocessing: PreprocessingConfig | null;
+  epoch: WorkflowTemplateEpochConfig | null;
+  erp: WorkflowTemplateErpConfig | null;
+};
+
+type WorkflowTemplateValidation = {
+  valid: boolean;
+  stale: boolean;
+  errors: string[];
+  warnings: string[];
+  stale_reasons: string[];
+};
+
+type WorkflowTemplate = {
+  schema_version: number;
+  template_kind: string;
+  template_id: string;
+  name: string;
+  description: string | null;
+  created_at_utc: string;
+  updated_at_utc: string;
+  created_from: {
+    dataset_id: string | null;
+    preprocessing_run_id: string | null;
+    epoch_run_id: string | null;
+    erp_run_id: string | null;
+  };
+  workflow: WorkflowTemplateWorkflow;
+  field_policy: WorkflowTemplateFieldPolicy;
+  validation: WorkflowTemplateValidation;
+  notes: string[];
+  extra: Record<string, unknown>;
+};
+
+type WorkflowTemplatesResponse = {
+  templates: WorkflowTemplate[];
+};
+
+type WorkflowTemplateApplyPreview = {
+  template_id: string;
+  target_dataset_id: string;
+  status: "ready" | "requires_review" | "invalid";
+  configs: WorkflowTemplateWorkflow;
+  excluded_fields: WorkflowTemplateFieldPolicyEntry[];
+  review_required_fields: WorkflowTemplateFieldPolicyEntry[];
+  errors: string[];
+  warnings: string[];
+};
+
 type DiagnosticWarning = {
   severity: string;
   source: string;
@@ -628,6 +696,17 @@ function App() {
   const [artifactIntegrity, setArtifactIntegrity] = useState<
     Record<string, LoadState<ArtifactIntegrityPayload>>
   >({});
+  const [workflowTemplates, setWorkflowTemplates] = useState<
+    LoadState<WorkflowTemplate[]>
+  >({
+    status: "idle",
+    data: null,
+    error: null,
+  });
+  const [selectedWorkflowTemplateId, setSelectedWorkflowTemplateId] =
+    useState("");
+  const [lastWorkflowTemplatePreview, setLastWorkflowTemplatePreview] =
+    useState<WorkflowTemplateApplyPreview | null>(null);
   const [comparisonConfig, setComparisonConfig] = useState(
     DEFAULT_COMPARISON_CONFIG,
   );
@@ -711,6 +790,7 @@ function App() {
 
   useEffect(() => {
     void refreshWorkspace();
+    void refreshWorkflowTemplates();
   }, []);
 
   useEffect(() => {
@@ -903,6 +983,17 @@ function App() {
       };
     });
   }, [completedErpRuns]);
+
+  useEffect(() => {
+    if (workflowTemplates.status !== "success") {
+      return;
+    }
+    setSelectedWorkflowTemplateId((current) =>
+      workflowTemplates.data.some((template) => template.template_id === current)
+        ? current
+        : workflowTemplates.data[0]?.template_id ?? "",
+    );
+  }, [workflowTemplates]);
 
   useEffect(() => {
     const hasActiveRun =
@@ -1349,6 +1440,106 @@ function App() {
     });
   }
 
+  async function saveWorkflowTemplateFromRun(
+    kind: "preprocessing" | "epoch" | "erp",
+    run: PreprocessingRun | EpochRun | ErpRun,
+  ) {
+    if (run.status !== "completed") {
+      setNotice({
+        tone: "error",
+        message: "Templates can only be saved from completed runs.",
+      });
+      return;
+    }
+
+    const runKeyByKind = {
+      preprocessing: "preprocessing_run_id",
+      epoch: "epoch_run_id",
+      erp: "erp_run_id",
+    } as const;
+
+    await runAction(`template-save-${run.run_id}`, async () => {
+      const template = await postJson<WorkflowTemplate>("/workflow-templates/from-run", {
+        name: `${kind} template from ${run.run_id}`,
+        description: `Created from completed ${kind} run ${run.run_id}.`,
+        [runKeyByKind[kind]]: run.run_id,
+      });
+      await refreshWorkflowTemplates({ silent: true });
+      setSelectedWorkflowTemplateId(template.template_id);
+      setLastWorkflowTemplatePreview(null);
+      const policySummary = formatTemplatePolicySummary(template.field_policy);
+      setNotice({
+        tone: "ok",
+        message: `Workflow template saved.${policySummary ? ` ${policySummary}` : ""}`,
+      });
+    });
+  }
+
+  async function applySelectedWorkflowTemplate() {
+    if (!activeDatasetId) {
+      setNotice({ tone: "error", message: "Select a dataset first." });
+      return;
+    }
+    if (!selectedWorkflowTemplateId) {
+      setNotice({ tone: "error", message: "Select a workflow template first." });
+      return;
+    }
+
+    const selectedPreprocessingRunId =
+      epochConfig.preprocessing_run_id || completedPreprocessingRuns[0]?.run_id || null;
+    const selectedEpochRunId =
+      erpConfig.epoch_run_id || completedEpochRuns[0]?.run_id || null;
+
+    await runAction("template-apply", async () => {
+      const preview = await postJson<WorkflowTemplateApplyPreview>(
+        `/workflow-templates/${encodeURIComponent(
+          selectedWorkflowTemplateId,
+        )}/apply-preview`,
+        {
+          target_dataset_id: activeDatasetId,
+          preprocessing_run_id: selectedPreprocessingRunId,
+          epoch_run_id: selectedEpochRunId,
+        },
+      );
+      setLastWorkflowTemplatePreview(preview);
+
+      if (preview.status === "invalid") {
+        setNotice({
+          tone: "error",
+          message: preview.errors[0] ?? "Template preview is invalid.",
+        });
+        return;
+      }
+
+      if (preview.configs.preprocessing) {
+        setPreprocessingConfig(
+          preprocessingTemplateToForm(preview.configs.preprocessing),
+        );
+      }
+      if (preview.configs.epoch) {
+        setEpochConfig(
+          epochTemplateToForm(
+            preview.configs.epoch,
+            selectedPreprocessingRunId ?? "",
+          ),
+        );
+      }
+      if (preview.configs.erp) {
+        setErpConfig(
+          erpTemplateToForm(preview.configs.erp, selectedEpochRunId ?? ""),
+        );
+      }
+
+      setNotice({
+        tone: preview.status === "ready" ? "ok" : "neutral",
+        message:
+          preview.status === "ready"
+            ? "Workflow template applied to the current dataset config."
+            : "Workflow template applied with review-needed fields shown.",
+      });
+    });
+  }
+
   async function beginComparisonSummary() {
     const configError = getComparisonConfigError(comparisonConfig);
     if (configError) {
@@ -1530,6 +1721,30 @@ function App() {
   async function refreshDatasets() {
     const response = await fetchJson<DatasetsResponse>("/datasets");
     setDatasets({ status: "success", data: response.datasets, error: null });
+  }
+
+  async function refreshWorkflowTemplates(
+    options: { silent?: boolean } = {},
+  ): Promise<void> {
+    if (!options.silent) {
+      setWorkflowTemplates({ status: "loading", data: null, error: null });
+    }
+    try {
+      const response = await fetchJson<WorkflowTemplatesResponse>(
+        "/workflow-templates",
+      );
+      setWorkflowTemplates({
+        status: "success",
+        data: response.templates,
+        error: null,
+      });
+    } catch (error: unknown) {
+      setWorkflowTemplates({
+        status: "error",
+        data: null,
+        error: getErrorMessage(error),
+      });
+    }
   }
 
   async function loadDatasetContext(datasetId: string): Promise<DatasetContext> {
@@ -1920,6 +2135,31 @@ function App() {
             </section>
 
             <section className="workflow-stack">
+              <section className="panel" aria-labelledby="workflow-template-title">
+                <div className="panel-header">
+                  <div>
+                    <h2 id="workflow-template-title">Workflow Templates</h2>
+                    <p className="subtle">
+                      {activeDataset
+                        ? "Save completed runs and preview reusable config on this dataset"
+                        : "Create or select a dataset"}
+                    </p>
+                  </div>
+                </div>
+                <WorkflowTemplatePanel
+                  activeDataset={activeDataset}
+                  busyAction={busyAction}
+                  lastPreview={lastWorkflowTemplatePreview}
+                  onApplyTemplate={applySelectedWorkflowTemplate}
+                  onSelectTemplate={(templateId) => {
+                    setSelectedWorkflowTemplateId(templateId);
+                    setLastWorkflowTemplatePreview(null);
+                  }}
+                  selectedTemplateId={selectedWorkflowTemplateId}
+                  templates={workflowTemplates}
+                />
+              </section>
+
               <section className="panel" aria-labelledby="intake-title">
                 <div className="panel-header">
                   <div>
@@ -1954,6 +2194,9 @@ function App() {
                   onRowFilterChange={setEventRowFilter}
                   onPreprocessingConfigChange={setPreprocessingConfig}
                   onCancelPreprocessingRun={cancelPreprocessingRun}
+                  onSaveTemplateFromRun={(run) =>
+                    saveWorkflowTemplateFromRun("preprocessing", run)
+                  }
                   onSubmitEventMapping={submitEventMapping}
                   onUploadEeg={uploadEegFile}
                   onUploadEvent={uploadEventFile}
@@ -1985,6 +2228,9 @@ function App() {
                   epochConfig={epochConfig}
                   epochRuns={epochRuns}
                   onEpochConfigChange={setEpochConfig}
+                  onSaveTemplateFromRun={(run) =>
+                    saveWorkflowTemplateFromRun("epoch", run)
+                  }
                   onStartEpochRun={beginEpochRun}
                 />
               </section>
@@ -2015,6 +2261,9 @@ function App() {
                   onGenerateErpAnalysisReport={generateErpAnalysisReport}
                   onCheckArtifactIntegrity={checkArtifactIntegrity}
                   onOpenErpAnalysisReport={openErpAnalysisReport}
+                  onSaveTemplateFromRun={(run) =>
+                    saveWorkflowTemplateFromRun("erp", run)
+                  }
                   onStartComparisonSummary={beginComparisonSummary}
                   onStartErpRun={beginErpRun}
                 />
@@ -2042,6 +2291,177 @@ function App() {
         )}
       </section>
     </main>
+  );
+}
+
+function WorkflowTemplatePanel({
+  activeDataset,
+  busyAction,
+  lastPreview,
+  onApplyTemplate,
+  onSelectTemplate,
+  selectedTemplateId,
+  templates,
+}: {
+  activeDataset: Dataset | null;
+  busyAction: string | null;
+  lastPreview: WorkflowTemplateApplyPreview | null;
+  onApplyTemplate: () => void;
+  onSelectTemplate: (templateId: string) => void;
+  selectedTemplateId: string;
+  templates: LoadState<WorkflowTemplate[]>;
+}) {
+  if (templates.status === "loading" || templates.status === "idle") {
+    return <p className="muted">Loading workflow templates...</p>;
+  }
+
+  if (templates.status === "error") {
+    return <p className="error-text">{templates.error}</p>;
+  }
+
+  const templateData = templates.data ?? [];
+  const selectedTemplate =
+    templateData.find((template) => template.template_id === selectedTemplateId) ??
+    null;
+  const excludedFields =
+    lastPreview?.template_id === selectedTemplateId
+      ? lastPreview.excluded_fields
+      : selectedTemplate?.field_policy.excluded_fields ?? [];
+  const reviewRequiredFields =
+    lastPreview?.template_id === selectedTemplateId
+      ? lastPreview.review_required_fields
+      : selectedTemplate?.field_policy.review_required_fields ?? [];
+  const statusLabel = lastPreview
+    ? `preview ${lastPreview.status}`
+    : selectedTemplate?.validation.stale
+      ? "stale"
+      : selectedTemplate?.validation.valid
+        ? "valid"
+        : "not validated";
+
+  return (
+    <div className="template-panel" data-testid="workflow-template-panel">
+      <div className="template-controls">
+        <label className="wide-field">
+          <span>Template</span>
+          <select
+            data-testid="workflow-template-select"
+            disabled={templateData.length === 0}
+            onChange={(event) => onSelectTemplate(event.target.value)}
+            value={selectedTemplateId}
+          >
+            <option value="">Select workflow template</option>
+            {templateData.map((template) => (
+              <option key={template.template_id} value={template.template_id}>
+                {template.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          className="primary-button"
+          data-testid="apply-workflow-template-button"
+          disabled={
+            !activeDataset ||
+            !selectedTemplate ||
+            busyAction === "template-apply"
+          }
+          onClick={onApplyTemplate}
+          type="button"
+        >
+          {busyAction === "template-apply" ? "Previewing..." : "Apply Preview"}
+        </button>
+      </div>
+
+      {templateData.length === 0 ? (
+        <p className="muted">
+          Save a template from a completed preprocessing, epoch, or ERP run.
+        </p>
+      ) : null}
+
+      {selectedTemplate ? (
+        <div className="template-summary">
+          <div className="run-meta">
+            <span>{statusLabel}</span>
+            <span>{formatTemplateWorkflowSummary(selectedTemplate.workflow)}</span>
+            <span>{selectedTemplate.template_id}</span>
+          </div>
+          {selectedTemplate.validation.stale_reasons.length > 0 ? (
+            <p className="run-warning">
+              {selectedTemplate.validation.stale_reasons.join(" ")}
+            </p>
+          ) : null}
+          {lastPreview?.template_id === selectedTemplateId ? (
+            <TemplatePreviewMessages preview={lastPreview} />
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="template-policy-grid">
+        <TemplatePolicyList
+          emptyText="No excluded subject-specific fields."
+          entries={excludedFields}
+          title="Excluded Subject-Specific Fields"
+        />
+        <TemplatePolicyList
+          emptyText="No fields need review."
+          entries={reviewRequiredFields}
+          title="Review-Needed Fields"
+        />
+      </div>
+    </div>
+  );
+}
+
+function TemplatePreviewMessages({
+  preview,
+}: {
+  preview: WorkflowTemplateApplyPreview;
+}) {
+  if (preview.errors.length === 0 && preview.warnings.length === 0) {
+    return <p className="muted">Preview returned no errors or warnings.</p>;
+  }
+
+  return (
+    <div className="template-message-list">
+      {preview.errors.map((message) => (
+        <p className="error-text" key={`error-${message}`}>
+          {message}
+        </p>
+      ))}
+      {preview.warnings.map((message) => (
+        <p className="muted" key={`warning-${message}`}>
+          {message}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+function TemplatePolicyList({
+  emptyText,
+  entries,
+  title,
+}: {
+  emptyText: string;
+  entries: WorkflowTemplateFieldPolicyEntry[];
+  title: string;
+}) {
+  return (
+    <div className="template-policy-list">
+      <h3>{title}</h3>
+      {entries.length === 0 ? <p className="muted">{emptyText}</p> : null}
+      {entries.map((entry) => (
+        <div className="template-policy-entry" key={`${entry.path}-${entry.reason}`}>
+          <strong>{entry.path}</strong>
+          <span>
+            {entry.reason}
+            {entry.default_action ? ` / ${entry.default_action}` : ""}
+          </span>
+          {entry.source_value_summary ? <small>{entry.source_value_summary}</small> : null}
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -2428,6 +2848,7 @@ function IntakeSection({
   onRowFilterChange,
   onPreprocessingConfigChange,
   onCancelPreprocessingRun,
+  onSaveTemplateFromRun,
   onSubmitEventMapping,
   onUploadEeg,
   onUploadEvent,
@@ -2458,6 +2879,7 @@ function IntakeSection({
     config: typeof DEFAULT_PREPROCESSING_CONFIG,
   ) => void;
   onCancelPreprocessingRun: (runId: string) => void;
+  onSaveTemplateFromRun: (run: PreprocessingRun) => void;
   onSubmitEventMapping: () => void;
   onUploadEeg: () => void;
   onUploadEvent: () => void;
@@ -3123,7 +3545,9 @@ function IntakeSection({
           Start Preprocessing
         </button>
         <PreprocessingRunList
+          busyAction={busyAction}
           onCancel={onCancelPreprocessingRun}
+          onSaveTemplate={onSaveTemplateFromRun}
           runs={preprocessingRuns}
         />
       </section>
@@ -3132,10 +3556,14 @@ function IntakeSection({
 }
 
 function PreprocessingRunList({
+  busyAction,
   onCancel,
+  onSaveTemplate,
   runs,
 }: {
+  busyAction: string | null;
   onCancel: (runId: string) => void;
+  onSaveTemplate: (run: PreprocessingRun) => void;
   runs: LoadState<PreprocessingRun[]>;
 }) {
   if (runs.status === "loading" || runs.status === "idle") {
@@ -3159,9 +3587,24 @@ function PreprocessingRunList({
             <strong>{run.run_id}</strong>
             <small>{run.output_path ?? "No output file"}</small>
           </div>
-          <div className="run-meta">
-            <span>{run.status}</span>
-            <span>{formatRunMetadata(run.output_metadata)}</span>
+          <div className="run-actions">
+            <div className="run-meta">
+              <span>{run.status}</span>
+              <span>{formatRunMetadata(run.output_metadata)}</span>
+            </div>
+            {run.status === "completed" ? (
+              <button
+                className="secondary-button compact-button"
+                data-testid={`save-template-preprocessing-${run.run_id}`}
+                disabled={busyAction === `template-save-${run.run_id}`}
+                onClick={() => onSaveTemplate(run)}
+                type="button"
+              >
+                {busyAction === `template-save-${run.run_id}`
+                  ? "Saving..."
+                  : "Save Template"}
+              </button>
+            ) : null}
             {["pending", "running"].includes(run.status) ? (
               <button
                 className="secondary-button compact-button"
@@ -3229,6 +3672,7 @@ function EpochSection({
   epochConfig,
   epochRuns,
   onEpochConfigChange,
+  onSaveTemplateFromRun,
   onStartEpochRun,
 }: {
   activeDataset: Dataset | null;
@@ -3237,6 +3681,7 @@ function EpochSection({
   epochConfig: typeof DEFAULT_EPOCH_CONFIG;
   epochRuns: LoadState<EpochRun[]>;
   onEpochConfigChange: (config: typeof DEFAULT_EPOCH_CONFIG) => void;
+  onSaveTemplateFromRun: (run: EpochRun) => void;
   onStartEpochRun: () => void;
 }) {
   const disabled = !activeDataset || completedPreprocessingRuns.length === 0;
@@ -3401,12 +3846,24 @@ function EpochSection({
           Start Epoching
         </button>
       </section>
-      <EpochRunList runs={epochRuns} />
+      <EpochRunList
+        busyAction={busyAction}
+        onSaveTemplate={onSaveTemplateFromRun}
+        runs={epochRuns}
+      />
     </div>
   );
 }
 
-function EpochRunList({ runs }: { runs: LoadState<EpochRun[]> }) {
+function EpochRunList({
+  busyAction,
+  onSaveTemplate,
+  runs,
+}: {
+  busyAction: string | null;
+  onSaveTemplate: (run: EpochRun) => void;
+  runs: LoadState<EpochRun[]>;
+}) {
   if (runs.status === "loading" || runs.status === "idle") {
     return <p className="muted">Loading epoch runs...</p>;
   }
@@ -3428,10 +3885,25 @@ function EpochRunList({ runs }: { runs: LoadState<EpochRun[]> }) {
             <strong>{run.run_id}</strong>
             <small>{run.output_path ?? "No output file"}</small>
           </div>
-          <div className="run-meta">
-            <span>{run.status}</span>
-            <span>{formatEpochMetadata(run.output_metadata)}</span>
-            <span>{run.config.condition_field}</span>
+          <div className="run-actions">
+            <div className="run-meta">
+              <span>{run.status}</span>
+              <span>{formatEpochMetadata(run.output_metadata)}</span>
+              <span>{run.config.condition_field}</span>
+            </div>
+            {run.status === "completed" ? (
+              <button
+                className="secondary-button compact-button"
+                data-testid={`save-template-epoch-${run.run_id}`}
+                disabled={busyAction === `template-save-${run.run_id}`}
+                onClick={() => onSaveTemplate(run)}
+                type="button"
+              >
+                {busyAction === `template-save-${run.run_id}`
+                  ? "Saving..."
+                  : "Save Template"}
+              </button>
+            ) : null}
           </div>
           <ConditionCountSummary metadata={run.output_metadata} />
           <RunWarnings diagnostics={run.diagnostics} warnings={run.warnings} />
@@ -3500,6 +3972,7 @@ function ErpSection({
   onGenerateErpAnalysisReport,
   onCheckArtifactIntegrity,
   onOpenErpAnalysisReport,
+  onSaveTemplateFromRun,
   onStartComparisonSummary,
   onStartErpRun,
 }: {
@@ -3517,6 +3990,7 @@ function ErpSection({
   onGenerateErpAnalysisReport: (run: ErpRun) => void;
   onCheckArtifactIntegrity: (run: ErpRun) => void;
   onOpenErpAnalysisReport: (run: ErpRun) => void;
+  onSaveTemplateFromRun: (run: ErpRun) => void;
   onStartComparisonSummary: () => void;
   onStartErpRun: () => void;
 }) {
@@ -3639,6 +4113,7 @@ function ErpSection({
         onDownloadExportBundle={onDownloadErpExportBundle}
         onGenerateAnalysisReport={onGenerateErpAnalysisReport}
         onOpenAnalysisReport={onOpenErpAnalysisReport}
+        onSaveTemplate={onSaveTemplateFromRun}
         runs={erpRuns}
       />
       <ComparisonSection
@@ -3659,6 +4134,7 @@ function ErpRunList({
   onDownloadExportBundle,
   onGenerateAnalysisReport,
   onOpenAnalysisReport,
+  onSaveTemplate,
   runs,
 }: {
   artifactIntegrity: Record<string, LoadState<ArtifactIntegrityPayload>>;
@@ -3667,6 +4143,7 @@ function ErpRunList({
   onDownloadExportBundle: (run: ErpRun) => void;
   onGenerateAnalysisReport: (run: ErpRun) => void;
   onOpenAnalysisReport: (run: ErpRun) => void;
+  onSaveTemplate: (run: ErpRun) => void;
   runs: LoadState<ErpRun[]>;
 }) {
   if (runs.status === "loading" || runs.status === "idle") {
@@ -3709,6 +4186,19 @@ function ErpRunList({
                 <span>{formatErpMetadata(run.output_metadata)}</span>
                 <span>{run.config.plot_mode}</span>
               </div>
+              {run.status === "completed" ? (
+                <button
+                  className="secondary-button compact-button"
+                  data-testid={`save-template-erp-${run.run_id}`}
+                  disabled={busyAction === `template-save-${run.run_id}`}
+                  onClick={() => onSaveTemplate(run)}
+                  type="button"
+                >
+                  {busyAction === `template-save-${run.run_id}`
+                    ? "Saving..."
+                    : "Save Template"}
+                </button>
+              ) : null}
               <p className="run-action-status" data-ready={exportReady}>
                 {exportStatus}
               </p>
@@ -5005,6 +5495,89 @@ function normalizeErpConfig(config: typeof DEFAULT_ERP_CONFIG): ErpConfig {
   };
 }
 
+function preprocessingTemplateToForm(
+  config: PreprocessingConfig,
+): typeof DEFAULT_PREPROCESSING_CONFIG {
+  return {
+    high_pass_hz: optionalNumberToForm(config.high_pass_hz),
+    low_pass_hz: optionalNumberToForm(config.low_pass_hz),
+    notch_hz: optionalNumberToForm(config.notch_hz),
+    resample_hz: optionalNumberToForm(config.resample_hz),
+    reference: config.reference ?? "",
+    manual_bad_channels: config.manual_bad_channels,
+    bad_channel_interpolation: {
+      enabled: config.bad_channel_interpolation.enabled,
+      reset_bads: config.bad_channel_interpolation.reset_bads,
+    },
+    artifact_handling: {
+      eog_enabled: config.artifact_handling.eog_enabled,
+      ecg_enabled: config.artifact_handling.ecg_enabled,
+      eog_channels: csvToForm(config.artifact_handling.eog_channels),
+      ecg_channels: csvToForm(config.artifact_handling.ecg_channels),
+      create_annotations: config.artifact_handling.create_annotations,
+    },
+    bad_channel_detection: {
+      enabled: config.bad_channel_detection.enabled,
+      method:
+        config.bad_channel_detection.method === "none"
+          ? "deviation"
+          : config.bad_channel_detection.method,
+      zscore_threshold: optionalNumberToForm(
+        config.bad_channel_detection.zscore_threshold,
+      ),
+      minimum_correlation: optionalNumberToForm(
+        config.bad_channel_detection.minimum_correlation,
+      ),
+    },
+    ica: {
+      enabled: config.ica.enabled,
+      method: config.ica.method,
+      n_components: optionalNumberToForm(config.ica.n_components),
+      random_state: String(config.ica.random_state),
+      max_iter: String(config.ica.max_iter),
+      exclude_components: config.ica.exclude_components.join(", "),
+      eog_channels: csvToForm(config.ica.eog_channels),
+      ecg_channels: csvToForm(config.ica.ecg_channels),
+    },
+  };
+}
+
+function epochTemplateToForm(
+  config: WorkflowTemplateEpochConfig,
+  preprocessingRunId: string,
+): typeof DEFAULT_EPOCH_CONFIG {
+  const baselineEnabled =
+    config.baseline_start_seconds !== null || config.baseline_end_seconds !== null;
+  return {
+    preprocessing_run_id: preprocessingRunId,
+    condition_field: config.condition_field,
+    tmin_seconds: String(config.tmin_seconds),
+    tmax_seconds: String(config.tmax_seconds),
+    baseline_enabled: baselineEnabled,
+    baseline_start_seconds: baselineEnabled
+      ? optionalNumberToForm(config.baseline_start_seconds)
+      : "",
+    baseline_end_seconds: baselineEnabled
+      ? optionalNumberToForm(config.baseline_end_seconds)
+      : "",
+    reject_eeg_uv: optionalNumberToForm(config.reject_eeg_uv),
+  };
+}
+
+function erpTemplateToForm(
+  config: WorkflowTemplateErpConfig,
+  epochRunId: string,
+): typeof DEFAULT_ERP_CONFIG {
+  return {
+    epoch_run_id: epochRunId,
+    conditions: csvToForm(config.conditions ?? []),
+    picks: csvToForm(config.picks ?? []),
+    method: config.method,
+    plot_mode: config.plot_mode,
+    plot_channel: config.plot_channel ?? "",
+  };
+}
+
 function normalizeComparisonConfig(
   config: typeof DEFAULT_COMPARISON_CONFIG,
 ): ComparisonConfig {
@@ -5258,6 +5831,14 @@ function parseOptionalCsv(value: string): string[] | null {
     .filter(Boolean);
 }
 
+function optionalNumberToForm(value: number | null): string {
+  return value === null ? "" : String(value);
+}
+
+function csvToForm(values: string[]): string {
+  return values.join(", ");
+}
+
 function parseIntegerCsv(value: string): number[] {
   if (!value.trim()) {
     return [];
@@ -5315,6 +5896,27 @@ function formatErpMetadata(metadata: Record<string, MetadataValue>): string {
     typeof plotStatus === "string" ? plotStatus : null,
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(" / ") : "Metadata pending";
+}
+
+function formatTemplateWorkflowSummary(workflow: WorkflowTemplateWorkflow): string {
+  const parts = [
+    workflow.preprocessing ? "preprocessing" : null,
+    workflow.epoch ? "epoch" : null,
+    workflow.erp ? "ERP" : null,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" + ") : "empty workflow";
+}
+
+function formatTemplatePolicySummary(policy: WorkflowTemplateFieldPolicy): string {
+  const parts = [
+    policy.excluded_fields.length > 0
+      ? `${policy.excluded_fields.length} excluded`
+      : null,
+    policy.review_required_fields.length > 0
+      ? `${policy.review_required_fields.length} review-needed`
+      : null,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" / ") : "";
 }
 
 function operationStatus(value: unknown): string {

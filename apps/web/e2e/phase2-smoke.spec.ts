@@ -55,4 +55,24 @@ test("uploads, validates, and completes preprocessing from the browser UI", asyn
   );
   expect(exportResponse.ok()).toBeTruthy();
   expect(exportResponse.headers()["content-type"]).toContain("application/zip");
+
+  await page
+    .getByTestId(`save-template-preprocessing-${preprocessingRunId}`)
+    .click();
+  await expect(page.getByText("Workflow template saved.")).toBeVisible();
+  await expect(page.getByTestId("workflow-template-panel")).toContainText(
+    "Excluded Subject-Specific Fields",
+  );
+  await expect(page.getByTestId("workflow-template-panel")).toContainText(
+    "Review-Needed Fields",
+  );
+  await expect(page.getByTestId("workflow-template-select")).not.toHaveValue("");
+
+  await page.getByTestId("resample-hz-input").fill("60");
+  await expect(page.getByTestId("resample-hz-input")).toHaveValue("60");
+  await page.getByTestId("apply-workflow-template-button").click();
+  await expect(
+    page.getByText("Workflow template applied to the current dataset config."),
+  ).toBeVisible();
+  await expect(page.getByTestId("resample-hz-input")).toHaveValue("50");
 });
