@@ -63,7 +63,7 @@ Allowed methods:
 Channel-list fields must reference uploaded recording channel names. The API
 rejects unknown channels before queueing a run.
 
-## Phase B4 Execution Status
+## Phase B5 Execution Status
 
 B2 executes automatic bad-channel detection in report-only mode. It records
 candidates and metrics in diagnostics, but does not mutate `raw.info["bads"]`,
@@ -77,6 +77,10 @@ B4 interpolates the marked bad channels when
 data before filters/reference/resampling, and the report records before/after
 bad-channel state. With the default `reset_bads: true`, interpolated channels are
 removed from the output bad list after interpolation.
+
+B5 writes a before/after QC comparison for preprocessing. The comparison records
+input raw state and final preprocessed output state for bad-channel counts,
+annotation counts, variance summaries, and PSD band-power summaries.
 
 Other artifact-aware fields remain schema-only until later B subphases:
 
@@ -200,7 +204,61 @@ enabled. This gives the UI, export bundle, and future QC views a stable schema.
       "include_before_after": true,
       "metrics": ["channel_status", "amplitude", "annotations"]
     },
-    "status": "schema_only"
+    "status": "completed",
+    "before_after": {
+      "enabled": true,
+      "before": {
+        "channel_status": {
+          "bad_channels": [],
+          "bad_channel_count": 0
+        },
+        "annotations": {
+          "count": 0,
+          "descriptions": []
+        },
+        "variance": {
+          "channel_count": 64,
+          "mean_uv2": 12.4,
+          "median_uv2": 11.8,
+          "min_uv2": 4.2,
+          "max_uv2": 31.5,
+          "channels": []
+        },
+        "psd": {
+          "channel_count": 64,
+          "sampling_rate_hz": 256.0,
+          "total_power_uv2": 1840.2,
+          "bands": {
+            "alpha": {
+              "low_hz": 8.0,
+              "high_hz": 13.0,
+              "mean_power_uv2": 120.5,
+              "median_power_uv2": 101.4
+            }
+          }
+        }
+      },
+      "after": {
+        "channel_status": {
+          "bad_channels": [],
+          "bad_channel_count": 0
+        },
+        "annotations": {
+          "count": 0,
+          "descriptions": []
+        },
+        "variance": {},
+        "psd": {}
+      },
+      "delta": {
+        "bad_channel_count": 0,
+        "annotation_count": 0,
+        "variance_mean_uv2": -3.1,
+        "variance_mean_ratio": 0.75,
+        "psd_total_power_uv2": -300.0,
+        "psd_total_power_ratio": 0.84
+      }
+    }
   }
 }
 ```

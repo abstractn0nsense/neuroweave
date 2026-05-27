@@ -25,6 +25,7 @@ def test_build_qc_summary_reads_preprocessing_artifacts():
         "output_bad_channels": [],
         "output_bad_channel_count": 0,
     }
+    assert "before_after" in summary["preprocessing"]
 
 
 def test_build_qc_summary_reads_epoch_artifacts():

@@ -59,6 +59,7 @@ def preprocess_raw_eeg(
                 raw.n_times / input_sampling_rate if input_sampling_rate else 0
             )
             input_artifact_summary = _artifact_summary(raw)
+            input_qc_snapshot = _qc_snapshot(raw)
             manual_bad_channels = _apply_manual_bad_channels(raw, config)
             _check_cancelled(should_cancel, manual_warnings)
             bad_channel_detection = _bad_channel_detection_report(raw, config)
@@ -159,6 +160,12 @@ def preprocess_raw_eeg(
     sampling_rate = float(raw.info["sfreq"])
     output_duration = raw.n_times / sampling_rate if sampling_rate else 0
     output_artifact_summary = _artifact_summary(raw)
+    output_qc_snapshot = _qc_snapshot(raw)
+    before_after_qc = _before_after_qc_summary(
+        config,
+        before=input_qc_snapshot,
+        after=output_qc_snapshot,
+    )
     warnings = _dedupe(
         manual_warnings + contract_warnings + _format_warning_records(warning_records)
     )
@@ -211,7 +218,8 @@ def preprocess_raw_eeg(
                 "qc": {
                     "schema_version": config.artifact_schema_version,
                     "config": asdict(config.qc),
-                    "status": "schema_only",
+                    "status": "completed" if config.qc.enabled else "disabled",
+                    "before_after": before_after_qc,
                 },
             },
         },
@@ -271,6 +279,185 @@ def _artifact_summary(raw: Any) -> dict[str, Any]:
         "annotation_count": len(annotations),
         "annotation_descriptions": sorted(set(descriptions)),
     }
+
+
+def _qc_snapshot(raw: Any) -> dict[str, Any]:
+    return {
+        "channel_status": _channel_status_snapshot(raw),
+        "annotations": _annotation_summary(raw),
+        "variance": _variance_summary(raw),
+        "psd": _psd_summary(raw),
+    }
+
+
+def _annotation_summary(raw: Any) -> dict[str, Any]:
+    annotations = getattr(raw, "annotations", [])
+    descriptions = [
+        str(description)
+        for description in getattr(annotations, "description", [])
+    ]
+    return {
+        "count": len(annotations),
+        "descriptions": sorted(set(descriptions)),
+    }
+
+
+def _variance_summary(raw: Any) -> dict[str, Any]:
+    selected = _eeg_detection_data(raw)
+    if selected is None:
+        return {
+            "channel_count": 0,
+            "mean_uv2": None,
+            "median_uv2": None,
+            "min_uv2": None,
+            "max_uv2": None,
+            "channels": [],
+        }
+
+    channel_names, data = selected
+    import numpy as np
+
+    variances_uv2 = np.var(data, axis=1) * 1_000_000_000_000
+    return {
+        "channel_count": len(channel_names),
+        "mean_uv2": float(np.mean(variances_uv2)),
+        "median_uv2": float(np.median(variances_uv2)),
+        "min_uv2": float(np.min(variances_uv2)),
+        "max_uv2": float(np.max(variances_uv2)),
+        "channels": [
+            {
+                "channel": channel,
+                "variance_uv2": float(variance),
+            }
+            for channel, variance in zip(channel_names, variances_uv2)
+        ],
+    }
+
+
+def _psd_summary(raw: Any) -> dict[str, Any]:
+    selected = _eeg_detection_data(raw)
+    if selected is None:
+        return {
+            "channel_count": 0,
+            "sampling_rate_hz": float(raw.info["sfreq"]),
+            "total_power_uv2": None,
+            "bands": {},
+        }
+
+    channel_names, data = selected
+    import numpy as np
+
+    sampling_rate = float(raw.info["sfreq"])
+    if data.shape[1] < 2 or sampling_rate <= 0:
+        return {
+            "channel_count": len(channel_names),
+            "sampling_rate_hz": sampling_rate,
+            "total_power_uv2": None,
+            "bands": {},
+        }
+
+    demeaned = data - np.mean(data, axis=1, keepdims=True)
+    frequencies = np.fft.rfftfreq(demeaned.shape[1], d=1 / sampling_rate)
+    power_uv2 = (np.abs(np.fft.rfft(demeaned, axis=1)) ** 2) * 1_000_000_000_000
+    nyquist = sampling_rate / 2
+    bands = {
+        "delta": (1.0, 4.0),
+        "theta": (4.0, 8.0),
+        "alpha": (8.0, 13.0),
+        "beta": (13.0, 30.0),
+        "gamma": (30.0, 45.0),
+    }
+    band_summary: dict[str, Any] = {}
+    for band_name, (low_hz, high_hz) in bands.items():
+        if low_hz >= nyquist:
+            continue
+        high_hz = min(high_hz, nyquist)
+        mask = (frequencies >= low_hz) & (frequencies < high_hz)
+        if not np.any(mask):
+            continue
+        band_power = np.mean(power_uv2[:, mask], axis=1)
+        band_summary[band_name] = {
+            "low_hz": low_hz,
+            "high_hz": high_hz,
+            "mean_power_uv2": float(np.mean(band_power)),
+            "median_power_uv2": float(np.median(band_power)),
+        }
+
+    positive_mask = frequencies > 0
+    total_power = (
+        float(np.mean(power_uv2[:, positive_mask]))
+        if np.any(positive_mask)
+        else None
+    )
+    return {
+        "channel_count": len(channel_names),
+        "sampling_rate_hz": sampling_rate,
+        "total_power_uv2": total_power,
+        "bands": band_summary,
+    }
+
+
+def _before_after_qc_summary(
+    config: PreprocessingConfig,
+    *,
+    before: dict[str, Any],
+    after: dict[str, Any],
+) -> dict[str, Any]:
+    if not config.qc.enabled:
+        return {
+            "enabled": False,
+            "before": {},
+            "after": {},
+            "delta": {},
+        }
+
+    return {
+        "enabled": True,
+        "before": before,
+        "after": after,
+        "delta": {
+            "bad_channel_count": _numeric_delta(
+                before["channel_status"].get("bad_channel_count"),
+                after["channel_status"].get("bad_channel_count"),
+            ),
+            "annotation_count": _numeric_delta(
+                before["annotations"].get("count"),
+                after["annotations"].get("count"),
+            ),
+            "variance_mean_uv2": _numeric_delta(
+                before["variance"].get("mean_uv2"),
+                after["variance"].get("mean_uv2"),
+            ),
+            "variance_mean_ratio": _numeric_ratio(
+                before["variance"].get("mean_uv2"),
+                after["variance"].get("mean_uv2"),
+            ),
+            "psd_total_power_uv2": _numeric_delta(
+                before["psd"].get("total_power_uv2"),
+                after["psd"].get("total_power_uv2"),
+            ),
+            "psd_total_power_ratio": _numeric_ratio(
+                before["psd"].get("total_power_uv2"),
+                after["psd"].get("total_power_uv2"),
+            ),
+        },
+    }
+
+
+def _numeric_delta(before: Any, after: Any) -> float | int | None:
+    if not isinstance(before, (int, float)) or not isinstance(after, (int, float)):
+        return None
+    return after - before
+
+
+def _numeric_ratio(before: Any, after: Any) -> float | None:
+    if (
+        not isinstance(before, (int, float))
+        or not isinstance(after, (int, float))
+        or before == 0
+    ):
+        return None
+    return after / before
 
 
 def _bad_channel_contract_summary(

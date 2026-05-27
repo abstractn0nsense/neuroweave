@@ -2567,6 +2567,21 @@ def _write_preprocessing_diagnostics(
         if isinstance(bad_channels, dict)
         else {}
     )
+    qc_summary = (
+        artifact_summary.get("qc", {})
+        if isinstance(artifact_summary, dict)
+        else {}
+    )
+    before_after_qc = (
+        qc_summary.get("before_after", {})
+        if isinstance(qc_summary, dict)
+        else {}
+    )
+    qc_delta = (
+        before_after_qc.get("delta", {})
+        if isinstance(before_after_qc, dict)
+        else {}
+    )
     return {
         "diagnostics_available": bool(written_paths),
         "diagnostics_file_count": len(written_paths),
@@ -2604,6 +2619,19 @@ def _write_preprocessing_diagnostics(
         )
         if isinstance(bad_channel_interpolation, dict)
         and isinstance(bad_channel_interpolation.get("interpolated_channels"), list)
+        else None,
+        "qc_before_after_available": bool(before_after_qc),
+        "qc_bad_channel_count_delta": qc_delta.get("bad_channel_count")
+        if isinstance(qc_delta, dict)
+        else None,
+        "qc_annotation_count_delta": qc_delta.get("annotation_count")
+        if isinstance(qc_delta, dict)
+        else None,
+        "qc_variance_mean_ratio": qc_delta.get("variance_mean_ratio")
+        if isinstance(qc_delta, dict)
+        else None,
+        "qc_psd_total_power_ratio": qc_delta.get("psd_total_power_ratio")
+        if isinstance(qc_delta, dict)
         else None,
     }
 

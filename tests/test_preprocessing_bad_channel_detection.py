@@ -81,9 +81,18 @@ def test_preprocessing_interpolates_manual_bad_channels(tmp_path):
 
     output_raw = mne.io.read_raw_fif(output_path, preload=False, verbose=False)
     artifact_summary = metadata["diagnostics"]["artifact_summary"]
+    before_after = artifact_summary["qc"]["before_after"]
     interpolation = artifact_summary["bad_channels"]["interpolation"]
     assert output_raw.info["bads"] == []
     assert artifact_summary["output"]["bad_channels"] == []
+    assert artifact_summary["qc"]["status"] == "completed"
+    assert before_after["before"]["channel_status"]["bad_channel_count"] == 0
+    assert before_after["after"]["channel_status"]["bad_channel_count"] == 0
+    assert before_after["delta"]["bad_channel_count"] == 0
+    assert before_after["before"]["variance"]["mean_uv2"] is not None
+    assert before_after["after"]["variance"]["mean_uv2"] is not None
+    assert before_after["before"]["psd"]["total_power_uv2"] is not None
+    assert before_after["after"]["psd"]["total_power_uv2"] is not None
     assert interpolation["status"] == "applied"
     assert interpolation["before"] == {
         "bad_channels": ["Cz"],

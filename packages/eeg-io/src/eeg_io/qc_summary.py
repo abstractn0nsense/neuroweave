@@ -98,6 +98,10 @@ def _preprocessing_qc(artifacts: dict[str, ArtifactReference]) -> dict[str, Any]
         "bad_channel_detection": _dict_value(bad_channels, "detection"),
         "bad_channel_interpolation": _dict_value(bad_channels, "interpolation"),
         "artifact_rejection": _dict_value(artifact_summary, "artifact_rejection"),
+        "before_after": _dict_value(
+            _dict_value(artifact_summary, "qc"),
+            "before_after",
+        ),
     }
 
 

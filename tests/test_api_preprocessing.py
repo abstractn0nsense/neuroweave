@@ -191,6 +191,11 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert metadata["artifact_bad_channel_candidate_count"] == 0
     assert metadata["artifact_bad_channel_interpolation_status"] == "not_requested"
     assert metadata["artifact_bad_channel_interpolated_count"] == 0
+    assert metadata["qc_before_after_available"] is True
+    assert metadata["qc_bad_channel_count_delta"] == 0
+    assert metadata["qc_annotation_count_delta"] == 0
+    assert metadata["qc_variance_mean_ratio"] is not None
+    assert metadata["qc_psd_total_power_ratio"] is not None
     assert metadata["worker_schema_version"] == 1
     assert metadata["worker_exit_code"] == 0
 
@@ -346,6 +351,13 @@ def test_create_preprocessing_run_accepts_artifact_aware_contract(
         "bad_channels": [],
         "bad_channel_count": 0,
     }
+    assert payload["output_metadata"]["qc_before_after_available"] is True
+    assert payload["output_metadata"]["qc_bad_channel_count_delta"] == 0
+    assert artifact_summary["qc"]["status"] == "completed"
+    assert artifact_summary["qc"]["before_after"]["before"]["variance"]["mean_uv2"] is not None
+    assert artifact_summary["qc"]["before_after"]["after"]["variance"]["mean_uv2"] is not None
+    assert artifact_summary["qc"]["before_after"]["before"]["psd"]["total_power_uv2"] is not None
+    assert artifact_summary["qc"]["before_after"]["after"]["psd"]["total_power_uv2"] is not None
     assert artifact_summary["ica"]["status"] == "schema_only"
     assert artifact_summary["qc"]["config"]["metrics"] == [
         "channel_status",

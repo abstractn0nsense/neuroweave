@@ -3728,6 +3728,8 @@ function PreprocessingQc({ summary }: { summary: Record<string, unknown> }) {
   const resample = asRecord(summary.resample);
   const channelStatus = asRecord(summary.channel_status);
   const artifactRejection = asRecord(summary.artifact_rejection);
+  const beforeAfter = asRecord(summary.before_after);
+  const delta = asRecord(beforeAfter.delta);
 
   return (
     <div className="qc-section">
@@ -3749,6 +3751,22 @@ function PreprocessingQc({ summary }: { summary: Record<string, unknown> }) {
         <QcMetric
           label="Artifact Reject"
           value={artifactRejection.enabled === true ? "enabled" : "off"}
+        />
+        <QcMetric
+          label="Bad Ch Delta"
+          value={formatSignedNumber(delta.bad_channel_count)}
+        />
+        <QcMetric
+          label="Annotation Delta"
+          value={formatSignedNumber(delta.annotation_count)}
+        />
+        <QcMetric
+          label="Variance Ratio"
+          value={formatRatio(delta.variance_mean_ratio)}
+        />
+        <QcMetric
+          label="PSD Ratio"
+          value={formatRatio(delta.psd_total_power_ratio)}
         />
       </dl>
     </div>
@@ -4935,6 +4953,21 @@ function formatMaybeNumber(value: unknown): string {
   return typeof value === "number" && Number.isFinite(value)
     ? value.toFixed(2)
     : stringValue(value);
+}
+
+function formatSignedNumber(value: unknown): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "-";
+  }
+  const prefix = value > 0 ? "+" : "";
+  return `${prefix}${value.toFixed(2)}`;
+}
+
+function formatRatio(value: unknown): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "-";
+  }
+  return `${value.toFixed(2)}x`;
 }
 
 function getErpConditionLabels(run: ErpRun): string[] {
