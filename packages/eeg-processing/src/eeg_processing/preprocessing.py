@@ -59,6 +59,10 @@ def preprocess_raw_eeg(
                 raw.n_times / input_sampling_rate if input_sampling_rate else 0
             )
             input_artifact_summary = _artifact_summary(raw)
+            _check_cancelled(should_cancel, manual_warnings)
+            bad_channel_detection = _bad_channel_detection_report(raw, config)
+            manual_warnings.extend(bad_channel_detection.get("warnings", []))
+            _check_cancelled(should_cancel, manual_warnings)
 
             if config.high_pass_hz is not None or config.low_pass_hz is not None:
                 _check_cancelled(should_cancel, manual_warnings)
@@ -187,7 +191,10 @@ def preprocess_raw_eeg(
                 "schema_version": config.artifact_schema_version,
                 "input": input_artifact_summary,
                 "output": output_artifact_summary,
-                "bad_channels": _bad_channel_contract_summary(config),
+                "bad_channels": _bad_channel_contract_summary(
+                    config,
+                    detection=bad_channel_detection,
+                ),
                 "artifact_rejection": {
                     "enabled": False,
                     "schema_version": config.artifact_schema_version,
@@ -260,21 +267,18 @@ def _artifact_summary(raw: Any) -> dict[str, Any]:
     }
 
 
-def _bad_channel_contract_summary(config: PreprocessingConfig) -> dict[str, Any]:
+def _bad_channel_contract_summary(
+    config: PreprocessingConfig,
+    *,
+    detection: dict[str, Any],
+) -> dict[str, Any]:
     return {
         "schema_version": config.artifact_schema_version,
         "manual": {
             "channels": list(config.manual_bad_channels),
             "status": "schema_only" if config.manual_bad_channels else "not_requested",
         },
-        "detection": {
-            "config": asdict(config.bad_channel_detection),
-            "status": (
-                "schema_only"
-                if config.bad_channel_detection.enabled
-                else "not_requested"
-            ),
-        },
+        "detection": detection,
         "interpolation": {
             "config": asdict(config.bad_channel_interpolation),
             "status": (
@@ -284,6 +288,148 @@ def _bad_channel_contract_summary(config: PreprocessingConfig) -> dict[str, Any]
             ),
         },
     }
+
+
+def _bad_channel_detection_report(raw: Any, config: PreprocessingConfig) -> dict[str, Any]:
+    detection_config = config.bad_channel_detection
+    base_report: dict[str, Any] = {
+        "schema_version": config.artifact_schema_version,
+        "config": asdict(detection_config),
+        "method": detection_config.method,
+        "status": "not_requested",
+        "candidate_count": 0,
+        "candidates": [],
+        "metrics": {},
+        "warnings": [],
+    }
+    if not detection_config.enabled:
+        return base_report
+
+    method = detection_config.method.lower()
+    if method == "ransac":
+        base_report["status"] = "unsupported"
+        base_report["warnings"] = [
+            "RANSAC bad channel detection requires a later optional dependency path; no candidates were generated."
+        ]
+        return base_report
+    if method not in {"flat", "deviation"}:
+        base_report["status"] = "unsupported"
+        base_report["warnings"] = [
+            f"Unsupported bad channel detection method: {detection_config.method}"
+        ]
+        return base_report
+
+    selected = _eeg_detection_data(raw)
+    if selected is None:
+        base_report["status"] = "no_data"
+        base_report["warnings"] = [
+            "Bad channel detection could not run because no EEG data channels were available."
+        ]
+        return base_report
+
+    channel_names, data = selected
+    import numpy as np
+
+    std_uv = np.std(data, axis=1) * 1_000_000
+    ptp_uv = np.ptp(data, axis=1) * 1_000_000
+    log_std = np.log10(np.maximum(std_uv, 1e-12))
+    zscores = _robust_zscores(log_std)
+    correlations = _channel_correlations(data)
+    zscore_threshold = detection_config.zscore_threshold or 5.0
+    minimum_correlation = detection_config.minimum_correlation
+    flat_threshold_uv = max(float(np.median(ptp_uv)) * 1e-6, 1e-9)
+
+    candidates: list[dict[str, Any]] = []
+    for index, channel_name in enumerate(channel_names):
+        reasons: list[str] = []
+        if ptp_uv[index] <= flat_threshold_uv:
+            reasons.append("flat")
+        if method == "deviation" and abs(float(zscores[index])) >= zscore_threshold:
+            reasons.append("variance_deviation")
+        if (
+            method == "deviation"
+            and minimum_correlation is not None
+            and correlations[index] is not None
+            and correlations[index] < minimum_correlation
+        ):
+            reasons.append("low_correlation")
+        if reasons:
+            candidates.append(
+                {
+                    "channel": channel_name,
+                    "reasons": reasons,
+                    "metrics": {
+                        "std_uv": float(std_uv[index]),
+                        "peak_to_peak_uv": float(ptp_uv[index]),
+                        "log_std_robust_zscore": float(zscores[index]),
+                        "correlation": correlations[index],
+                    },
+                }
+            )
+
+    base_report.update(
+        {
+            "status": "completed",
+            "candidate_count": len(candidates),
+            "candidates": candidates,
+            "metrics": {
+                "channel_count": len(channel_names),
+                "zscore_threshold": zscore_threshold,
+                "minimum_correlation": minimum_correlation,
+                "flat_threshold_uv": flat_threshold_uv,
+            },
+        }
+    )
+    return base_report
+
+
+def _eeg_detection_data(raw: Any) -> tuple[list[str], Any] | None:
+    import mne
+
+    picks = mne.pick_types(
+        raw.info,
+        eeg=True,
+        meg=False,
+        eog=False,
+        ecg=False,
+        stim=False,
+        exclude=[],
+    )
+    if len(picks) == 0:
+        return None
+    channel_names = [raw.ch_names[pick] for pick in picks]
+    return channel_names, raw.get_data(picks=picks)
+
+
+def _robust_zscores(values: Any) -> Any:
+    import numpy as np
+
+    median = float(np.median(values))
+    mad = float(np.median(np.abs(values - median)))
+    if mad > 0:
+        return 0.6745 * (values - median) / mad
+    std = float(np.std(values))
+    if std > 0:
+        return (values - float(np.mean(values))) / std
+    return np.zeros_like(values)
+
+
+def _channel_correlations(data: Any) -> list[float | None]:
+    import numpy as np
+
+    if data.shape[0] < 3:
+        return [None for _ in range(data.shape[0])]
+
+    correlations: list[float | None] = []
+    for index in range(data.shape[0]):
+        peer_data = np.delete(data, index, axis=0)
+        peer_reference = np.median(peer_data, axis=0)
+        if np.std(data[index]) == 0 or np.std(peer_reference) == 0:
+            correlations.append(None)
+            continue
+        value = float(np.corrcoef(data[index], peer_reference)[0, 1])
+        correlations.append(value if np.isfinite(value) else None)
+    return correlations
 
 
 def _ica_contract_summary(config: PreprocessingConfig) -> dict[str, Any]:
@@ -299,10 +445,6 @@ def _artifact_contract_warnings(config: PreprocessingConfig) -> list[str]:
     if config.manual_bad_channels:
         warnings.append(
             "Manual bad channel config was captured but is not applied until Phase B3."
-        )
-    if config.bad_channel_detection.enabled:
-        warnings.append(
-            "Bad channel detection config was captured but is not executed until Phase B2."
         )
     if config.bad_channel_interpolation.enabled:
         warnings.append(

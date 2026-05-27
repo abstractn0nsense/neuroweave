@@ -2552,6 +2552,16 @@ def _write_preprocessing_diagnostics(
         if isinstance(artifact_summary, dict)
         else {}
     )
+    bad_channels = (
+        artifact_summary.get("bad_channels", {})
+        if isinstance(artifact_summary, dict)
+        else {}
+    )
+    bad_channel_detection = (
+        bad_channels.get("detection", {})
+        if isinstance(bad_channels, dict)
+        else {}
+    )
     return {
         "diagnostics_available": bool(written_paths),
         "diagnostics_file_count": len(written_paths),
@@ -2570,6 +2580,14 @@ def _write_preprocessing_diagnostics(
         else None,
         "artifact_annotation_count": output_artifacts.get("annotation_count")
         if isinstance(output_artifacts, dict)
+        else None,
+        "artifact_bad_channel_detection_status": bad_channel_detection.get("status")
+        if isinstance(bad_channel_detection, dict)
+        else None,
+        "artifact_bad_channel_candidate_count": bad_channel_detection.get(
+            "candidate_count"
+        )
+        if isinstance(bad_channel_detection, dict)
         else None,
     }
 

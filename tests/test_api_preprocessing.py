@@ -187,6 +187,8 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert metadata["diagnostics_file_count"] == 3
     assert metadata["artifact_bad_channel_count"] == 0
     assert metadata["artifact_annotation_count"] == 0
+    assert metadata["artifact_bad_channel_detection_status"] == "not_requested"
+    assert metadata["artifact_bad_channel_candidate_count"] == 0
     assert metadata["worker_schema_version"] == 1
     assert metadata["worker_exit_code"] == 0
 
@@ -317,7 +319,12 @@ def test_create_preprocessing_run_accepts_artifact_aware_contract(
     artifact_summary = json.loads(artifact_summary_path.read_text(encoding="utf-8"))
     assert artifact_summary["schema_version"] == 1
     assert artifact_summary["bad_channels"]["manual"]["channels"] == [channel_name]
-    assert artifact_summary["bad_channels"]["detection"]["status"] == "schema_only"
+    assert payload["output_metadata"]["artifact_bad_channel_detection_status"] == (
+        "completed"
+    )
+    assert payload["output_metadata"]["artifact_bad_channel_candidate_count"] == 0
+    assert artifact_summary["bad_channels"]["detection"]["status"] == "completed"
+    assert artifact_summary["bad_channels"]["detection"]["candidate_count"] == 0
     assert artifact_summary["bad_channels"]["interpolation"]["status"] == "schema_only"
     assert artifact_summary["ica"]["status"] == "schema_only"
     assert artifact_summary["qc"]["config"]["metrics"] == [

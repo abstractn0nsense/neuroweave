@@ -159,12 +159,23 @@ type ValidationReport = {
 };
 
 type PreprocessingConfig = {
+  artifact_schema_version: number;
   high_pass_hz: number | null;
   low_pass_hz: number | null;
   notch_hz: number | null;
   resample_hz: number | null;
   reference: string | null;
+  manual_bad_channels: string[];
+  bad_channel_detection: {
+    enabled: boolean;
+    method: "none" | "flat" | "deviation" | "ransac";
+    minimum_correlation: number | null;
+    zscore_threshold: number | null;
+  };
 };
+
+type BadChannelDetectionMethod =
+  PreprocessingConfig["bad_channel_detection"]["method"];
 
 type PreprocessingRun = {
   run_id: string;
@@ -437,6 +448,12 @@ const DEFAULT_PREPROCESSING_CONFIG = {
   notch_hz: "",
   resample_hz: "",
   reference: "average",
+  bad_channel_detection: {
+    enabled: false,
+    method: "deviation",
+    zscore_threshold: "5",
+    minimum_correlation: "",
+  },
 };
 
 const CONDITION_FIELDS = ["trial_type", "stimulus", "response", "correct"] as const;
@@ -2745,6 +2762,93 @@ function IntakeSection({
               <option value="average">Average</option>
             </select>
           </label>
+          <label>
+            <span>Bad-channel report</span>
+            <input
+              checked={preprocessingConfig.bad_channel_detection.enabled}
+              disabled={!canContinue}
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  bad_channel_detection: {
+                    ...preprocessingConfig.bad_channel_detection,
+                    enabled: event.target.checked,
+                  },
+                })
+              }
+              type="checkbox"
+            />
+          </label>
+          <label>
+            <span>Detection method</span>
+            <select
+              disabled={
+                !canContinue || !preprocessingConfig.bad_channel_detection.enabled
+              }
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  bad_channel_detection: {
+                    ...preprocessingConfig.bad_channel_detection,
+                    method: event.target.value,
+                  },
+                })
+              }
+              value={preprocessingConfig.bad_channel_detection.method}
+            >
+              <option value="deviation">Deviation</option>
+              <option value="flat">Flat</option>
+              <option value="ransac">RANSAC</option>
+            </select>
+          </label>
+          <label>
+            <span>Z-score threshold</span>
+            <input
+              disabled={
+                !canContinue ||
+                !preprocessingConfig.bad_channel_detection.enabled ||
+                preprocessingConfig.bad_channel_detection.method === "flat"
+              }
+              min="0.1"
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  bad_channel_detection: {
+                    ...preprocessingConfig.bad_channel_detection,
+                    zscore_threshold: event.target.value,
+                  },
+                })
+              }
+              step="0.1"
+              type="number"
+              value={preprocessingConfig.bad_channel_detection.zscore_threshold}
+            />
+          </label>
+          <label>
+            <span>Min correlation</span>
+            <input
+              disabled={
+                !canContinue ||
+                !preprocessingConfig.bad_channel_detection.enabled ||
+                preprocessingConfig.bad_channel_detection.method !== "deviation"
+              }
+              max="1"
+              min="0"
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  bad_channel_detection: {
+                    ...preprocessingConfig.bad_channel_detection,
+                    minimum_correlation: event.target.value,
+                  },
+                })
+              }
+              placeholder="Optional"
+              step="0.05"
+              type="number"
+              value={preprocessingConfig.bad_channel_detection.minimum_correlation}
+            />
+          </label>
         </div>
         <button
           className="primary-button"
@@ -4414,12 +4518,27 @@ function parseRowFilterConditions(value: string): EventRowFilterCondition[] {
 function normalizePreprocessingConfig(
   config: typeof DEFAULT_PREPROCESSING_CONFIG,
 ): PreprocessingConfig {
+  const detectionEnabled = config.bad_channel_detection.enabled;
   return {
+    artifact_schema_version: 1,
     high_pass_hz: parseOptionalNumber(config.high_pass_hz),
     low_pass_hz: parseOptionalNumber(config.low_pass_hz),
     notch_hz: parseOptionalNumber(config.notch_hz),
     resample_hz: parseOptionalNumber(config.resample_hz),
     reference: config.reference || null,
+    manual_bad_channels: [],
+    bad_channel_detection: {
+      enabled: detectionEnabled,
+      method: detectionEnabled
+        ? (config.bad_channel_detection.method as BadChannelDetectionMethod)
+        : "none",
+      minimum_correlation: detectionEnabled
+        ? parseOptionalNumber(config.bad_channel_detection.minimum_correlation)
+        : null,
+      zscore_threshold: detectionEnabled
+        ? parseOptionalNumber(config.bad_channel_detection.zscore_threshold)
+        : null,
+    },
   };
 }
 
@@ -4475,6 +4594,12 @@ function getPreprocessingConfigError(
   const lowPass = parseOptionalNumber(config.low_pass_hz);
   const notch = parseOptionalNumber(config.notch_hz);
   const resample = parseOptionalNumber(config.resample_hz);
+  const zscore = parseOptionalNumber(
+    config.bad_channel_detection.zscore_threshold,
+  );
+  const minimumCorrelation = parseOptionalNumber(
+    config.bad_channel_detection.minimum_correlation,
+  );
 
   for (const [label, value] of [
     ["High-pass", highPass],
@@ -4501,6 +4626,27 @@ function getPreprocessingConfigError(
 
   if (highPass !== null && lowPass !== null && highPass >= lowPass) {
     return "High-pass must be lower than low-pass.";
+  }
+
+  if (config.bad_channel_detection.enabled) {
+    if (
+      !["flat", "deviation", "ransac"].includes(
+        config.bad_channel_detection.method,
+      )
+    ) {
+      return "Select a supported bad-channel detection method.";
+    }
+    if (zscore !== null && (!Number.isFinite(zscore) || zscore <= 0)) {
+      return "Bad-channel z-score threshold must be greater than 0.";
+    }
+    if (
+      minimumCorrelation !== null &&
+      (!Number.isFinite(minimumCorrelation) ||
+        minimumCorrelation < 0 ||
+        minimumCorrelation > 1)
+    ) {
+      return "Bad-channel minimum correlation must be between 0 and 1.";
+    }
   }
 
   return null;

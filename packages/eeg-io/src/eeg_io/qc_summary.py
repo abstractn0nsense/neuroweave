@@ -79,6 +79,7 @@ def _preprocessing_qc(artifacts: dict[str, ArtifactReference]) -> dict[str, Any]
 
     output_artifact = _dict_value(artifact_summary, "output")
     input_artifact = _dict_value(artifact_summary, "input")
+    bad_channels = _dict_value(artifact_summary, "bad_channels")
     return {
         "summary": preprocessing_summary,
         "filters": {
@@ -94,6 +95,7 @@ def _preprocessing_qc(artifacts: dict[str, ArtifactReference]) -> dict[str, Any]
             "output_bad_channels": output_artifact.get("bad_channels", []),
             "output_bad_channel_count": output_artifact.get("bad_channel_count", 0),
         },
+        "bad_channel_detection": _dict_value(bad_channels, "detection"),
         "artifact_rejection": _dict_value(artifact_summary, "artifact_rejection"),
     }
 

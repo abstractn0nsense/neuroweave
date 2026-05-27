@@ -63,18 +63,26 @@ Allowed methods:
 Channel-list fields must reference uploaded recording channel names. The API
 rejects unknown channels before queueing a run.
 
-## Phase B1 Execution Status
+## Phase B2 Execution Status
 
-B1 stores and transports the contract, but does not apply artifact operations.
-When artifact-aware fields are requested, preprocessing keeps the run
-reproducible and records an explicit warning that execution is deferred to the
-later B subphase:
+B2 executes automatic bad-channel detection in report-only mode. It records
+candidates and metrics in diagnostics, but does not mutate `raw.info["bads"]`,
+interpolate channels, or remove data. Other artifact-aware fields remain
+schema-only until later B subphases:
 
-- B2: bad channel detection
 - B3: manual bad channel marking
 - B4: interpolation
 - B6: EOG/ECG artifact handling
 - B7: ICA
+
+Bad-channel detection methods:
+
+- `flat`: marks channels with near-zero peak-to-peak amplitude.
+- `deviation`: marks flat channels and channels whose log standard deviation is
+  outside the robust z-score threshold. If `minimum_correlation` is set, it also
+  marks channels with low correlation to the median of peer EEG channels.
+- `ransac`: accepted by the contract, but currently reports `unsupported`
+  without candidates because the optional dependency path is deferred.
 
 ## Diagnostics
 
@@ -104,12 +112,32 @@ enabled. This gives the UI, export bundle, and future QC views a stable schema.
     },
     "detection": {
       "config": {
-        "enabled": false,
-        "method": "none",
+        "enabled": true,
+        "method": "deviation",
         "minimum_correlation": null,
-        "zscore_threshold": null
+        "zscore_threshold": 5.0
       },
-      "status": "not_requested"
+      "method": "deviation",
+      "status": "completed",
+      "candidate_count": 1,
+      "candidates": [
+        {
+          "channel": "Fp1",
+          "reasons": ["variance_deviation"],
+          "metrics": {
+            "std_uv": 184.2,
+            "peak_to_peak_uv": 1030.5,
+            "log_std_robust_zscore": 6.4,
+            "correlation": 0.12
+          }
+        }
+      ],
+      "metrics": {
+        "channel_count": 64,
+        "zscore_threshold": 5.0,
+        "minimum_correlation": null,
+        "flat_threshold_uv": 0.000001
+      }
     },
     "interpolation": {
       "config": {
