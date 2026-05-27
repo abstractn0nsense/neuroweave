@@ -62,8 +62,10 @@ POST /datasets/{dataset_id}/erp-runs
 GET /datasets/{dataset_id}/erp-runs
 GET /erp-runs/{run_id}
 POST /workflow-templates
+POST /workflow-templates/from-run
 GET /workflow-templates
 GET /workflow-templates/{template_id}
+POST /workflow-templates/{template_id}/apply-preview
 DELETE /workflow-templates/{template_id}
 POST /erp-runs/{run_id}/comparison-summary
 ```
@@ -81,6 +83,12 @@ deletes versioned `WorkflowTemplate` JSON. Template validation rejects
 subject-specific fields such as `manual_bad_channels` and
 `ica.exclude_components`, while channel-specific fields are reported as stale
 unless they are marked for review.
+`POST /workflow-templates/from-run` creates a reusable template from completed
+preprocessing, epoch, or ERP runs. Source run bindings and subject-specific
+fields are excluded from reusable config. `POST
+/workflow-templates/{template_id}/apply-preview` dry-runs a template against a
+target dataset and returns the resolved config, errors, warnings, excluded
+fields, and review-required fields without queueing work.
 
 Preprocessing config validation rejects invalid filter ordering, cutoff frequencies at or above Nyquist, upsampling beyond the input sampling rate, and custom reference channels that do not exist in the uploaded recording.
 

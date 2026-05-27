@@ -813,6 +813,42 @@ class WorkflowTemplatesResponse(BaseModel):
     templates: list[WorkflowTemplateResponse]
 
 
+class WorkflowTemplateFromRunRequest(BaseModel):
+    template_id: str | None = None
+    name: str
+    description: str | None = None
+    preprocessing_run_id: str | None = None
+    epoch_run_id: str | None = None
+    erp_run_id: str | None = None
+    notes: list[str] = Field(default_factory=list)
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkflowTemplateSubjectOverridesPayload(BaseModel):
+    manual_bad_channels: list[str] = Field(default_factory=list)
+    ica_exclude_components: list[int] = Field(default_factory=list)
+
+
+class WorkflowTemplateApplyPreviewRequest(BaseModel):
+    target_dataset_id: str
+    preprocessing_run_id: str | None = None
+    epoch_run_id: str | None = None
+    subject_overrides: WorkflowTemplateSubjectOverridesPayload = Field(
+        default_factory=WorkflowTemplateSubjectOverridesPayload
+    )
+
+
+class WorkflowTemplateApplyPreviewResponse(BaseModel):
+    template_id: str
+    target_dataset_id: str
+    status: Literal["ready", "requires_review", "invalid"]
+    configs: WorkflowTemplateWorkflowPayload
+    excluded_fields: list[WorkflowTemplateFieldPolicyEntryPayload]
+    review_required_fields: list[WorkflowTemplateFieldPolicyEntryPayload]
+    errors: list[str]
+    warnings: list[str]
+
+
 class QcSummaryResponse(BaseModel):
     dataset_id: str
     run_id: str
@@ -1629,6 +1665,38 @@ def save_workflow_template(
     return _workflow_template_response(saved_template)
 
 
+@app.post(
+    "/workflow-templates/from-run",
+    response_model=WorkflowTemplateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_workflow_template_from_run(
+    request: WorkflowTemplateFromRunRequest,
+) -> WorkflowTemplateResponse:
+    template_id = request.template_id or _new_id("template")
+    if not (
+        request.preprocessing_run_id
+        or request.epoch_run_id
+        or request.erp_run_id
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="At least one source run id is required.",
+        )
+
+    try:
+        template = _workflow_template_from_completed_runs(
+            request=request,
+            template_id=template_id,
+            created_at_utc=_utc_now_iso(),
+            updated_at_utc=_utc_now_iso(),
+        )
+        saved_template = template_repository.save_template(template)
+    except JsonRegistryError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _workflow_template_response(saved_template)
+
+
 @app.get(
     "/workflow-templates",
     response_model=WorkflowTemplatesResponse,
@@ -1651,6 +1719,29 @@ def get_workflow_template(template_id: str) -> WorkflowTemplateResponse:
     if template is None:
         raise HTTPException(status_code=404, detail="Workflow template not found")
     return _workflow_template_response(template)
+
+
+@app.post(
+    "/workflow-templates/{template_id}/apply-preview",
+    response_model=WorkflowTemplateApplyPreviewResponse,
+)
+def preview_workflow_template_apply(
+    template_id: str,
+    request: WorkflowTemplateApplyPreviewRequest,
+) -> WorkflowTemplateApplyPreviewResponse:
+    template = template_repository.get_template(template_id)
+    if template is None:
+        raise HTTPException(status_code=404, detail="Workflow template not found")
+
+    dataset = registry_repository.get_dataset(request.target_dataset_id)
+    if dataset is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    return _workflow_template_apply_preview(
+        template=template,
+        request=request,
+        dataset=dataset,
+    )
 
 
 @app.delete(
@@ -2205,6 +2296,629 @@ def _workflow_template_field_policy_from_payload(
         ],
         channel_specific_fields=list(payload.channel_specific_fields),
     )
+
+
+def _workflow_template_from_completed_runs(
+    *,
+    request: WorkflowTemplateFromRunRequest,
+    template_id: str,
+    created_at_utc: str,
+    updated_at_utc: str,
+) -> WorkflowTemplate:
+    erp_run = (
+        _completed_erp_run_or_error(request.erp_run_id)
+        if request.erp_run_id
+        else None
+    )
+    epoch_run_id = request.epoch_run_id
+    if epoch_run_id is None and erp_run is not None:
+        epoch_run_id = erp_run.config.epoch_run_id
+    epoch_run = (
+        _completed_epoch_run_or_error(epoch_run_id)
+        if epoch_run_id
+        else None
+    )
+    preprocessing_run_id = request.preprocessing_run_id
+    if preprocessing_run_id is None and epoch_run is not None:
+        preprocessing_run_id = epoch_run.config.preprocessing_run_id
+    preprocessing_run = (
+        _completed_preprocessing_run_or_error(preprocessing_run_id)
+        if preprocessing_run_id
+        else None
+    )
+
+    if erp_run is not None and epoch_run is not None:
+        if erp_run.dataset_id != epoch_run.dataset_id:
+            raise HTTPException(
+                status_code=422,
+                detail="ERP and epoch source runs must belong to the same dataset.",
+            )
+    if epoch_run is not None and preprocessing_run is not None:
+        if epoch_run.dataset_id != preprocessing_run.dataset_id:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Epoch and preprocessing source runs must belong to the same "
+                    "dataset."
+                ),
+            )
+
+    workflow = WorkflowTemplateWorkflow(
+        preprocessing=(
+            _template_preprocessing_config_from_run(preprocessing_run)
+            if preprocessing_run is not None
+            else None
+        ),
+        epoch=(
+            _template_epoch_config_from_run(epoch_run)
+            if epoch_run is not None
+            else None
+        ),
+        erp=(
+            _template_erp_config_from_run(erp_run)
+            if erp_run is not None
+            else None
+        ),
+    )
+    field_policy = _template_field_policy_from_source_runs(
+        preprocessing_run=preprocessing_run,
+        epoch_run=epoch_run,
+        erp_run=erp_run,
+    )
+    created_from = WorkflowTemplateCreatedFrom(
+        dataset_id=_template_source_dataset_id(
+            preprocessing_run=preprocessing_run,
+            epoch_run=epoch_run,
+            erp_run=erp_run,
+        ),
+        preprocessing_run_id=preprocessing_run.run_id
+        if preprocessing_run is not None
+        else None,
+        epoch_run_id=epoch_run.run_id if epoch_run is not None else None,
+        erp_run_id=erp_run.run_id if erp_run is not None else None,
+    )
+    return WorkflowTemplate(
+        template_id=template_id,
+        name=request.name,
+        description=request.description,
+        created_at_utc=created_at_utc,
+        updated_at_utc=updated_at_utc,
+        created_from=created_from,
+        compatibility=WorkflowTemplateCompatibility(
+            requires_event_log=epoch_run is not None,
+            requires_completed_preprocessing=False,
+            requires_completed_epoch=False,
+        ),
+        workflow=workflow,
+        field_policy=field_policy,
+        notes=list(request.notes),
+        extra=dict(request.extra),
+    )
+
+
+def _completed_preprocessing_run_or_error(run_id: str) -> PreprocessingRun:
+    run = run_repository.get_preprocessing_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Preprocessing run not found")
+    if run.status != PreprocessingRunStatus.COMPLETED:
+        raise HTTPException(
+            status_code=409,
+            detail="Preprocessing run must be completed before template creation.",
+        )
+    return run
+
+
+def _completed_epoch_run_or_error(run_id: str) -> EpochRun:
+    run = run_repository.get_epoch_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Epoch run not found")
+    if run.status != EpochRunStatus.COMPLETED:
+        raise HTTPException(
+            status_code=409,
+            detail="Epoch run must be completed before template creation.",
+        )
+    return run
+
+
+def _completed_erp_run_or_error(run_id: str) -> ErpRun:
+    run = run_repository.get_erp_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="ERP run not found")
+    if run.status != ErpRunStatus.COMPLETED:
+        raise HTTPException(
+            status_code=409,
+            detail="ERP run must be completed before template creation.",
+        )
+    return run
+
+
+def _template_preprocessing_config_from_run(
+    run: PreprocessingRun,
+) -> PreprocessingConfig:
+    config = run.config
+    return replace(
+        config,
+        manual_bad_channels=[],
+        ica=replace(config.ica, exclude_components=[]),
+    )
+
+
+def _template_epoch_config_from_run(
+    run: EpochRun,
+) -> WorkflowTemplateEpochConfig:
+    config = run.config
+    return WorkflowTemplateEpochConfig(
+        condition_field=config.condition_field,
+        tmin_seconds=config.tmin_seconds,
+        tmax_seconds=config.tmax_seconds,
+        baseline_start_seconds=config.baseline_start_seconds,
+        baseline_end_seconds=config.baseline_end_seconds,
+        reject_eeg_uv=config.reject_eeg_uv,
+    )
+
+
+def _template_erp_config_from_run(
+    run: ErpRun,
+) -> WorkflowTemplateErpConfig:
+    config = run.config
+    return WorkflowTemplateErpConfig(
+        conditions=list(config.conditions) if config.conditions is not None else None,
+        picks=list(config.picks) if config.picks is not None else None,
+        method=config.method,
+        plot_mode=config.plot_mode,
+        plot_channel=config.plot_channel,
+    )
+
+
+def _template_field_policy_from_source_runs(
+    *,
+    preprocessing_run: PreprocessingRun | None,
+    epoch_run: EpochRun | None,
+    erp_run: ErpRun | None,
+) -> WorkflowTemplateFieldPolicy:
+    excluded_fields: list[WorkflowTemplateFieldPolicyEntry] = []
+    review_required_fields: list[WorkflowTemplateFieldPolicyEntry] = []
+    channel_specific_fields: list[str] = []
+
+    if preprocessing_run is not None:
+        config = preprocessing_run.config
+        if config.manual_bad_channels:
+            excluded_fields.append(
+                WorkflowTemplateFieldPolicyEntry(
+                    path="workflow.preprocessing.manual_bad_channels",
+                    reason="subject_specific",
+                    source_value_summary=(
+                        f"{len(config.manual_bad_channels)} channel(s) omitted "
+                        "by default"
+                    ),
+                    default_action="omit",
+                )
+            )
+        if config.ica.exclude_components:
+            excluded_fields.append(
+                WorkflowTemplateFieldPolicyEntry(
+                    path="workflow.preprocessing.ica.exclude_components",
+                    reason="subject_specific_review_decision",
+                    source_value_summary=(
+                        f"{len(config.ica.exclude_components)} component(s) omitted "
+                        "by default"
+                    ),
+                    default_action="omit",
+                )
+            )
+        for path, values in (
+            ("workflow.preprocessing.ica.eog_channels", config.ica.eog_channels),
+            ("workflow.preprocessing.ica.ecg_channels", config.ica.ecg_channels),
+            (
+                "workflow.preprocessing.artifact_handling.eog_channels",
+                config.artifact_handling.eog_channels,
+            ),
+            (
+                "workflow.preprocessing.artifact_handling.ecg_channels",
+                config.artifact_handling.ecg_channels,
+            ),
+        ):
+            if values:
+                channel_specific_fields.append(path)
+                review_required_fields.append(
+                    WorkflowTemplateFieldPolicyEntry(
+                        path=path,
+                        reason="channel_specific",
+                        source_value=list(values),
+                        default_action="validate_against_target_channels",
+                    )
+                )
+
+    if epoch_run is not None:
+        excluded_fields.append(
+            WorkflowTemplateFieldPolicyEntry(
+                path="workflow.epoch.preprocessing_run_id",
+                reason="source_run_binding",
+                source_value=epoch_run.config.preprocessing_run_id,
+                default_action="bind_at_apply_time",
+            )
+        )
+
+    if erp_run is not None:
+        excluded_fields.append(
+            WorkflowTemplateFieldPolicyEntry(
+                path="workflow.erp.epoch_run_id",
+                reason="source_run_binding",
+                source_value=erp_run.config.epoch_run_id,
+                default_action="bind_at_apply_time",
+            )
+        )
+        config = erp_run.config
+        if config.picks:
+            channel_specific_fields.append("workflow.erp.picks")
+            review_required_fields.append(
+                WorkflowTemplateFieldPolicyEntry(
+                    path="workflow.erp.picks",
+                    reason="channel_specific",
+                    source_value=list(config.picks),
+                    default_action="validate_against_target_channels",
+                )
+            )
+        if config.plot_channel:
+            channel_specific_fields.append("workflow.erp.plot_channel")
+            review_required_fields.append(
+                WorkflowTemplateFieldPolicyEntry(
+                    path="workflow.erp.plot_channel",
+                    reason="channel_specific",
+                    source_value=config.plot_channel,
+                    default_action="validate_against_target_channels",
+                )
+            )
+
+    return WorkflowTemplateFieldPolicy(
+        excluded_fields=excluded_fields,
+        review_required_fields=review_required_fields,
+        channel_specific_fields=list(dict.fromkeys(channel_specific_fields)),
+    )
+
+
+def _template_source_dataset_id(
+    *,
+    preprocessing_run: PreprocessingRun | None,
+    epoch_run: EpochRun | None,
+    erp_run: ErpRun | None,
+) -> str | None:
+    for run in (erp_run, epoch_run, preprocessing_run):
+        if run is not None:
+            return run.dataset_id
+    return None
+
+
+def _workflow_template_apply_preview(
+    *,
+    template: WorkflowTemplate,
+    request: WorkflowTemplateApplyPreviewRequest,
+    dataset: IngestionDataset,
+) -> WorkflowTemplateApplyPreviewResponse:
+    errors: list[str] = []
+    warnings: list[str] = []
+    template_validation = validate_workflow_template(template)
+    errors.extend(template_validation.errors)
+    warnings.extend(template_validation.warnings)
+
+    workflow = template.workflow
+    preprocessing_config = (
+        _apply_subject_overrides_to_preprocessing_config(
+            workflow.preprocessing,
+            request.subject_overrides,
+        )
+        if workflow.preprocessing is not None
+        else None
+    )
+    recording = registry_repository.get_recording(dataset.dataset_id)
+    event_log = registry_repository.get_event_log(dataset.dataset_id)
+    preprocessing_run = _preview_preprocessing_binding(
+        dataset_id=dataset.dataset_id,
+        requested_run_id=request.preprocessing_run_id,
+    )
+    epoch_run = _preview_epoch_binding(
+        dataset_id=dataset.dataset_id,
+        requested_run_id=request.epoch_run_id,
+    )
+
+    if preprocessing_config is not None:
+        if recording is None:
+            errors.append("Recording metadata is required before preprocessing.")
+        else:
+            errors.extend(_validate_preprocessing_config(preprocessing_config, recording))
+
+    if workflow.epoch is not None:
+        epoch_errors, epoch_warnings = _validate_template_epoch_preview(
+            config=workflow.epoch,
+            dataset=dataset,
+            preprocessing_run=preprocessing_run,
+            event_log=event_log,
+            recording=recording,
+            has_planned_preprocessing=preprocessing_config is not None,
+        )
+        errors.extend(epoch_errors)
+        warnings.extend(epoch_warnings)
+
+    if workflow.erp is not None:
+        erp_errors, erp_warnings = _validate_template_erp_preview(
+            config=workflow.erp,
+            dataset_id=dataset.dataset_id,
+            epoch_run=epoch_run,
+            has_planned_epoch=workflow.epoch is not None,
+            recording=recording,
+        )
+        errors.extend(erp_errors)
+        warnings.extend(erp_warnings)
+
+    review_required = list(template.field_policy.review_required_fields)
+    stale_reasons = list(template_validation.stale_reasons)
+    if errors:
+        status_value = "invalid"
+    elif review_required or stale_reasons:
+        status_value = "requires_review"
+    else:
+        status_value = "ready"
+
+    return WorkflowTemplateApplyPreviewResponse(
+        template_id=template.template_id,
+        target_dataset_id=dataset.dataset_id,
+        status=status_value,
+        configs=_workflow_template_workflow_payload(
+            WorkflowTemplateWorkflow(
+                preprocessing=preprocessing_config,
+                epoch=workflow.epoch,
+                erp=workflow.erp,
+            )
+        ),
+        excluded_fields=[
+            WorkflowTemplateFieldPolicyEntryPayload(**asdict(entry))
+            for entry in template.field_policy.excluded_fields
+        ],
+        review_required_fields=[
+            WorkflowTemplateFieldPolicyEntryPayload(**asdict(entry))
+            for entry in review_required
+        ],
+        errors=_unique_strings(errors),
+        warnings=_unique_strings(warnings),
+    )
+
+
+def _apply_subject_overrides_to_preprocessing_config(
+    config: PreprocessingConfig | None,
+    overrides: WorkflowTemplateSubjectOverridesPayload,
+) -> PreprocessingConfig | None:
+    if config is None:
+        return None
+    return replace(
+        config,
+        manual_bad_channels=list(overrides.manual_bad_channels),
+        ica=replace(
+            config.ica,
+            exclude_components=list(overrides.ica_exclude_components),
+        ),
+    )
+
+
+def _preview_preprocessing_binding(
+    *,
+    dataset_id: str,
+    requested_run_id: str | None,
+) -> PreprocessingRun | None:
+    if requested_run_id:
+        return run_repository.get_preprocessing_run(requested_run_id)
+    completed_runs = [
+        run
+        for run in run_repository.list_preprocessing_runs(dataset_id=dataset_id)
+        if run.status == PreprocessingRunStatus.COMPLETED
+    ]
+    return _latest_completed_run(completed_runs)
+
+
+def _preview_epoch_binding(
+    *,
+    dataset_id: str,
+    requested_run_id: str | None,
+) -> EpochRun | None:
+    if requested_run_id:
+        return run_repository.get_epoch_run(requested_run_id)
+    completed_runs = [
+        run
+        for run in run_repository.list_epoch_runs(dataset_id=dataset_id)
+        if run.status == EpochRunStatus.COMPLETED
+    ]
+    return _latest_completed_run(completed_runs)
+
+
+def _latest_completed_run(
+    runs: list[PreprocessingRun] | list[EpochRun],
+) -> PreprocessingRun | EpochRun | None:
+    if not runs:
+        return None
+    return sorted(runs, key=lambda run: run.finished_at_utc or run.run_id)[-1]
+
+
+def _validate_template_epoch_preview(
+    *,
+    config: WorkflowTemplateEpochConfig,
+    dataset: IngestionDataset,
+    preprocessing_run: PreprocessingRun | None,
+    event_log: EventLog | None,
+    recording: Recording | None,
+    has_planned_preprocessing: bool,
+) -> tuple[list[str], list[str]]:
+    if preprocessing_run is not None:
+        return _validate_epoch_config(
+            config=EpochConfig(
+                preprocessing_run_id=preprocessing_run.run_id,
+                condition_field=config.condition_field,
+                tmin_seconds=config.tmin_seconds,
+                tmax_seconds=config.tmax_seconds,
+                baseline_start_seconds=config.baseline_start_seconds,
+                baseline_end_seconds=config.baseline_end_seconds,
+                reject_eeg_uv=config.reject_eeg_uv,
+            ),
+            dataset=dataset,
+            preprocessing_run=preprocessing_run,
+            event_log=event_log,
+            recording=recording,
+        )
+
+    errors, warnings = _validate_template_epoch_config_basics(
+        config=config,
+        dataset=dataset,
+        event_log=event_log,
+        recording=recording,
+    )
+    if has_planned_preprocessing and not errors:
+        warnings.append(
+            "Epoch run binding will be resolved after template preprocessing completes."
+        )
+    elif not errors:
+        errors.append(
+            "A completed preprocessing run is required before applying epoch config."
+        )
+    return errors, warnings
+
+
+def _validate_template_epoch_config_basics(
+    *,
+    config: WorkflowTemplateEpochConfig,
+    dataset: IngestionDataset,
+    event_log: EventLog | None,
+    recording: Recording | None,
+) -> tuple[list[str], list[str]]:
+    errors: list[str] = []
+    warnings: list[str] = []
+    if dataset.status != DatasetStatus.VALID:
+        errors.append("Dataset must be valid before epoching.")
+    if event_log is None or not event_log.events:
+        errors.append("Dataset must have mapped events before epoching.")
+    if recording is None:
+        errors.append("Recording metadata is required before epoching.")
+    if config.tmin_seconds >= config.tmax_seconds:
+        errors.append("tmin_seconds must be lower than tmax_seconds.")
+    if config.tmax_seconds <= 0:
+        errors.append("tmax_seconds must be greater than 0.")
+    errors.extend(
+        _validate_epoch_baseline(
+            EpochConfig(
+                preprocessing_run_id="preview",
+                condition_field=config.condition_field,
+                tmin_seconds=config.tmin_seconds,
+                tmax_seconds=config.tmax_seconds,
+                baseline_start_seconds=config.baseline_start_seconds,
+                baseline_end_seconds=config.baseline_end_seconds,
+                reject_eeg_uv=config.reject_eeg_uv,
+            )
+        )
+    )
+    if config.condition_field not in SUPPORTED_CONDITION_FIELDS:
+        errors.append(f"Unsupported condition field: {config.condition_field}.")
+    if config.reject_eeg_uv is not None and config.reject_eeg_uv <= 0:
+        errors.append("reject_eeg_uv must be greater than 0.")
+    if errors:
+        return errors, warnings
+
+    assert event_log is not None
+    candidate_events = [
+        event
+        for event in event_log.events
+        if _epoch_condition_label(getattr(event, config.condition_field)) is not None
+    ]
+    if not candidate_events:
+        return [
+            f"No usable events found for condition field: {config.condition_field}."
+        ], warnings
+    assert recording is not None
+    out_of_bounds_count = 0
+    for event in candidate_events:
+        start_seconds = event.onset_seconds + config.tmin_seconds
+        end_seconds = event.onset_seconds + config.tmax_seconds
+        if start_seconds < 0 or end_seconds > recording.metadata.duration_seconds:
+            out_of_bounds_count += 1
+    if out_of_bounds_count == len(candidate_events):
+        return ["All candidate epoch windows are outside the recording bounds."], warnings
+    if out_of_bounds_count:
+        warnings.append(
+            f"{out_of_bounds_count} candidate events fall outside the epoch window bounds and will be skipped."
+        )
+    return errors, warnings
+
+
+def _validate_template_erp_preview(
+    *,
+    config: WorkflowTemplateErpConfig,
+    dataset_id: str,
+    epoch_run: EpochRun | None,
+    has_planned_epoch: bool,
+    recording: Recording | None,
+) -> tuple[list[str], list[str]]:
+    if epoch_run is not None:
+        return _validate_erp_config(
+            config=ErpConfig(
+                epoch_run_id=epoch_run.run_id,
+                conditions=config.conditions,
+                picks=config.picks,
+                method=config.method,
+                plot_mode=config.plot_mode,
+                plot_channel=config.plot_channel,
+            ),
+            dataset_id=dataset_id,
+            epoch_run=epoch_run,
+        )
+
+    errors, warnings = _validate_template_erp_config_basics(
+        config=config,
+        recording=recording,
+    )
+    if has_planned_epoch and not errors:
+        warnings.append(
+            "ERP run binding will be resolved after template epoching completes."
+        )
+    elif not errors:
+        errors.append("A completed epoch run is required before applying ERP config.")
+    return errors, warnings
+
+
+def _validate_template_erp_config_basics(
+    *,
+    config: WorkflowTemplateErpConfig,
+    recording: Recording | None,
+) -> tuple[list[str], list[str]]:
+    errors: list[str] = []
+    warnings: list[str] = []
+    if config.method != "mean":
+        errors.append("ERP method must be 'mean'.")
+    if config.plot_mode not in {"gfp", "channel"}:
+        errors.append("ERP plot_mode must be 'gfp' or 'channel'.")
+    if config.plot_mode == "channel" and not config.plot_channel:
+        errors.append("ERP plot_channel is required when plot_mode is 'channel'.")
+    if config.conditions is not None:
+        conditions = [condition.strip() for condition in config.conditions]
+        if not all(conditions):
+            errors.append("ERP condition labels must not be empty.")
+        if len(set(conditions)) != len(conditions):
+            errors.append("ERP condition labels must be unique.")
+    channel_names = set(recording.metadata.channel_names) if recording is not None else set()
+    if config.picks is not None:
+        picks = [pick.strip() for pick in config.picks]
+        if not all(picks):
+            errors.append("ERP picks must not be empty.")
+        if len(set(picks)) != len(picks):
+            errors.append("ERP picks must be unique.")
+        if channel_names:
+            missing = [pick for pick in picks if pick not in channel_names]
+            if missing:
+                errors.append("ERP picks contain unknown channels: " + ", ".join(missing))
+    if config.plot_channel and channel_names and config.plot_channel not in channel_names:
+        errors.append(
+            "ERP plot_channel contains an unknown channel: " + config.plot_channel
+        )
+    return errors, warnings
+
+
+def _unique_strings(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(values))
 
 
 def _run_diagnostics_response(diagnostics: dict) -> RunDiagnosticsResponse | dict:

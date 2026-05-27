@@ -1,10 +1,52 @@
 from fastapi.testclient import TestClient
 
 from apps.api import main as api_main
-from eeg_io.registry import JsonWorkflowTemplateRepository
+from eeg_core.domain import (
+    Dataset,
+    DatasetStatus,
+    EpochConfig,
+    EpochRun,
+    EpochRunStatus,
+    ErpConfig,
+    ErpRun,
+    ErpRunStatus,
+    EventColumnMapping,
+    EventLog,
+    IcaConfig,
+    NormalizedEvent,
+    PreprocessingConfig,
+    PreprocessingRun,
+    PreprocessingRunStatus,
+    Recording,
+    RecordingMetadata,
+)
+from eeg_io.registry import (
+    JsonRegistryRepository,
+    JsonRunRepository,
+    JsonWorkflowTemplateRepository,
+)
 
 
 def _client_with_template_repository(tmp_path, monkeypatch) -> TestClient:
+    monkeypatch.setattr(
+        api_main,
+        "template_repository",
+        JsonWorkflowTemplateRepository(tmp_path / "templates"),
+    )
+    return TestClient(api_main.app)
+
+
+def _client_with_repositories(tmp_path, monkeypatch) -> TestClient:
+    monkeypatch.setattr(
+        api_main,
+        "registry_repository",
+        JsonRegistryRepository(tmp_path / "uploads"),
+    )
+    monkeypatch.setattr(
+        api_main,
+        "run_repository",
+        JsonRunRepository(tmp_path / "runs"),
+    )
     monkeypatch.setattr(
         api_main,
         "template_repository",
@@ -70,6 +112,135 @@ def _template_payload(**overrides) -> dict:
     }
     payload.update(overrides)
     return payload
+
+
+def _seed_dataset(
+    dataset_id: str = "dataset-001",
+    *,
+    status: DatasetStatus = DatasetStatus.VALID,
+    channel_names: list[str] | None = None,
+) -> None:
+    channels = channel_names or ["Fp1", "Fp2", "VEOG", "Cz"]
+    api_main.registry_repository.save_dataset(
+        Dataset(
+            dataset_id=dataset_id,
+            project_id="project-001",
+            experiment_id="experiment-001",
+            participant_id="participant-001",
+            session_id="session-001",
+            status=status,
+            recording_id="recording-001",
+            event_log_id="event-log-001",
+        )
+    )
+    api_main.registry_repository.save_recording(
+        Recording(
+            recording_id="recording-001",
+            dataset_id=dataset_id,
+            file_id="file-001",
+            metadata=RecordingMetadata(
+                dataset_id=dataset_id,
+                file_format="fif",
+                channel_count=len(channels),
+                sampling_rate_hz=256.0,
+                duration_seconds=4.0,
+                channel_names=channels,
+            ),
+        )
+    )
+    api_main.registry_repository.save_event_log(
+        EventLog(
+            event_log_id="event-log-001",
+            dataset_id=dataset_id,
+            file_id="file-002",
+            mapping=EventColumnMapping(onset_seconds="onset", trial_type="trial_type"),
+            row_count=2,
+            events=[
+                NormalizedEvent(
+                    onset_seconds=1.0,
+                    source_row=1,
+                    trial_type="standard",
+                ),
+                NormalizedEvent(
+                    onset_seconds=2.0,
+                    source_row=2,
+                    trial_type="target",
+                ),
+            ],
+        )
+    )
+
+
+def _seed_completed_run_chain(tmp_path, dataset_id: str = "dataset-001") -> None:
+    output_path = (
+        tmp_path
+        / "processed"
+        / dataset_id
+        / "preprocess-001"
+        / "raw_preprocessed_raw.fif"
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(b"placeholder")
+    api_main.run_repository.save_preprocessing_run(
+        PreprocessingRun(
+            run_id="preprocess-001",
+            dataset_id=dataset_id,
+            config=PreprocessingConfig(
+                high_pass_hz=1.0,
+                low_pass_hz=40.0,
+                reference="average",
+                manual_bad_channels=["Fp1"],
+                ica=IcaConfig(
+                    enabled=True,
+                    n_components=2,
+                    exclude_components=[0],
+                    eog_channels=["VEOG"],
+                ),
+            ),
+            status=PreprocessingRunStatus.COMPLETED,
+            finished_at_utc="2026-05-28T00:01:00Z",
+            output_path=str(output_path),
+            output_metadata={
+                "output_sampling_rate_hz": 256.0,
+                "output_duration_seconds": 4.0,
+            },
+        )
+    )
+    epoch_output = tmp_path / "epochs" / dataset_id / "epoch-001" / "epochs-epo.fif"
+    epoch_output.parent.mkdir(parents=True, exist_ok=True)
+    epoch_output.write_bytes(b"placeholder")
+    api_main.run_repository.save_epoch_run(
+        EpochRun(
+            run_id="epoch-001",
+            dataset_id=dataset_id,
+            config=EpochConfig(
+                preprocessing_run_id="preprocess-001",
+                condition_field="trial_type",
+                tmin_seconds=-0.2,
+                tmax_seconds=0.8,
+                baseline_start_seconds=-0.2,
+                baseline_end_seconds=0.0,
+            ),
+            status=EpochRunStatus.COMPLETED,
+            finished_at_utc="2026-05-28T00:02:00Z",
+            output_path=str(epoch_output),
+        )
+    )
+    api_main.run_repository.save_erp_run(
+        ErpRun(
+            run_id="erp-001",
+            dataset_id=dataset_id,
+            config=ErpConfig(
+                epoch_run_id="epoch-001",
+                conditions=["standard", "target"],
+                picks=["Fp1", "Fp2"],
+                plot_mode="channel",
+                plot_channel="Fp1",
+            ),
+            status=ErpRunStatus.COMPLETED,
+            finished_at_utc="2026-05-28T00:03:00Z",
+        )
+    )
 
 
 def test_workflow_template_api_saves_lists_gets_and_deletes_template(
@@ -208,3 +379,192 @@ def test_workflow_template_api_returns_404_for_missing_delete(tmp_path, monkeypa
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Workflow template not found"
+
+
+def test_workflow_template_from_completed_erp_run_builds_reusable_template(
+    tmp_path,
+    monkeypatch,
+):
+    client = _client_with_repositories(tmp_path, monkeypatch)
+    _seed_dataset()
+    _seed_completed_run_chain(tmp_path)
+
+    response = client.post(
+        "/workflow-templates/from-run",
+        json={
+            "template_id": "template-from-erp",
+            "name": "From completed ERP",
+            "erp_run_id": "erp-001",
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["created_from"] == {
+        "dataset_id": "dataset-001",
+        "preprocessing_run_id": "preprocess-001",
+        "epoch_run_id": "epoch-001",
+        "erp_run_id": "erp-001",
+    }
+    preprocessing = payload["workflow"]["preprocessing"]
+    assert preprocessing["manual_bad_channels"] == []
+    assert preprocessing["ica"]["exclude_components"] == []
+    assert preprocessing["ica"]["eog_channels"] == ["VEOG"]
+    assert payload["workflow"]["epoch"]["condition_field"] == "trial_type"
+    assert "preprocessing_run_id" not in payload["workflow"]["epoch"]
+    assert payload["workflow"]["erp"]["plot_channel"] == "Fp1"
+    assert "epoch_run_id" not in payload["workflow"]["erp"]
+    excluded_paths = {
+        entry["path"] for entry in payload["field_policy"]["excluded_fields"]
+    }
+    assert "workflow.preprocessing.manual_bad_channels" in excluded_paths
+    assert "workflow.preprocessing.ica.exclude_components" in excluded_paths
+    assert "workflow.epoch.preprocessing_run_id" in excluded_paths
+    assert "workflow.erp.epoch_run_id" in excluded_paths
+    review_paths = {
+        entry["path"] for entry in payload["field_policy"]["review_required_fields"]
+    }
+    assert "workflow.preprocessing.ica.eog_channels" in review_paths
+    assert "workflow.erp.plot_channel" in review_paths
+    assert payload["validation"]["valid"] is True
+
+
+def test_workflow_template_from_run_rejects_incomplete_source_run(
+    tmp_path,
+    monkeypatch,
+):
+    client = _client_with_repositories(tmp_path, monkeypatch)
+    api_main.run_repository.save_preprocessing_run(
+        PreprocessingRun(
+            run_id="preprocess-pending",
+            dataset_id="dataset-001",
+            config=PreprocessingConfig(reference="average"),
+            status=PreprocessingRunStatus.PENDING,
+        )
+    )
+
+    response = client.post(
+        "/workflow-templates/from-run",
+        json={
+            "template_id": "template-pending",
+            "name": "Pending",
+            "preprocessing_run_id": "preprocess-pending",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "Preprocessing run must be completed before template creation."
+    )
+
+
+def test_workflow_template_apply_preview_returns_ready_config_with_overrides(
+    tmp_path,
+    monkeypatch,
+):
+    client = _client_with_repositories(tmp_path, monkeypatch)
+    _seed_dataset()
+    create_response = client.post(
+        "/workflow-templates",
+        json=_template_payload(template_id="template-apply"),
+    )
+    assert create_response.status_code == 201
+
+    response = client.post(
+        "/workflow-templates/template-apply/apply-preview",
+        json={
+            "target_dataset_id": "dataset-001",
+            "subject_overrides": {
+                "manual_bad_channels": ["Fp1"],
+                "ica_exclude_components": [1],
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ready"
+    preprocessing = payload["configs"]["preprocessing"]
+    assert preprocessing["manual_bad_channels"] == ["Fp1"]
+    assert preprocessing["ica"]["exclude_components"] == [1]
+    assert payload["errors"] == []
+
+
+def test_workflow_template_apply_preview_rejects_invalid_subject_override(
+    tmp_path,
+    monkeypatch,
+):
+    client = _client_with_repositories(tmp_path, monkeypatch)
+    _seed_dataset()
+    create_response = client.post(
+        "/workflow-templates",
+        json=_template_payload(template_id="template-invalid-override"),
+    )
+    assert create_response.status_code == 201
+
+    response = client.post(
+        "/workflow-templates/template-invalid-override/apply-preview",
+        json={
+            "target_dataset_id": "dataset-001",
+            "subject_overrides": {"manual_bad_channels": ["MissingChannel"]},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "invalid"
+    assert payload["errors"] == [
+        "manual_bad_channels contains unknown channels: MissingChannel"
+    ]
+
+
+def test_workflow_template_apply_preview_requires_review_for_channel_specific_fields(
+    tmp_path,
+    monkeypatch,
+):
+    client = _client_with_repositories(tmp_path, monkeypatch)
+    _seed_dataset()
+    create_response = client.post(
+        "/workflow-templates",
+        json=_template_payload(
+            template_id="template-review",
+            workflow={
+                **_template_payload()["workflow"],
+                "preprocessing": {
+                    **_template_payload()["workflow"]["preprocessing"],
+                    "ica": {
+                        **_template_payload()["workflow"]["preprocessing"]["ica"],
+                        "eog_channels": ["VEOG"],
+                    },
+                },
+            },
+            field_policy={
+                "excluded_fields": [],
+                "review_required_fields": [
+                    {
+                        "path": "workflow.preprocessing.ica.eog_channels",
+                        "reason": "channel_specific",
+                        "source_value": ["VEOG"],
+                        "default_action": "validate_against_target_channels",
+                    }
+                ],
+                "channel_specific_fields": [
+                    "workflow.preprocessing.ica.eog_channels"
+                ],
+            },
+        ),
+    )
+    assert create_response.status_code == 201
+
+    response = client.post(
+        "/workflow-templates/template-review/apply-preview",
+        json={"target_dataset_id": "dataset-001"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "requires_review"
+    assert payload["review_required_fields"][0]["path"] == (
+        "workflow.preprocessing.ica.eog_channels"
+    )
+    assert payload["errors"] == []

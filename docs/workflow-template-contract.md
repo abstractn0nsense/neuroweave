@@ -419,8 +419,10 @@ it to datasets yet:
 
 ```text
 POST /workflow-templates
+POST /workflow-templates/from-run
 GET /workflow-templates
 GET /workflow-templates/{template_id}
+POST /workflow-templates/{template_id}/apply-preview
 DELETE /workflow-templates/{template_id}
 ```
 
@@ -436,6 +438,39 @@ API behavior:
 - `GET /workflow-templates` returns all templates sorted by id.
 - `DELETE /workflow-templates/{template_id}` removes the registry entry and
   returns `204`; missing templates return `404`.
+
+## C4 Create And Apply Service
+
+Template creation from completed runs:
+
+- `POST /workflow-templates/from-run` accepts a completed preprocessing, epoch,
+  or ERP run id.
+- If an ERP run is provided, the service follows `erp.config.epoch_run_id` and
+  then `epoch.config.preprocessing_run_id` to include the full reusable chain.
+- If an epoch run is provided, the service follows
+  `epoch.config.preprocessing_run_id`.
+- Every source run in the chain must be completed and belong to the same dataset.
+- `manual_bad_channels` and `ica.exclude_components` are removed from reusable
+  preprocessing config and recorded in `field_policy.excluded_fields`.
+- Source `preprocessing_run_id` and `epoch_run_id` bindings are removed from
+  reusable epoch/ERP config and recorded as source-run bindings.
+- Non-empty channel-specific source fields are copied into config but recorded in
+  `field_policy.review_required_fields`.
+
+Template apply preview:
+
+- `POST /workflow-templates/{template_id}/apply-preview` validates the template
+  against a target dataset without creating runs.
+- The response status is `ready`, `requires_review`, or `invalid`.
+- Subject-specific overrides are accepted only through explicit override fields:
+  `manual_bad_channels` and `ica_exclude_components`.
+- Overrides are validated against the target recording before the preview is
+  considered ready.
+- Epoch and ERP bindings are resolved from request-provided completed run ids, or
+  from the latest completed target-dataset run when available.
+- When preprocessing or epoching is part of the template but the downstream run
+  binding does not exist yet, downstream validation is deferred and surfaced as a
+  warning instead of queueing work.
 
 ## Relationship To Phase B Artifacts
 
