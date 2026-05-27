@@ -172,6 +172,10 @@ type PreprocessingConfig = {
     minimum_correlation: number | null;
     zscore_threshold: number | null;
   };
+  bad_channel_interpolation: {
+    enabled: boolean;
+    reset_bads: boolean;
+  };
 };
 
 type BadChannelDetectionMethod =
@@ -449,6 +453,10 @@ const DEFAULT_PREPROCESSING_CONFIG = {
   resample_hz: "",
   reference: "average",
   manual_bad_channels: [] as string[],
+  bad_channel_interpolation: {
+    enabled: false,
+    reset_bads: true,
+  },
   bad_channel_detection: {
     enabled: false,
     method: "deviation",
@@ -2792,6 +2800,45 @@ function IntakeSection({
             </select>
           </label>
           <label>
+            <span>Interpolate bads</span>
+            <input
+              checked={preprocessingConfig.bad_channel_interpolation.enabled}
+              disabled={
+                !canContinue || preprocessingConfig.manual_bad_channels.length === 0
+              }
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  bad_channel_interpolation: {
+                    ...preprocessingConfig.bad_channel_interpolation,
+                    enabled: event.target.checked,
+                  },
+                })
+              }
+              type="checkbox"
+            />
+          </label>
+          <label>
+            <span>Clear bad labels</span>
+            <input
+              checked={preprocessingConfig.bad_channel_interpolation.reset_bads}
+              disabled={
+                !canContinue ||
+                !preprocessingConfig.bad_channel_interpolation.enabled
+              }
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  bad_channel_interpolation: {
+                    ...preprocessingConfig.bad_channel_interpolation,
+                    reset_bads: event.target.checked,
+                  },
+                })
+              }
+              type="checkbox"
+            />
+          </label>
+          <label>
             <span>Bad-channel report</span>
             <input
               checked={preprocessingConfig.bad_channel_detection.enabled}
@@ -4556,6 +4603,12 @@ function normalizePreprocessingConfig(
     resample_hz: parseOptionalNumber(config.resample_hz),
     reference: config.reference || null,
     manual_bad_channels: config.manual_bad_channels,
+    bad_channel_interpolation: {
+      enabled:
+        config.bad_channel_interpolation.enabled &&
+        config.manual_bad_channels.length > 0,
+      reset_bads: config.bad_channel_interpolation.reset_bads,
+    },
     bad_channel_detection: {
       enabled: detectionEnabled,
       method: detectionEnabled

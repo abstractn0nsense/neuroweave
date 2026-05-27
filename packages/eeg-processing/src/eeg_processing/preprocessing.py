@@ -64,6 +64,9 @@ def preprocess_raw_eeg(
             bad_channel_detection = _bad_channel_detection_report(raw, config)
             manual_warnings.extend(bad_channel_detection.get("warnings", []))
             _check_cancelled(should_cancel, manual_warnings)
+            bad_channel_interpolation = _interpolate_bad_channels(raw, config)
+            manual_warnings.extend(bad_channel_interpolation.get("warnings", []))
+            _check_cancelled(should_cancel, manual_warnings)
 
             if config.high_pass_hz is not None or config.low_pass_hz is not None:
                 _check_cancelled(should_cancel, manual_warnings)
@@ -196,6 +199,7 @@ def preprocess_raw_eeg(
                     config,
                     manual_bad_channels=manual_bad_channels,
                     detection=bad_channel_detection,
+                    interpolation=bad_channel_interpolation,
                 ),
                 "artifact_rejection": {
                     "enabled": False,
@@ -274,6 +278,7 @@ def _bad_channel_contract_summary(
     *,
     manual_bad_channels: list[str],
     detection: dict[str, Any],
+    interpolation: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "schema_version": config.artifact_schema_version,
@@ -283,14 +288,7 @@ def _bad_channel_contract_summary(
             "status": "applied" if manual_bad_channels else "not_requested",
         },
         "detection": detection,
-        "interpolation": {
-            "config": asdict(config.bad_channel_interpolation),
-            "status": (
-                "schema_only"
-                if config.bad_channel_interpolation.enabled
-                else "not_requested"
-            ),
-        },
+        "interpolation": interpolation,
     }
 
 
@@ -314,6 +312,70 @@ def _apply_manual_bad_channels(raw: Any, config: PreprocessingConfig) -> list[st
     bads.update(requested_channels)
     raw.info["bads"] = [channel for channel in raw.ch_names if channel in bads]
     return requested_channels
+
+
+def _interpolate_bad_channels(raw: Any, config: PreprocessingConfig) -> dict[str, Any]:
+    interpolation_config = config.bad_channel_interpolation
+    before = _channel_status_snapshot(raw)
+    base_report: dict[str, Any] = {
+        "schema_version": config.artifact_schema_version,
+        "config": asdict(interpolation_config),
+        "status": "not_requested",
+        "before": before,
+        "after": before,
+        "interpolated_channels": [],
+        "warnings": [],
+    }
+    if not interpolation_config.enabled:
+        return base_report
+
+    bad_channels = list(before["bad_channels"])
+    if not bad_channels:
+        return {
+            **base_report,
+            "status": "skipped",
+            "reason": "No bad channels were marked before interpolation.",
+        }
+
+    montage_source = _ensure_interpolation_montage(raw)
+    try:
+        raw.interpolate_bads(
+            reset_bads=interpolation_config.reset_bads,
+            verbose=False,
+        )
+    except Exception as exc:
+        raise PreprocessingError(f"Bad channel interpolation failed: {exc}") from exc
+
+    after = _channel_status_snapshot(raw)
+    return {
+        **base_report,
+        "status": "applied",
+        "before": before,
+        "after": after,
+        "interpolated_channels": bad_channels,
+        "reset_bads": interpolation_config.reset_bads,
+        "montage_source": montage_source,
+    }
+
+
+def _channel_status_snapshot(raw: Any) -> dict[str, Any]:
+    bad_channels = [str(channel) for channel in raw.info.get("bads", [])]
+    return {
+        "bad_channels": bad_channels,
+        "bad_channel_count": len(bad_channels),
+    }
+
+
+def _ensure_interpolation_montage(raw: Any) -> str:
+    dig_points = raw.info.get("dig") or []
+    if dig_points:
+        return "existing"
+
+    try:
+        raw.set_montage("standard_1020", match_case=False, on_missing="ignore")
+    except Exception:
+        return "unavailable"
+    return "standard_1020"
 
 
 def _bad_channel_detection_report(raw: Any, config: PreprocessingConfig) -> dict[str, Any]:
@@ -468,10 +530,6 @@ def _ica_contract_summary(config: PreprocessingConfig) -> dict[str, Any]:
 
 def _artifact_contract_warnings(config: PreprocessingConfig) -> list[str]:
     warnings: list[str] = []
-    if config.bad_channel_interpolation.enabled:
-        warnings.append(
-            "Bad channel interpolation config was captured but is not executed until Phase B4."
-        )
     if config.artifact_handling.eog_enabled or config.artifact_handling.ecg_enabled:
         warnings.append(
             "EOG/ECG artifact handling config was captured but is not executed until Phase B6."

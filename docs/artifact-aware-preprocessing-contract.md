@@ -63,21 +63,23 @@ Allowed methods:
 Channel-list fields must reference uploaded recording channel names. The API
 rejects unknown channels before queueing a run.
 
-## Phase B3 Execution Status
+## Phase B4 Execution Status
 
 B2 executes automatic bad-channel detection in report-only mode. It records
 candidates and metrics in diagnostics, but does not mutate `raw.info["bads"]`,
 interpolate channels, or remove data.
 
 B3 applies `manual_bad_channels` to `raw.info["bads"]` before saving the
-preprocessed FIF. This is the first Phase B step that mutates the output raw
-metadata, but it still does not interpolate channels or remove data. The input
-artifact summary records the uploaded raw state before manual marking, and the
-output artifact summary records the saved bad-channel list.
+preprocessed FIF.
+
+B4 interpolates the marked bad channels when
+`bad_channel_interpolation.enabled` is true. Interpolation is applied to the raw
+data before filters/reference/resampling, and the report records before/after
+bad-channel state. With the default `reset_bads: true`, interpolated channels are
+removed from the output bad list after interpolation.
 
 Other artifact-aware fields remain schema-only until later B subphases:
 
-- B4: interpolation
 - B6: EOG/ECG artifact handling
 - B7: ICA
 
@@ -148,10 +150,21 @@ enabled. This gives the UI, export bundle, and future QC views a stable schema.
     },
     "interpolation": {
       "config": {
-        "enabled": false,
+        "enabled": true,
         "reset_bads": true
       },
-      "status": "not_requested"
+      "status": "applied",
+      "before": {
+        "bad_channels": ["Fp1"],
+        "bad_channel_count": 1
+      },
+      "after": {
+        "bad_channels": [],
+        "bad_channel_count": 0
+      },
+      "interpolated_channels": ["Fp1"],
+      "reset_bads": true,
+      "montage_source": "existing"
     }
   },
   "artifact_rejection": {

@@ -96,6 +96,7 @@ def _preprocessing_qc(artifacts: dict[str, ArtifactReference]) -> dict[str, Any]
             "output_bad_channel_count": output_artifact.get("bad_channel_count", 0),
         },
         "bad_channel_detection": _dict_value(bad_channels, "detection"),
+        "bad_channel_interpolation": _dict_value(bad_channels, "interpolation"),
         "artifact_rejection": _dict_value(artifact_summary, "artifact_rejection"),
     }
 

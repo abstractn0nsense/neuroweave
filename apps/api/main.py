@@ -2562,6 +2562,11 @@ def _write_preprocessing_diagnostics(
         if isinstance(bad_channels, dict)
         else {}
     )
+    bad_channel_interpolation = (
+        bad_channels.get("interpolation", {})
+        if isinstance(bad_channels, dict)
+        else {}
+    )
     return {
         "diagnostics_available": bool(written_paths),
         "diagnostics_file_count": len(written_paths),
@@ -2588,6 +2593,17 @@ def _write_preprocessing_diagnostics(
             "candidate_count"
         )
         if isinstance(bad_channel_detection, dict)
+        else None,
+        "artifact_bad_channel_interpolation_status": bad_channel_interpolation.get(
+            "status"
+        )
+        if isinstance(bad_channel_interpolation, dict)
+        else None,
+        "artifact_bad_channel_interpolated_count": len(
+            bad_channel_interpolation.get("interpolated_channels", [])
+        )
+        if isinstance(bad_channel_interpolation, dict)
+        and isinstance(bad_channel_interpolation.get("interpolated_channels"), list)
         else None,
     }
 
