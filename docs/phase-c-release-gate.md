@@ -281,6 +281,8 @@ filenames in Phase C batch planning or retry logic.
 Before merging each Phase C slice:
 
 - Run the C0 gate commands listed above.
+- For WorkflowTemplate work, keep `docs/workflow-template-contract.md` aligned
+  with implementation and tests.
 - Confirm legacy preprocessing, epoch, and ERP run JSON can still be loaded.
 - Confirm missing Phase B preprocessing config fields still default safely.
 - Confirm template persistence tolerates unknown future keys as additive metadata.
