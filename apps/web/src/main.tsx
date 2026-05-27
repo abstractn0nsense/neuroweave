@@ -183,10 +183,21 @@ type PreprocessingConfig = {
     ecg_channels: string[];
     create_annotations: boolean;
   };
+  ica: {
+    enabled: boolean;
+    method: "fastica" | "infomax" | "picard";
+    n_components: number | null;
+    random_state: number;
+    max_iter: number | "auto";
+    exclude_components: number[];
+    eog_channels: string[];
+    ecg_channels: string[];
+  };
 };
 
 type BadChannelDetectionMethod =
   PreprocessingConfig["bad_channel_detection"]["method"];
+type IcaMethod = PreprocessingConfig["ica"]["method"];
 
 type PreprocessingRun = {
   run_id: string;
@@ -476,6 +487,16 @@ const DEFAULT_PREPROCESSING_CONFIG = {
     method: "deviation",
     zscore_threshold: "5",
     minimum_correlation: "",
+  },
+  ica: {
+    enabled: false,
+    method: "fastica",
+    n_components: "",
+    random_state: "97",
+    max_iter: "auto",
+    exclude_components: "",
+    eog_channels: "",
+    ecg_channels: "",
   },
 };
 
@@ -3013,6 +3034,80 @@ function IntakeSection({
               value={preprocessingConfig.artifact_handling.ecg_channels}
             />
           </label>
+          <label>
+            <span>ICA</span>
+            <input
+              checked={preprocessingConfig.ica.enabled}
+              disabled={!canContinue}
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  ica: {
+                    ...preprocessingConfig.ica,
+                    enabled: event.target.checked,
+                  },
+                })
+              }
+              type="checkbox"
+            />
+          </label>
+          <label>
+            <span>ICA method</span>
+            <select
+              disabled={!canContinue || !preprocessingConfig.ica.enabled}
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  ica: {
+                    ...preprocessingConfig.ica,
+                    method: event.target.value,
+                  },
+                })
+              }
+              value={preprocessingConfig.ica.method}
+            >
+              <option value="fastica">fastica</option>
+              <option value="infomax">infomax</option>
+              <option value="picard">picard</option>
+            </select>
+          </label>
+          <label>
+            <span>ICA components</span>
+            <input
+              disabled={!canContinue || !preprocessingConfig.ica.enabled}
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  ica: {
+                    ...preprocessingConfig.ica,
+                    n_components: event.target.value,
+                  },
+                })
+              }
+              placeholder="Optional"
+              step="0.05"
+              type="number"
+              value={preprocessingConfig.ica.n_components}
+            />
+          </label>
+          <label>
+            <span>Exclude ICA</span>
+            <input
+              disabled={!canContinue || !preprocessingConfig.ica.enabled}
+              onChange={(event) =>
+                onPreprocessingConfigChange({
+                  ...preprocessingConfig,
+                  ica: {
+                    ...preprocessingConfig.ica,
+                    exclude_components: event.target.value,
+                  },
+                })
+              }
+              placeholder="0, 1"
+              type="text"
+              value={preprocessingConfig.ica.exclude_components}
+            />
+          </label>
         </div>
         <button
           className="primary-button"
@@ -3818,6 +3913,7 @@ function PreprocessingQc({ summary }: { summary: Record<string, unknown> }) {
   const artifactRejection = asRecord(summary.artifact_rejection);
   const eogArtifacts = asRecord(artifactRejection.eog);
   const ecgArtifacts = asRecord(artifactRejection.ecg);
+  const ica = asRecord(summary.ica);
   const beforeAfter = asRecord(summary.before_after);
   const delta = asRecord(beforeAfter.delta);
 
@@ -3849,6 +3945,11 @@ function PreprocessingQc({ summary }: { summary: Record<string, unknown> }) {
         <QcMetric
           label="Heartbeat Candidates"
           value={stringValue(ecgArtifacts.candidate_count)}
+        />
+        <QcMetric label="ICA" value={stringValue(ica.status)} />
+        <QcMetric
+          label="ICA Components"
+          value={stringValue(ica.component_count)}
         />
         <QcMetric
           label="Bad Ch Delta"
@@ -4744,6 +4845,20 @@ function normalizePreprocessingConfig(
       ecg_channels: parseOptionalCsv(config.artifact_handling.ecg_channels) ?? [],
       create_annotations: false,
     },
+    ica: {
+      enabled: config.ica.enabled,
+      method: config.ica.method as IcaMethod,
+      n_components: config.ica.enabled
+        ? parseOptionalNumber(config.ica.n_components)
+        : null,
+      random_state: parseOptionalNumber(config.ica.random_state) ?? 97,
+      max_iter: parseMaxIter(config.ica.max_iter),
+      exclude_components: config.ica.enabled
+        ? parseIntegerCsv(config.ica.exclude_components)
+        : [],
+      eog_channels: parseOptionalCsv(config.ica.eog_channels) ?? [],
+      ecg_channels: parseOptionalCsv(config.ica.ecg_channels) ?? [],
+    },
   };
 }
 
@@ -4805,6 +4920,9 @@ function getPreprocessingConfigError(
   const minimumCorrelation = parseOptionalNumber(
     config.bad_channel_detection.minimum_correlation,
   );
+  const icaComponents = parseOptionalNumber(config.ica.n_components);
+  const icaRandomState = parseOptionalNumber(config.ica.random_state);
+  const icaMaxIter = parseMaxIter(config.ica.max_iter);
 
   for (const [label, value] of [
     ["High-pass", highPass],
@@ -4851,6 +4969,45 @@ function getPreprocessingConfigError(
         minimumCorrelation > 1)
     ) {
       return "Bad-channel minimum correlation must be between 0 and 1.";
+    }
+  }
+
+  if (config.ica.enabled) {
+    if (!["fastica", "infomax", "picard"].includes(config.ica.method)) {
+      return "Select a supported ICA method.";
+    }
+    if (
+      icaComponents !== null &&
+      (!Number.isFinite(icaComponents) || icaComponents <= 0)
+    ) {
+      return "ICA components must be greater than 0.";
+    }
+    if (
+      icaComponents !== null &&
+      !Number.isInteger(icaComponents) &&
+      icaComponents > 1
+    ) {
+      return "ICA fractional components must be at most 1.";
+    }
+    if (
+      icaRandomState === null ||
+      !Number.isInteger(icaRandomState)
+    ) {
+      return "ICA random state must be an integer.";
+    }
+    if (icaMaxIter !== "auto" && (!Number.isInteger(icaMaxIter) || icaMaxIter <= 0)) {
+      return "ICA max iterations must be auto or a positive integer.";
+    }
+    const rawExclusions = config.ica.exclude_components
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (
+      rawExclusions.some(
+        (item) => !Number.isInteger(Number(item)) || Number(item) < 0,
+      )
+    ) {
+      return "ICA excluded components must be non-negative integers.";
     }
   }
 
@@ -4986,6 +5143,24 @@ function parseOptionalCsv(value: string): string[] | null {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function parseIntegerCsv(value: string): number[] {
+  if (!value.trim()) {
+    return [];
+  }
+  return value
+    .split(",")
+    .map((item) => Number(item.trim()))
+    .filter((item) => Number.isFinite(item));
+}
+
+function parseMaxIter(value: string): number | "auto" {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed || trimmed === "auto") {
+    return "auto";
+  }
+  return Number(trimmed);
 }
 
 function formatRunMetadata(metadata: Record<string, MetadataValue>): string {

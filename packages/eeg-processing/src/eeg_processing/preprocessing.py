@@ -132,6 +132,11 @@ def preprocess_raw_eeg(
                         filter_report["reference"]["status"] = "skipped"
                         filter_report["reference"]["reason"] = "No reference channels provided."
 
+            _check_cancelled(should_cancel, manual_warnings)
+            ica_report = _ica_execution_report(raw, config)
+            manual_warnings.extend(ica_report.get("warnings", []))
+            _check_cancelled(should_cancel, manual_warnings)
+
             if config.resample_hz is not None:
                 _check_cancelled(should_cancel, manual_warnings)
                 raw.resample(config.resample_hz, verbose=False)
@@ -212,7 +217,7 @@ def preprocess_raw_eeg(
                     interpolation=bad_channel_interpolation,
                 ),
                 "artifact_rejection": artifact_rejection,
-                "ica": _ica_contract_summary(config),
+                "ica": ica_report,
                 "qc": {
                     "schema_version": config.artifact_schema_version,
                     "config": asdict(config.qc),
@@ -934,19 +939,180 @@ def _channel_correlations(data: Any) -> list[float | None]:
     return correlations
 
 
-def _ica_contract_summary(config: PreprocessingConfig) -> dict[str, Any]:
-    return {
+def _ica_execution_report(raw: Any, config: PreprocessingConfig) -> dict[str, Any]:
+    ica_config = config.ica
+    base_report: dict[str, Any] = {
         "schema_version": config.artifact_schema_version,
-        "config": asdict(config.ica),
-        "status": "schema_only" if config.ica.enabled else "not_requested",
+        "config": asdict(ica_config),
+        "enabled": ica_config.enabled,
+        "status": "not_requested",
+        "method": ica_config.method,
+        "component_count": 0,
+        "fit_channel_count": 0,
+        "fit_channels": [],
+        "excluded_components_requested": list(ica_config.exclude_components),
+        "excluded_components_applied": [],
+        "component_metadata": [],
+        "apply_performed": False,
+        "warnings": [],
+    }
+    if not ica_config.enabled:
+        return base_report
+
+    import mne
+    import numpy as np
+    from mne.preprocessing import ICA
+
+    picks = mne.pick_types(
+        raw.info,
+        eeg=True,
+        meg=False,
+        eog=False,
+        ecg=False,
+        stim=False,
+        exclude="bads",
+    )
+    channel_names = [raw.ch_names[pick] for pick in picks]
+    if len(picks) < 2:
+        warning = "ICA requires at least two non-bad EEG channels."
+        return {
+            **base_report,
+            "status": "skipped",
+            "fit_channel_count": len(picks),
+            "fit_channels": channel_names,
+            "warnings": [warning],
+        }
+
+    warnings: list[str] = []
+    n_components = _resolve_ica_n_components(
+        ica_config.n_components,
+        channel_count=len(picks),
+        warnings=warnings,
+    )
+    if n_components == "invalid":
+        return {
+            **base_report,
+            "status": "skipped",
+            "fit_channel_count": len(picks),
+            "fit_channels": channel_names,
+            "warnings": warnings,
+        }
+
+    ica = ICA(
+        n_components=n_components,
+        method=ica_config.method,
+        random_state=ica_config.random_state,
+        max_iter=ica_config.max_iter,
+    )
+    try:
+        ica.fit(raw, picks=picks, verbose=False)
+    except ImportError as exc:
+        return {
+            **base_report,
+            "status": "skipped",
+            "n_components": n_components,
+            "fit_channel_count": len(picks),
+            "fit_channels": channel_names,
+            "warnings": [str(exc)],
+        }
+    component_count = int(ica.n_components_)
+    exclusions = _valid_ica_exclusions(
+        ica_config.exclude_components,
+        component_count=component_count,
+        warnings=warnings,
+    )
+    apply_performed = bool(exclusions)
+    if apply_performed:
+        ica.apply(raw, exclude=exclusions, verbose=False)
+
+    explained_variance = getattr(ica, "pca_explained_variance_", np.array([]))
+    explained_total = float(np.sum(explained_variance)) if len(explained_variance) else 0
+    component_metadata = []
+    for index in range(component_count):
+        variance = (
+            float(explained_variance[index])
+            if index < len(explained_variance)
+            else None
+        )
+        ratio = (
+            variance / explained_total
+            if isinstance(variance, float) and explained_total > 0
+            else None
+        )
+        component_metadata.append(
+            {
+                "component": index,
+                "excluded": index in exclusions,
+                "pca_explained_variance": variance,
+                "pca_explained_variance_ratio": ratio,
+            }
+        )
+
+    return {
+        **base_report,
+        "status": "applied" if apply_performed else "fitted",
+        "n_components": n_components,
+        "component_count": component_count,
+        "fit_channel_count": len(picks),
+        "fit_channels": channel_names,
+        "excluded_components_applied": exclusions,
+        "component_metadata": component_metadata,
+        "apply_performed": apply_performed,
+        "warnings": warnings,
     }
 
 
+def _resolve_ica_n_components(
+    value: float | int | None,
+    *,
+    channel_count: int,
+    warnings: list[str],
+) -> float | int | None | str:
+    if value is None:
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        if 0 < value <= 1:
+            return value
+        warnings.append("ICA n_components as a float must be greater than 0 and at most 1.")
+        return "invalid"
+
+    component_count = int(value)
+    if component_count < 1:
+        warnings.append("ICA n_components must be greater than 0.")
+        return "invalid"
+    if component_count > channel_count:
+        warnings.append(
+            f"ICA n_components was reduced from {component_count} to {channel_count} "
+            "to match available EEG channels."
+        )
+        return channel_count
+    return component_count
+
+
+def _valid_ica_exclusions(
+    requested_components: list[int],
+    *,
+    component_count: int,
+    warnings: list[str],
+) -> list[int]:
+    valid_components: list[int] = []
+    invalid_components: list[int] = []
+    for component in dict.fromkeys(requested_components):
+        if 0 <= component < component_count:
+            valid_components.append(component)
+        else:
+            invalid_components.append(component)
+
+    if invalid_components:
+        warnings.append(
+            "ICA exclude_components ignored out-of-range components: "
+            + ", ".join(str(component) for component in invalid_components)
+        )
+    return valid_components
+
+
 def _artifact_contract_warnings(config: PreprocessingConfig) -> list[str]:
-    warnings: list[str] = []
-    if config.ica.enabled:
-        warnings.append("ICA config was captured but is not executed until Phase B7.")
-    return warnings
+    return []
 
 
 def _check_cancelled(

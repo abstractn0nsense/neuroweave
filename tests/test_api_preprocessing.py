@@ -199,6 +199,9 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert metadata["artifact_rejection_status"] == "not_requested"
     assert metadata["artifact_eog_candidate_count"] == 0
     assert metadata["artifact_ecg_candidate_count"] == 0
+    assert metadata["ica_status"] == "not_requested"
+    assert metadata["ica_component_count"] == 0
+    assert metadata["ica_excluded_component_count"] == 0
     assert metadata["worker_schema_version"] == 1
     assert metadata["worker_exit_code"] == 0
 
@@ -320,7 +323,7 @@ def test_create_preprocessing_run_accepts_artifact_aware_contract(
 
     payload = _wait_for_run_status(client, queued_payload["run_id"], "completed")
 
-    assert "ICA config was captured but is not executed until Phase B7." in payload[
+    assert "ICA config was captured but is not executed until Phase B7." not in payload[
         "warnings"
     ]
     artifact_summary_path = Path(
@@ -366,12 +369,20 @@ def test_create_preprocessing_run_accepts_artifact_aware_contract(
     assert artifact_summary["artifact_rejection"]["annotations_created"] is False
     assert artifact_summary["artifact_rejection"]["eog"]["status"] == "completed"
     assert artifact_summary["artifact_rejection"]["eog"]["channels"] == [channel_name]
+    assert payload["output_metadata"]["ica_status"] == "applied"
+    assert payload["output_metadata"]["ica_component_count"] == artifact_summary[
+        "ica"
+    ]["component_count"]
+    assert payload["output_metadata"]["ica_excluded_component_count"] == 1
     assert artifact_summary["qc"]["status"] == "completed"
     assert artifact_summary["qc"]["before_after"]["before"]["variance"]["mean_uv2"] is not None
     assert artifact_summary["qc"]["before_after"]["after"]["variance"]["mean_uv2"] is not None
     assert artifact_summary["qc"]["before_after"]["before"]["psd"]["total_power_uv2"] is not None
     assert artifact_summary["qc"]["before_after"]["after"]["psd"]["total_power_uv2"] is not None
-    assert artifact_summary["ica"]["status"] == "schema_only"
+    assert artifact_summary["ica"]["status"] == "applied"
+    assert artifact_summary["ica"]["excluded_components_requested"] == [0]
+    assert artifact_summary["ica"]["excluded_components_applied"] == [0]
+    assert artifact_summary["ica"]["apply_performed"] is True
     assert artifact_summary["qc"]["config"]["metrics"] == [
         "channel_status",
         "psd",

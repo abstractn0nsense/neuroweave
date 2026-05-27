@@ -7,6 +7,7 @@ from eeg_core.domain import (
     ArtifactHandlingConfig,
     BadChannelDetectionConfig,
     BadChannelInterpolationConfig,
+    IcaConfig,
     PreprocessingConfig,
 )
 from eeg_processing.preprocessing import preprocess_raw_eeg
@@ -240,6 +241,54 @@ def test_preprocessing_reports_eog_ecg_candidates_without_raw_mutation(tmp_path)
     assert artifact_rejection["ecg"]["channels"] == ["ECG"]
     assert artifact_rejection["ecg"]["candidate_count"] >= 1
     assert artifact_rejection["ecg"]["candidates"][0]["type"] == "heartbeat"
+
+
+def test_preprocessing_fits_and_applies_ica_exclusions(tmp_path):
+    input_path = tmp_path / "input_raw.fif"
+    output_path = tmp_path / "output_raw.fif"
+    sampling_rate = 100.0
+    times = np.arange(0, 6, 1 / sampling_rate)
+    source_a = np.sin(2 * np.pi * 8 * times) * 1e-6
+    source_b = np.sign(np.sin(2 * np.pi * 2 * times)) * 0.5e-6
+    data = np.vstack(
+        [
+            source_a + source_b,
+            0.6 * source_a - source_b,
+            -0.4 * source_a + 0.8 * source_b,
+            0.3 * source_a + 0.2 * source_b,
+        ]
+    )
+    raw = mne.io.RawArray(
+        data,
+        mne.create_info(["Fz", "Cz", "Pz", "Oz"], sampling_rate, ch_types="eeg"),
+        verbose=False,
+    )
+    raw.save(input_path, overwrite=True, verbose=False)
+
+    metadata = preprocess_raw_eeg(
+        input_path,
+        output_path,
+        PreprocessingConfig(
+            ica=IcaConfig(
+                enabled=True,
+                n_components=2,
+                random_state=97,
+                max_iter=200,
+                exclude_components=[0],
+            )
+        ),
+    )
+
+    output_raw = mne.io.read_raw_fif(output_path, preload=True, verbose=False)
+    ica = metadata["diagnostics"]["artifact_summary"]["ica"]
+    assert ica["status"] == "applied"
+    assert ica["component_count"] == 2
+    assert ica["fit_channels"] == ["Fz", "Cz", "Pz", "Oz"]
+    assert ica["excluded_components_requested"] == [0]
+    assert ica["excluded_components_applied"] == [0]
+    assert ica["apply_performed"] is True
+    assert ica["component_metadata"][0]["excluded"] is True
+    assert not np.allclose(output_raw.get_data(), data)
 
 
 def test_preprocessing_report_is_json_serializable(tmp_path):

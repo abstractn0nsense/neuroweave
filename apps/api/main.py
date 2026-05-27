@@ -2572,6 +2572,11 @@ def _write_preprocessing_diagnostics(
         if isinstance(artifact_summary, dict)
         else {}
     )
+    ica_summary = (
+        artifact_summary.get("ica", {})
+        if isinstance(artifact_summary, dict)
+        else {}
+    )
     qc_summary = (
         artifact_summary.get("qc", {})
         if isinstance(artifact_summary, dict)
@@ -2649,6 +2654,18 @@ def _write_preprocessing_diagnostics(
             artifact_rejection,
             "ecg",
         ),
+        "ica_status": ica_summary.get("status")
+        if isinstance(ica_summary, dict)
+        else None,
+        "ica_component_count": ica_summary.get("component_count")
+        if isinstance(ica_summary, dict)
+        else None,
+        "ica_excluded_component_count": len(
+            ica_summary.get("excluded_components_applied", [])
+        )
+        if isinstance(ica_summary, dict)
+        and isinstance(ica_summary.get("excluded_components_applied"), list)
+        else None,
     }
 
 
@@ -4051,6 +4068,25 @@ def _validate_preprocessing_config(
 
     if not config.ica.enabled and config.ica.exclude_components:
         errors.append("ica.enabled must be true when exclude_components is provided.")
+
+    if config.ica.enabled:
+        if any(component < 0 for component in config.ica.exclude_components):
+            errors.append("ica.exclude_components must contain non-negative integers.")
+        if isinstance(config.ica.n_components, float):
+            if config.ica.n_components > 1 and not config.ica.n_components.is_integer():
+                errors.append("ica.n_components as a float must be at most 1.")
+            elif config.ica.n_components.is_integer():
+                eeg_channel_count = len(recording.metadata.channel_names)
+                if int(config.ica.n_components) > eeg_channel_count:
+                    errors.append(
+                        f"ica.n_components must not exceed the channel count ({eeg_channel_count})."
+                    )
+        if isinstance(config.ica.n_components, int):
+            eeg_channel_count = len(recording.metadata.channel_names)
+            if config.ica.n_components > eeg_channel_count:
+                errors.append(
+                    f"ica.n_components must not exceed the channel count ({eeg_channel_count})."
+                )
 
     return errors
 

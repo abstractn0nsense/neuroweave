@@ -63,7 +63,7 @@ Allowed methods:
 Channel-list fields must reference uploaded recording channel names. The API
 rejects unknown channels before queueing a run.
 
-## Phase B6 Execution Status
+## Phase B7 Execution Status
 
 B2 executes automatic bad-channel detection in report-only mode. It records
 candidates and metrics in diagnostics, but does not mutate `raw.info["bads"]`,
@@ -87,9 +87,10 @@ be user-specified, inferred from channel types, or inferred from channel names.
 The worker records blink and heartbeat candidate events in diagnostics, but does
 not add annotations, reject data, or mutate the raw signal.
 
-Other artifact-aware fields remain schema-only until later B subphases:
-
-- B7: ICA
+B7 executes ICA when `ica.enabled` is true. The worker fits ICA on non-bad EEG
+channels after filtering/reference and before resampling, applies valid
+`exclude_components`, mutates the preprocessed raw output only through ICA apply,
+and records component metadata plus requested/applied exclusions.
 
 Bad-channel detection methods:
 
@@ -233,16 +234,34 @@ enabled. This gives the UI, export bundle, and future QC views a stable schema.
   "ica": {
     "schema_version": 1,
     "config": {
-      "enabled": false,
+      "enabled": true,
       "method": "fastica",
-      "n_components": null,
+      "n_components": 2,
       "random_state": 97,
-      "max_iter": "auto",
-      "exclude_components": [],
+      "max_iter": 200,
+      "exclude_components": [0],
       "eog_channels": [],
       "ecg_channels": []
     },
-    "status": "not_requested"
+    "enabled": true,
+    "status": "applied",
+    "method": "fastica",
+    "n_components": 2,
+    "component_count": 2,
+    "fit_channel_count": 2,
+    "fit_channels": ["Fp1", "Fp2"],
+    "excluded_components_requested": [0],
+    "excluded_components_applied": [0],
+    "component_metadata": [
+      {
+        "component": 0,
+        "excluded": true,
+        "pca_explained_variance": 2.4,
+        "pca_explained_variance_ratio": 0.42
+      }
+    ],
+    "apply_performed": true,
+    "warnings": []
   },
   "qc": {
     "schema_version": 1,
