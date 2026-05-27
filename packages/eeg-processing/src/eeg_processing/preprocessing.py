@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Any, Callable
+from dataclasses import asdict
 import warnings as python_warnings
 
 from eeg_core.domain import PreprocessingConfig
@@ -44,6 +45,7 @@ def preprocess_raw_eeg(
             parameters={"target_sampling_rate_hz": config.resample_hz},
         ),
     }
+    contract_warnings = _artifact_contract_warnings(config)
     try:
         with python_warnings.catch_warnings(record=True) as warning_records:
             python_warnings.simplefilter("always")
@@ -133,6 +135,7 @@ def preprocess_raw_eeg(
             str(exc),
             processing_warnings=_dedupe(
                 manual_warnings
+                + contract_warnings
                 + _format_warning_records(warning_records)
                 + exc.processing_warnings
             ),
@@ -141,7 +144,7 @@ def preprocess_raw_eeg(
         raise PreprocessingError(
             f"Preprocessing failed: {exc}",
             processing_warnings=_dedupe(
-                manual_warnings + _format_warning_records(warning_records)
+                manual_warnings + contract_warnings + _format_warning_records(warning_records)
             ),
         ) from exc
 
@@ -149,7 +152,7 @@ def preprocess_raw_eeg(
     output_duration = raw.n_times / sampling_rate if sampling_rate else 0
     output_artifact_summary = _artifact_summary(raw)
     warnings = _dedupe(
-        manual_warnings + _format_warning_records(warning_records)
+        manual_warnings + contract_warnings + _format_warning_records(warning_records)
     )
     preprocessing_summary = {
         "input": {
@@ -181,11 +184,21 @@ def preprocess_raw_eeg(
             "preprocessing_summary": preprocessing_summary,
             "filter_report": filter_report,
             "artifact_summary": {
+                "schema_version": config.artifact_schema_version,
                 "input": input_artifact_summary,
                 "output": output_artifact_summary,
+                "bad_channels": _bad_channel_contract_summary(config),
                 "artifact_rejection": {
                     "enabled": False,
-                    "reason": "Artifact detection and rejection are not implemented in Phase 2.0.5.",
+                    "schema_version": config.artifact_schema_version,
+                    "config": asdict(config.artifact_handling),
+                    "reason": "Artifact detection and rejection are configured by contract but not executed in Phase B1.",
+                },
+                "ica": _ica_contract_summary(config),
+                "qc": {
+                    "schema_version": config.artifact_schema_version,
+                    "config": asdict(config.qc),
+                    "status": "schema_only",
                 },
             },
         },
@@ -230,13 +243,7 @@ def _operation_report(
 
 
 def _config_summary(config: PreprocessingConfig) -> dict[str, Any]:
-    return {
-        "high_pass_hz": config.high_pass_hz,
-        "low_pass_hz": config.low_pass_hz,
-        "notch_hz": config.notch_hz,
-        "resample_hz": config.resample_hz,
-        "reference": config.reference,
-    }
+    return asdict(config)
 
 
 def _artifact_summary(raw: Any) -> dict[str, Any]:
@@ -251,6 +258,63 @@ def _artifact_summary(raw: Any) -> dict[str, Any]:
         "annotation_count": len(annotations),
         "annotation_descriptions": sorted(set(descriptions)),
     }
+
+
+def _bad_channel_contract_summary(config: PreprocessingConfig) -> dict[str, Any]:
+    return {
+        "schema_version": config.artifact_schema_version,
+        "manual": {
+            "channels": list(config.manual_bad_channels),
+            "status": "schema_only" if config.manual_bad_channels else "not_requested",
+        },
+        "detection": {
+            "config": asdict(config.bad_channel_detection),
+            "status": (
+                "schema_only"
+                if config.bad_channel_detection.enabled
+                else "not_requested"
+            ),
+        },
+        "interpolation": {
+            "config": asdict(config.bad_channel_interpolation),
+            "status": (
+                "schema_only"
+                if config.bad_channel_interpolation.enabled
+                else "not_requested"
+            ),
+        },
+    }
+
+
+def _ica_contract_summary(config: PreprocessingConfig) -> dict[str, Any]:
+    return {
+        "schema_version": config.artifact_schema_version,
+        "config": asdict(config.ica),
+        "status": "schema_only" if config.ica.enabled else "not_requested",
+    }
+
+
+def _artifact_contract_warnings(config: PreprocessingConfig) -> list[str]:
+    warnings: list[str] = []
+    if config.manual_bad_channels:
+        warnings.append(
+            "Manual bad channel config was captured but is not applied until Phase B3."
+        )
+    if config.bad_channel_detection.enabled:
+        warnings.append(
+            "Bad channel detection config was captured but is not executed until Phase B2."
+        )
+    if config.bad_channel_interpolation.enabled:
+        warnings.append(
+            "Bad channel interpolation config was captured but is not executed until Phase B4."
+        )
+    if config.artifact_handling.eog_enabled or config.artifact_handling.ecg_enabled:
+        warnings.append(
+            "EOG/ECG artifact handling config was captured but is not executed until Phase B6."
+        )
+    if config.ica.enabled:
+        warnings.append("ICA config was captured but is not executed until Phase B7.")
+    return warnings
 
 
 def _check_cancelled(

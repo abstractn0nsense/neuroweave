@@ -302,3 +302,24 @@ Record final results before publishing:
 | Artifact integrity QA |  |  |
 | Uninstall QA |  |  |
 
+## B0 Verification Snapshot
+
+Recorded on 2026-05-27 after the Phase A release gate cleanup.
+
+| Area | Result | Notes |
+| --- | --- | --- |
+| Desktop audit | Pass | `npm.cmd audit --omit=optional` reports 0 vulnerabilities after lockfile update to `tmp@0.2.6`. |
+| Desktop check | Pass | `npm.cmd run check` completed successfully. |
+| Web build | Pass | Re-run through desktop packaging; `tsc --noEmit && vite build` completed successfully. |
+| Backend executable build | Pass | `npm.cmd run package:dir` and `npm.cmd run package:win` rebuilt `dist/desktop/backend/neuroweave-api.exe`. |
+| Unpacked app build | Pass | `apps/desktop/dist-app-unpacked/win-unpacked/` regenerated successfully. |
+| Installer build | Pass | `apps/desktop/dist-installer/NeuroWeave-Setup-0.1.0.exe` and `.blockmap` regenerated successfully. |
+| Install QA | Pass | Silent install to `%LOCALAPPDATA%\Programs\NeuroWeaveB0Smoke`; app exe, web bundle, backend exe, uninstaller, Desktop shortcut, and Start Menu shortcut verified. |
+| First launch QA | Pass | Installed app launched packaged backend on `NEUROWEAVE_API_PORT=8130`, `/health` returned `ok`, and the backend listener stopped after app quit. |
+| Logs/data location QA | Pass | Packaged backend log observed under Electron `userData` at `%APPDATA%\@neuroweave\desktop\logs\desktop-api.log`; preserved user data remains outside the install directory. |
+| Uninstall QA | Pass | Silent uninstall removed install directory, Desktop shortcut, and Start Menu shortcut. |
+| Python tests | Not rerun in B0 | Last checked before B0: 192 tests passed. Re-run before external publication. |
+| Phase 2/3 E2E | Not rerun in B0 | Last checked before B0: Phase 2 preprocessing, Phase 3 epoch, and Phase 3 ERP smoke tests passed. Re-run before external publication. |
+| Public demo workflow | Not rerun in B0 | Manual PhysioNet public demo remains a release sign-off gate. |
+| Report/export QA | Not rerun in B0 | Manual completed-run report/export inspection remains a release sign-off gate. |
+| Artifact integrity QA | Not rerun in B0 | Manual completed-run integrity inspection remains a release sign-off gate. |

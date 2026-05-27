@@ -9,6 +9,9 @@ import threading
 import time
 
 from eeg_core.domain import (
+    ArtifactHandlingConfig,
+    BadChannelDetectionConfig,
+    BadChannelInterpolationConfig,
     Dataset,
     DatasetStatus,
     DiagnosticWarning,
@@ -25,7 +28,9 @@ from eeg_core.domain import (
     Experiment,
     NormalizedEvent,
     Participant,
+    IcaConfig,
     PreprocessingConfig,
+    PreprocessingQcConfig,
     PreprocessingRun,
     PreprocessingRunStatus,
     Project,
@@ -505,12 +510,58 @@ def _event_row_filter_condition_from_json(data: JsonObject) -> EventRowFilterCon
 
 
 def _preprocessing_config_from_json(data: JsonObject) -> PreprocessingConfig:
+    bad_channel_detection = _json_object(data.get("bad_channel_detection"))
+    bad_channel_interpolation = _json_object(data.get("bad_channel_interpolation"))
+    ica = _json_object(data.get("ica"))
+    artifact_handling = _json_object(data.get("artifact_handling"))
+    qc = _json_object(data.get("qc"))
     return PreprocessingConfig(
+        artifact_schema_version=int(data.get("artifact_schema_version", 1)),
         high_pass_hz=_optional_float(data.get("high_pass_hz")),
         low_pass_hz=_optional_float(data.get("low_pass_hz")),
         notch_hz=_optional_float(data.get("notch_hz")),
         resample_hz=_optional_float(data.get("resample_hz")),
         reference=data.get("reference"),
+        manual_bad_channels=_string_list(data.get("manual_bad_channels")),
+        bad_channel_detection=BadChannelDetectionConfig(
+            enabled=bool(bad_channel_detection.get("enabled", False)),
+            method=str(bad_channel_detection.get("method", "none")),
+            minimum_correlation=_optional_float(
+                bad_channel_detection.get("minimum_correlation")
+            ),
+            zscore_threshold=_optional_float(
+                bad_channel_detection.get("zscore_threshold")
+            ),
+        ),
+        bad_channel_interpolation=BadChannelInterpolationConfig(
+            enabled=bool(bad_channel_interpolation.get("enabled", False)),
+            reset_bads=bool(bad_channel_interpolation.get("reset_bads", True)),
+        ),
+        ica=IcaConfig(
+            enabled=bool(ica.get("enabled", False)),
+            method=str(ica.get("method", "fastica")),
+            n_components=_optional_number(ica.get("n_components")),
+            random_state=int(ica.get("random_state", 97)),
+            max_iter=ica.get("max_iter", "auto"),
+            exclude_components=_int_list(ica.get("exclude_components")),
+            eog_channels=_string_list(ica.get("eog_channels")),
+            ecg_channels=_string_list(ica.get("ecg_channels")),
+        ),
+        artifact_handling=ArtifactHandlingConfig(
+            eog_enabled=bool(artifact_handling.get("eog_enabled", False)),
+            ecg_enabled=bool(artifact_handling.get("ecg_enabled", False)),
+            eog_channels=_string_list(artifact_handling.get("eog_channels")),
+            ecg_channels=_string_list(artifact_handling.get("ecg_channels")),
+            create_annotations=bool(artifact_handling.get("create_annotations", True)),
+        ),
+        qc=PreprocessingQcConfig(
+            enabled=bool(qc.get("enabled", True)),
+            include_before_after=bool(qc.get("include_before_after", True)),
+            metrics=_string_list(
+                qc.get("metrics"),
+                default=["channel_status", "amplitude", "annotations"],
+            ),
+        ),
     )
 
 
@@ -646,6 +697,30 @@ def _optional_float(value: Any) -> float | None:
     if value is None:
         return None
     return float(value)
+
+
+def _optional_number(value: Any) -> float | int | None:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    return float(value)
+
+
+def _json_object(value: Any) -> JsonObject:
+    return value if isinstance(value, dict) else {}
+
+
+def _string_list(value: Any, default: list[str] | None = None) -> list[str]:
+    if not isinstance(value, list):
+        return list(default or [])
+    return [str(item) for item in value]
+
+
+def _int_list(value: Any) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    return [int(item) for item in value]
 
 
 def _find_by_id(items: list[Any], field_name: str, expected_id: str) -> Any | None:

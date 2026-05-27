@@ -7,12 +7,17 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from eeg_core.domain import (
+    ArtifactHandlingConfig,
+    BadChannelDetectionConfig,
+    BadChannelInterpolationConfig,
     EpochConfig,
     ErpConfig,
     EventColumnMapping,
     EventLog,
     NormalizedEvent,
+    IcaConfig,
     PreprocessingConfig,
+    PreprocessingQcConfig,
     diagnostic_warnings_from_strings,
 )
 from eeg_processing.epoching import EpochingError, epoch_preprocessed_eeg
@@ -302,12 +307,119 @@ def _preprocessing_config_from_payload(value: Any) -> PreprocessingConfig:
     if not isinstance(value, dict):
         raise WorkerCliError("Payload config must be a JSON object.")
 
+    bad_channel_detection = _optional_config_object(
+        value.get("bad_channel_detection"),
+        "bad_channel_detection",
+    )
+    bad_channel_interpolation = _optional_config_object(
+        value.get("bad_channel_interpolation"),
+        "bad_channel_interpolation",
+    )
+    ica = _optional_config_object(value.get("ica"), "ica")
+    artifact_handling = _optional_config_object(
+        value.get("artifact_handling"),
+        "artifact_handling",
+    )
+    qc = _optional_config_object(value.get("qc"), "qc")
     return PreprocessingConfig(
+        artifact_schema_version=int(
+            _optional_float(value.get("artifact_schema_version"), "artifact_schema_version")
+            or 1
+        ),
         high_pass_hz=_optional_float(value.get("high_pass_hz"), "high_pass_hz"),
         low_pass_hz=_optional_float(value.get("low_pass_hz"), "low_pass_hz"),
         notch_hz=_optional_float(value.get("notch_hz"), "notch_hz"),
         resample_hz=_optional_float(value.get("resample_hz"), "resample_hz"),
         reference=_optional_string(value.get("reference"), "reference"),
+        manual_bad_channels=_string_list(
+            value.get("manual_bad_channels"),
+            "manual_bad_channels",
+        ),
+        bad_channel_detection=BadChannelDetectionConfig(
+            enabled=_bool_or_default(
+                bad_channel_detection.get("enabled"),
+                "bad_channel_detection.enabled",
+                False,
+            ),
+            method=_optional_string(
+                bad_channel_detection.get("method"),
+                "bad_channel_detection.method",
+            )
+            or "none",
+            minimum_correlation=_optional_float(
+                bad_channel_detection.get("minimum_correlation"),
+                "bad_channel_detection.minimum_correlation",
+            ),
+            zscore_threshold=_optional_float(
+                bad_channel_detection.get("zscore_threshold"),
+                "bad_channel_detection.zscore_threshold",
+            ),
+        ),
+        bad_channel_interpolation=BadChannelInterpolationConfig(
+            enabled=_bool_or_default(
+                bad_channel_interpolation.get("enabled"),
+                "bad_channel_interpolation.enabled",
+                False,
+            ),
+            reset_bads=_bool_or_default(
+                bad_channel_interpolation.get("reset_bads"),
+                "bad_channel_interpolation.reset_bads",
+                True,
+            ),
+        ),
+        ica=IcaConfig(
+            enabled=_bool_or_default(ica.get("enabled"), "ica.enabled", False),
+            method=_optional_string(ica.get("method"), "ica.method") or "fastica",
+            n_components=_optional_number(ica.get("n_components"), "ica.n_components"),
+            random_state=int(
+                _optional_float(ica.get("random_state"), "ica.random_state") or 97
+            ),
+            max_iter=_max_iter_value(ica.get("max_iter")),
+            exclude_components=_int_list(
+                ica.get("exclude_components"),
+                "ica.exclude_components",
+            ),
+            eog_channels=_string_list(ica.get("eog_channels"), "ica.eog_channels"),
+            ecg_channels=_string_list(ica.get("ecg_channels"), "ica.ecg_channels"),
+        ),
+        artifact_handling=ArtifactHandlingConfig(
+            eog_enabled=_bool_or_default(
+                artifact_handling.get("eog_enabled"),
+                "artifact_handling.eog_enabled",
+                False,
+            ),
+            ecg_enabled=_bool_or_default(
+                artifact_handling.get("ecg_enabled"),
+                "artifact_handling.ecg_enabled",
+                False,
+            ),
+            eog_channels=_string_list(
+                artifact_handling.get("eog_channels"),
+                "artifact_handling.eog_channels",
+            ),
+            ecg_channels=_string_list(
+                artifact_handling.get("ecg_channels"),
+                "artifact_handling.ecg_channels",
+            ),
+            create_annotations=_bool_or_default(
+                artifact_handling.get("create_annotations"),
+                "artifact_handling.create_annotations",
+                True,
+            ),
+        ),
+        qc=PreprocessingQcConfig(
+            enabled=_bool_or_default(qc.get("enabled"), "qc.enabled", True),
+            include_before_after=_bool_or_default(
+                qc.get("include_before_after"),
+                "qc.include_before_after",
+                True,
+            ),
+            metrics=_string_list(
+                qc.get("metrics"),
+                "qc.metrics",
+                default=["channel_status", "amplitude", "annotations"],
+            ),
+        ),
     )
 
 
@@ -391,6 +503,75 @@ def _optional_string_list(value: Any, field_name: str) -> list[str] | None:
     if not isinstance(value, list):
         raise WorkerCliError(f"Payload config {field_name} must be a list or null.")
     return [str(item) for item in value]
+
+
+def _optional_config_object(value: Any, field_name: str) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise WorkerCliError(f"Payload config {field_name} must be a JSON object.")
+    return value
+
+
+def _string_list(
+    value: Any,
+    field_name: str,
+    *,
+    default: list[str] | None = None,
+) -> list[str]:
+    if value is None:
+        return list(default or [])
+    if not isinstance(value, list):
+        raise WorkerCliError(f"Payload config {field_name} must be a list.")
+    return [str(item) for item in value]
+
+
+def _int_list(value: Any, field_name: str) -> list[int]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise WorkerCliError(f"Payload config {field_name} must be a list.")
+    try:
+        return [int(item) for item in value]
+    except (TypeError, ValueError) as exc:
+        raise WorkerCliError(
+            f"Payload config {field_name} must contain integers."
+        ) from exc
+
+
+def _optional_number(value: Any, field_name: str) -> float | int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise WorkerCliError(f"Payload config {field_name} must be a number or null.")
+    if isinstance(value, int):
+        return value
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise WorkerCliError(
+            f"Payload config {field_name} must be a number or null."
+        ) from exc
+
+
+def _bool_or_default(value: Any, field_name: str, default: bool) -> bool:
+    parsed = _optional_bool(value, field_name)
+    return default if parsed is None else parsed
+
+
+def _max_iter_value(value: Any) -> int | str:
+    if value is None:
+        return "auto"
+    if value == "auto":
+        return "auto"
+    if isinstance(value, bool):
+        raise WorkerCliError("Payload config ica.max_iter must be an integer or auto.")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise WorkerCliError(
+            "Payload config ica.max_iter must be an integer or auto."
+        ) from exc
 
 
 def _normalized_event_from_payload(value: Any) -> NormalizedEvent:

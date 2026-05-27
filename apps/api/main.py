@@ -31,6 +31,9 @@ for package_src in (
     sys.path.insert(0, str(REPO_ROOT / package_src))
 
 from eeg_core.domain import (  # noqa: E402
+    ArtifactHandlingConfig,
+    BadChannelDetectionConfig,
+    BadChannelInterpolationConfig,
     ChannelMetadata,
     ComparisonConfig,
     Dataset as IngestionDataset,
@@ -47,7 +50,9 @@ from eeg_core.domain import (  # noqa: E402
     EventRowFilterCondition,
     Experiment,
     Participant,
+    IcaConfig,
     PreprocessingConfig,
+    PreprocessingQcConfig,
     PreprocessingRun,
     PreprocessingRunStatus,
     Project,
@@ -533,12 +538,64 @@ class EventMappingRequest(BaseModel):
     row_filter: EventRowFilterPayload | None = None
 
 
+class BadChannelDetectionConfigPayload(BaseModel):
+    enabled: bool = False
+    method: Literal["none", "flat", "deviation", "ransac"] = "none"
+    minimum_correlation: float | None = Field(default=None, ge=0, le=1)
+    zscore_threshold: float | None = Field(default=None, gt=0)
+
+
+class BadChannelInterpolationConfigPayload(BaseModel):
+    enabled: bool = False
+    reset_bads: bool = True
+
+
+class IcaConfigPayload(BaseModel):
+    enabled: bool = False
+    method: Literal["fastica", "infomax", "picard"] = "fastica"
+    n_components: int | float | None = Field(default=None, gt=0)
+    random_state: int = 97
+    max_iter: int | Literal["auto"] = "auto"
+    exclude_components: list[int] = Field(default_factory=list)
+    eog_channels: list[str] = Field(default_factory=list)
+    ecg_channels: list[str] = Field(default_factory=list)
+
+
+class ArtifactHandlingConfigPayload(BaseModel):
+    eog_enabled: bool = False
+    ecg_enabled: bool = False
+    eog_channels: list[str] = Field(default_factory=list)
+    ecg_channels: list[str] = Field(default_factory=list)
+    create_annotations: bool = True
+
+
+class PreprocessingQcConfigPayload(BaseModel):
+    enabled: bool = True
+    include_before_after: bool = True
+    metrics: list[
+        Literal["channel_status", "amplitude", "annotations", "psd", "ica"]
+    ] = Field(default_factory=lambda: ["channel_status", "amplitude", "annotations"])
+
+
 class PreprocessingConfigPayload(BaseModel):
+    artifact_schema_version: int = Field(default=1, ge=1)
     high_pass_hz: float | None = Field(default=None, ge=0)
     low_pass_hz: float | None = Field(default=None, gt=0)
     notch_hz: float | None = Field(default=None, gt=0)
     resample_hz: float | None = Field(default=None, gt=0)
     reference: str | None = None
+    manual_bad_channels: list[str] = Field(default_factory=list)
+    bad_channel_detection: BadChannelDetectionConfigPayload = Field(
+        default_factory=BadChannelDetectionConfigPayload
+    )
+    bad_channel_interpolation: BadChannelInterpolationConfigPayload = Field(
+        default_factory=BadChannelInterpolationConfigPayload
+    )
+    ica: IcaConfigPayload = Field(default_factory=IcaConfigPayload)
+    artifact_handling: ArtifactHandlingConfigPayload = Field(
+        default_factory=ArtifactHandlingConfigPayload
+    )
+    qc: PreprocessingQcConfigPayload = Field(default_factory=PreprocessingQcConfigPayload)
 
 
 class DiagnosticWarningResponse(BaseModel):
@@ -1171,7 +1228,7 @@ def create_preprocessing_run(
     if uploaded_file is None or uploaded_file.kind != UploadedFileKind.EEG:
         raise HTTPException(status_code=409, detail="EEG file not found")
 
-    config = PreprocessingConfig(**config_payload.model_dump())
+    config = _preprocessing_config_from_payload(config_payload)
     config_errors = _validate_preprocessing_config(config, recording)
     if config_errors:
         raise HTTPException(status_code=422, detail=config_errors)
@@ -1776,7 +1833,7 @@ def _preprocessing_run_response(run: PreprocessingRun) -> PreprocessingRunRespon
         dataset_id=run.dataset_id,
         run_kind=run.run_kind.value,
         schema_version=run.schema_version,
-        config=PreprocessingConfigPayload(**run.config.__dict__),
+        config=PreprocessingConfigPayload(**asdict(run.config)),
         status=run.status.value,
         started_at_utc=run.started_at_utc,
         finished_at_utc=run.finished_at_utc,
@@ -3169,13 +3226,31 @@ def _run_preprocessing_subprocess(
 
 
 def _preprocessing_config_payload(config: PreprocessingConfig) -> dict:
-    return {
-        "high_pass_hz": config.high_pass_hz,
-        "low_pass_hz": config.low_pass_hz,
-        "notch_hz": config.notch_hz,
-        "resample_hz": config.resample_hz,
-        "reference": config.reference,
-    }
+    return asdict(config)
+
+
+def _preprocessing_config_from_payload(
+    payload: PreprocessingConfigPayload,
+) -> PreprocessingConfig:
+    data = payload.model_dump()
+    return PreprocessingConfig(
+        artifact_schema_version=data["artifact_schema_version"],
+        high_pass_hz=data["high_pass_hz"],
+        low_pass_hz=data["low_pass_hz"],
+        notch_hz=data["notch_hz"],
+        resample_hz=data["resample_hz"],
+        reference=data["reference"],
+        manual_bad_channels=list(data["manual_bad_channels"]),
+        bad_channel_detection=BadChannelDetectionConfig(
+            **data["bad_channel_detection"]
+        ),
+        bad_channel_interpolation=BadChannelInterpolationConfig(
+            **data["bad_channel_interpolation"]
+        ),
+        ica=IcaConfig(**data["ica"]),
+        artifact_handling=ArtifactHandlingConfig(**data["artifact_handling"]),
+        qc=PreprocessingQcConfig(**data["qc"]),
+    )
 
 
 def _preprocessing_worker_artifact_paths(run_id: str) -> dict[str, Path]:
@@ -3852,6 +3927,39 @@ def _validate_preprocessing_config(
                         "reference contains unknown channels: "
                         + ", ".join(missing_channels)
                     )
+
+    channel_names = set(recording.metadata.channel_names)
+    for field_name, requested_channels in (
+        ("manual_bad_channels", config.manual_bad_channels),
+        ("ica.eog_channels", config.ica.eog_channels),
+        ("ica.ecg_channels", config.ica.ecg_channels),
+        ("artifact_handling.eog_channels", config.artifact_handling.eog_channels),
+        ("artifact_handling.ecg_channels", config.artifact_handling.ecg_channels),
+    ):
+        missing_channels = [
+            channel for channel in requested_channels if channel not in channel_names
+        ]
+        if missing_channels:
+            errors.append(
+                f"{field_name} contains unknown channels: "
+                + ", ".join(missing_channels)
+            )
+
+    if (
+        config.bad_channel_detection.enabled
+        and config.bad_channel_detection.method == "none"
+    ):
+        errors.append(
+            "bad_channel_detection.method must not be none when detection is enabled."
+        )
+
+    if not config.bad_channel_detection.enabled and config.bad_channel_detection.method != "none":
+        errors.append(
+            "bad_channel_detection.enabled must be true when a detection method is selected."
+        )
+
+    if not config.ica.enabled and config.ica.exclude_components:
+        errors.append("ica.enabled must be true when exclude_components is provided.")
 
     return errors
 

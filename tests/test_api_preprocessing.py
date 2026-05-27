@@ -255,6 +255,97 @@ def test_create_preprocessing_run_writes_output_and_metadata(tmp_path, monkeypat
     assert list_response.json()["runs"] == [payload]
 
 
+def test_create_preprocessing_run_accepts_artifact_aware_contract(
+    tmp_path,
+    monkeypatch,
+):
+    client = _client_with_dataset(tmp_path, monkeypatch)
+    _upload_eeg(client)
+    _upload_and_map_events(client)
+    recording = api_main.registry_repository.get_recording("dataset-001")
+    assert recording is not None
+    channel_name = recording.metadata.channel_names[0]
+
+    response = client.post(
+        "/datasets/dataset-001/preprocessing-runs",
+        json={
+            "manual_bad_channels": [channel_name],
+            "bad_channel_detection": {
+                "enabled": True,
+                "method": "deviation",
+                "zscore_threshold": 4.0,
+            },
+            "bad_channel_interpolation": {"enabled": True},
+            "ica": {
+                "enabled": True,
+                "n_components": 0.95,
+                "exclude_components": [0],
+                "eog_channels": [channel_name],
+            },
+            "artifact_handling": {
+                "eog_enabled": True,
+                "eog_channels": [channel_name],
+            },
+            "qc": {"metrics": ["channel_status", "psd", "ica"]},
+        },
+    )
+
+    assert response.status_code == 201
+    queued_payload = response.json()
+    assert queued_payload["config"]["artifact_schema_version"] == 1
+    assert queued_payload["config"]["manual_bad_channels"] == [channel_name]
+    assert queued_payload["config"]["bad_channel_detection"]["method"] == "deviation"
+    assert queued_payload["config"]["bad_channel_interpolation"]["enabled"] is True
+    assert queued_payload["config"]["ica"]["exclude_components"] == [0]
+    assert queued_payload["config"]["artifact_handling"]["eog_channels"] == [
+        channel_name
+    ]
+    assert queued_payload["config"]["qc"]["metrics"] == [
+        "channel_status",
+        "psd",
+        "ica",
+    ]
+
+    payload = _wait_for_run_status(client, queued_payload["run_id"], "completed")
+
+    assert "ICA config was captured but is not executed until Phase B7." in payload[
+        "warnings"
+    ]
+    artifact_summary_path = Path(
+        str(payload["output_metadata"]["artifact_summary_path"])
+    )
+    artifact_summary = json.loads(artifact_summary_path.read_text(encoding="utf-8"))
+    assert artifact_summary["schema_version"] == 1
+    assert artifact_summary["bad_channels"]["manual"]["channels"] == [channel_name]
+    assert artifact_summary["bad_channels"]["detection"]["status"] == "schema_only"
+    assert artifact_summary["bad_channels"]["interpolation"]["status"] == "schema_only"
+    assert artifact_summary["ica"]["status"] == "schema_only"
+    assert artifact_summary["qc"]["config"]["metrics"] == [
+        "channel_status",
+        "psd",
+        "ica",
+    ]
+
+
+def test_create_preprocessing_run_rejects_unknown_artifact_channel(
+    tmp_path,
+    monkeypatch,
+):
+    client = _client_with_dataset(tmp_path, monkeypatch)
+    _upload_eeg(client)
+    _upload_and_map_events(client)
+
+    response = client.post(
+        "/datasets/dataset-001/preprocessing-runs",
+        json={"manual_bad_channels": ["MissingChannel"]},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == [
+        "manual_bad_channels contains unknown channels: MissingChannel"
+    ]
+
+
 def test_create_preprocessing_run_persists_failed_run_details(
     tmp_path,
     monkeypatch,
