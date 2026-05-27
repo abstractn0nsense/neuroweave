@@ -36,6 +36,8 @@ from eeg_core.domain import (  # noqa: E402
     BadChannelInterpolationConfig,
     BatchDatasetSelection,
     BatchItemStatus,
+    BatchApplyPreviewResult,
+    BatchPlanningError,
     BatchRequest,
     BatchRunBindings,
     BatchRunPlan,
@@ -79,11 +81,10 @@ from eeg_core.domain import (  # noqa: E402
     WorkflowTemplateFieldPolicy,
     WorkflowTemplateFieldPolicyEntry,
     WorkflowTemplateWorkflow,
-    create_batch_template_snapshot,
     diagnostic_warnings_from_strings,
+    plan_batch_run,
     validate_ingestion_dataset,
     validate_batch_request,
-    validate_batch_run_plan,
     validate_workflow_template,
 )
 from eeg_processing import (  # noqa: E402
@@ -1866,32 +1867,21 @@ def create_batch(request: BatchCreateRequest) -> BatchRunPlanResponse:
 
     captured_at = _utc_now_iso()
     batch_id = _new_id("batch")
-    snapshot = create_batch_template_snapshot(
-        template,
-        captured_at_utc=captured_at,
-    )
-    items = _batch_subject_run_plans(
-        batch_id=batch_id,
-        template=template,
-        batch_request=batch_request,
-    )
-    batch_status = _initial_batch_status(items)
-    plan = BatchRunPlan(
-        batch_id=batch_id,
-        request=batch_request,
-        template_snapshot=snapshot,
-        items=items,
-        created_at_utc=captured_at,
-        updated_at_utc=captured_at,
-        status=batch_status,
-        warnings=request_validation.warnings,
-    )
-    validation = validate_batch_run_plan(plan)
-    if not validation.valid:
-        raise HTTPException(status_code=422, detail=validation.errors)
+    try:
+        planning_result = plan_batch_run(
+            batch_id=batch_id,
+            request=batch_request,
+            template=template,
+            captured_at_utc=captured_at,
+            dataset_resolver=registry_repository.get_dataset,
+            apply_preview_resolver=_batch_apply_preview_for_planning,
+            run_bindings_resolver=_batch_run_bindings_for_preview,
+        )
+    except BatchPlanningError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors) from exc
 
     try:
-        saved_batch = batch_repository.save_batch(plan)
+        saved_batch = batch_repository.save_batch(planning_result.plan)
     except JsonRegistryError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _batch_run_plan_response(saved_batch)
@@ -2446,82 +2436,35 @@ def _batch_request_from_payload(request: BatchCreateRequest) -> BatchRequest:
     )
 
 
-def _batch_subject_run_plans(
-    *,
-    batch_id: str,
+def _batch_apply_preview_for_planning(
     template: WorkflowTemplate,
-    batch_request: BatchRequest,
-) -> list[BatchSubjectRunPlan]:
-    items: list[BatchSubjectRunPlan] = []
-    for index, dataset_id in enumerate(batch_request.dataset_selection.dataset_ids):
-        item_id = f"{batch_id}-item-{index + 1:03d}"
-        dataset = registry_repository.get_dataset(dataset_id)
-        if dataset is None:
-            items.append(
-                BatchSubjectRunPlan(
-                    item_id=item_id,
-                    dataset_id=dataset_id,
-                    status=BatchItemStatus.FAILED,
-                    errors=[f"Dataset not found: {dataset_id}"],
-                )
-            )
-            continue
-
-        preview = _workflow_template_apply_preview(
-            template=template,
-            request=WorkflowTemplateApplyPreviewRequest(
-                target_dataset_id=dataset_id,
-            ),
-            dataset=dataset,
-        )
-        configs = _workflow_template_workflow_from_payload(preview.configs)
-        planned_steps = _planned_steps_from_workflow(configs)
-        status_value = (
-            BatchItemStatus.FAILED
-            if preview.status == "invalid"
-            else BatchItemStatus.PENDING
-        )
-        warnings = list(preview.warnings)
-        if preview.status == "requires_review":
-            warnings.append("Template apply requires review before execution.")
-        if batch_request.dry_run:
-            warnings.append("Batch request is dry_run; worker execution is disabled.")
-
-        items.append(
-            BatchSubjectRunPlan(
-                item_id=item_id,
-                dataset_id=dataset_id,
-                status=status_value,
-                configs=configs,
-                bindings=_batch_run_bindings_for_preview(dataset_id=dataset_id),
-                planned_steps=planned_steps,
-                excluded_fields=[
-                    WorkflowTemplateFieldPolicyEntry(**entry.model_dump())
-                    for entry in preview.excluded_fields
-                ],
-                review_required_fields=[
-                    WorkflowTemplateFieldPolicyEntry(**entry.model_dump())
-                    for entry in preview.review_required_fields
-                ],
-                warnings=_unique_strings(warnings),
-                errors=preview.errors,
-            )
-        )
-    return items
+    dataset: IngestionDataset,
+) -> BatchApplyPreviewResult:
+    preview = _workflow_template_apply_preview(
+        template=template,
+        request=WorkflowTemplateApplyPreviewRequest(
+            target_dataset_id=dataset.dataset_id,
+        ),
+        dataset=dataset,
+    )
+    return BatchApplyPreviewResult(
+        target_dataset_id=preview.target_dataset_id,
+        status=preview.status,
+        configs=_workflow_template_workflow_from_payload(preview.configs),
+        excluded_fields=[
+            WorkflowTemplateFieldPolicyEntry(**entry.model_dump())
+            for entry in preview.excluded_fields
+        ],
+        review_required_fields=[
+            WorkflowTemplateFieldPolicyEntry(**entry.model_dump())
+            for entry in preview.review_required_fields
+        ],
+        errors=list(preview.errors),
+        warnings=list(preview.warnings),
+    )
 
 
-def _planned_steps_from_workflow(workflow: WorkflowTemplateWorkflow) -> list[RunKind]:
-    steps: list[RunKind] = []
-    if workflow.preprocessing is not None:
-        steps.append(RunKind.PREPROCESSING)
-    if workflow.epoch is not None:
-        steps.append(RunKind.EPOCH)
-    if workflow.erp is not None:
-        steps.append(RunKind.ERP)
-    return steps
-
-
-def _batch_run_bindings_for_preview(*, dataset_id: str) -> BatchRunBindings:
+def _batch_run_bindings_for_preview(dataset_id: str) -> BatchRunBindings:
     preprocessing_run = _preview_preprocessing_binding(
         dataset_id=dataset_id,
         requested_run_id=None,
@@ -2536,12 +2479,6 @@ def _batch_run_bindings_for_preview(*, dataset_id: str) -> BatchRunBindings:
         ),
         epoch_run_id=epoch_run.run_id if epoch_run is not None else None,
     )
-
-
-def _initial_batch_status(items: list[BatchSubjectRunPlan]) -> BatchStatus:
-    if items and all(item.status == BatchItemStatus.FAILED for item in items):
-        return BatchStatus.FAILED
-    return BatchStatus.PENDING
 
 
 def _batch_run_plan_response(plan: BatchRunPlan) -> BatchRunPlanResponse:

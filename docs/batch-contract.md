@@ -195,3 +195,26 @@ each selected dataset, writes per-subject config/status records, and returns the
 persisted plan. Later edits to the workflow template registry do not change the
 embedded batch snapshot. Pending batches can be cancelled immediately; running
 batches enter `cancelling` so future workers can drain active items.
+
+## C9 Planning Service
+
+C9 moves per-subject planning into `plan_batch_run`. The service accepts an
+ordered `BatchRequest`, the selected template, dataset lookup, template
+apply-preview resolver, and run binding resolver. It finalizes the
+`BatchRunPlan` before any worker execution starts.
+
+Responsibilities:
+
+- Validate the batch request before any dataset preview work.
+- Resolve each selected dataset independently.
+- Run template apply preview for each found dataset.
+- Copy preview configs, excluded fields, review-required fields, warnings, and
+  errors into that dataset's `BatchSubjectRunPlan`.
+- Mark invalid or missing datasets as failed items without blocking valid
+  datasets from receiving pending plans.
+- Add dry-run and review-required execution warnings at item level.
+- Validate the completed batch plan, including snapshot digest and item order,
+  before repository persistence.
+
+The service also returns per-dataset planning results so callers can inspect
+validation state without parsing the persisted plan shape directly.

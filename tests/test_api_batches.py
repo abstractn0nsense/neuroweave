@@ -249,3 +249,48 @@ def test_batch_api_persists_failed_item_for_missing_dataset(tmp_path, monkeypatc
     assert payload["status"] == "failed"
     assert payload["items"][0]["status"] == "failed"
     assert payload["items"][0]["errors"] == ["Dataset not found: missing-dataset"]
+
+
+def test_batch_api_reports_per_dataset_apply_validation_errors(
+    tmp_path,
+    monkeypatch,
+):
+    client = _client_with_repositories(tmp_path, monkeypatch)
+    _seed_dataset("dataset-ready")
+    api_main.registry_repository.save_dataset(
+        Dataset(
+            dataset_id="dataset-without-recording",
+            project_id="project-001",
+            experiment_id="experiment-001",
+            participant_id="participant-missing-recording",
+            session_id="session-missing-recording",
+            status=DatasetStatus.VALID,
+            recording_id="missing-recording",
+            event_log_id="event-log-missing-recording",
+        )
+    )
+    create_template_response = client.post(
+        "/workflow-templates",
+        json=_template_payload(),
+    )
+    assert create_template_response.status_code == 201
+
+    response = client.post(
+        "/batches",
+        json={
+            "template_id": "template-001",
+            "dataset_selection": {
+                "dataset_ids": ["dataset-ready", "dataset-without-recording"]
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["status"] == "pending"
+    assert payload["items"][0]["status"] == "pending"
+    assert payload["items"][0]["errors"] == []
+    assert payload["items"][1]["status"] == "failed"
+    assert payload["items"][1]["errors"] == [
+        "Recording metadata is required before preprocessing."
+    ]

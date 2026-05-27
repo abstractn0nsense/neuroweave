@@ -60,6 +60,13 @@ from eeg_core.domain.ingestion import (
     validate_workflow_template,
     workflow_template_digest_sha256,
 )
+from eeg_core.domain.batch_planning import (
+    BatchApplyPreviewResult,
+    BatchDatasetPlanningResult,
+    BatchPlanningError,
+    BatchPlanningResult,
+    plan_batch_run,
+)
 from eeg_core.domain.recording import (
     ChannelMetadata,
     RecordingMetadata,
@@ -74,8 +81,12 @@ __all__ = [
     "ArtifactHandlingConfig",
     "BadChannelDetectionConfig",
     "BadChannelInterpolationConfig",
+    "BatchApplyPreviewResult",
     "BatchDatasetSelection",
+    "BatchDatasetPlanningResult",
     "BatchItemStatus",
+    "BatchPlanningError",
+    "BatchPlanningResult",
     "BatchRequest",
     "BatchRunBindings",
     "BatchRunPlan",
@@ -129,6 +140,7 @@ __all__ = [
     "create_batch_template_snapshot",
     "diagnostic_warning_from_dict",
     "diagnostic_warnings_from_strings",
+    "plan_batch_run",
     "validate_batch_request",
     "validate_batch_run_plan",
     "validate_workflow_template",

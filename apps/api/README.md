@@ -96,12 +96,14 @@ fields, and review-required fields without queueing work.
 
 Batch plans are written through `eeg_io.registry.JsonBatchRepository` under
 `data/batches/`, or `NEUROWEAVE_BATCHES_DIR` when set. `POST /batches` validates
-a multi-dataset request, snapshots the current workflow template, creates one
-per-subject item per selected dataset, and persists the immutable plan without
-queueing worker execution yet. `GET /batches` and `GET /batches/{batch_id}` read
-the persisted plans. `POST /batches/{batch_id}/cancel` marks pending plans and
-items as `cancelled`; running plans move to `cancelling` for future worker
-drain behavior.
+a multi-dataset request, snapshots the current workflow template, runs the batch
+planning service over each selected dataset, and persists the immutable plan
+without queueing worker execution yet. The planner copies per-dataset apply
+preview configs, warnings, errors, excluded fields, and review-required fields
+into each subject item before the plan is saved. `GET /batches` and `GET
+/batches/{batch_id}` read the persisted plans. `POST /batches/{batch_id}/cancel`
+marks pending plans and items as `cancelled`; running plans move to
+`cancelling` for future worker drain behavior.
 
 Preprocessing config validation rejects invalid filter ordering, cutoff frequencies at or above Nyquist, upsampling beyond the input sampling rate, and custom reference channels that do not exist in the uploaded recording.
 
