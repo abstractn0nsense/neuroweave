@@ -38,6 +38,10 @@ Supported preview platform:
 
 Run from the repository root unless a command changes directory.
 
+For Phase C template and batch work, also keep the focused release gate in
+`docs/phase-c-release-gate.md` current. It records the mainline smoke result,
+Phase B artifact contract, and template/batch compatibility checklist.
+
 ```powershell
 git status --short --branch
 ```
