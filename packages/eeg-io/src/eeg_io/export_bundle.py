@@ -19,6 +19,7 @@ def build_export_bundle(
     artifact_manifest_path: Path,
     output_zip_path: Path,
     analysis_report_path: Path | None = None,
+    extra_artifacts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     manifest = load_artifact_manifest(artifact_manifest_path)
     diagnostics = {"warnings": _missing_artifact_warnings(manifest.missing_artifacts)}
@@ -58,6 +59,30 @@ def build_export_bundle(
                 )
 
         used_archive_paths = {entry["archive_path"] for entry in entries}
+        for artifact in extra_artifacts or []:
+            source_path = Path(str(artifact.get("path", "")))
+            logical_name = str(artifact.get("logical_name", "extra_artifact"))
+            artifact_type = str(artifact.get("artifact_type", "extra_artifact"))
+            archive_path = str(
+                artifact.get("archive_path")
+                or f"artifacts/{_safe_filename(source_path.name)}"
+            )
+            if not source_path.is_file():
+                diagnostics["warnings"].append(
+                    _missing_warning(logical_name=logical_name, path=source_path)
+                )
+                continue
+            archive_path = _dedupe_archive_path(archive_path, used_archive_paths)
+            used_archive_paths.add(archive_path)
+            _write_file_entry(
+                bundle,
+                source_path=source_path,
+                archive_path=archive_path,
+                logical_name=logical_name,
+                artifact_type=artifact_type,
+                entries=entries,
+            )
+
         for artifact in manifest.artifacts:
             if artifact.logical_name == "analysis_report":
                 continue

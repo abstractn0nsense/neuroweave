@@ -258,3 +258,26 @@ Cancellation checkpoints:
   preprocessing run.
 - The worker checks cancellation before each item and after each concrete run,
   then finalizes remaining pending items as `cancelled`.
+
+## C13 Batch Artifact Integration
+
+C13 adds a batch-level `batch_summary.json` artifact under
+`data/batches/{batch_id}/`. The summary is generated whenever a batch reaches a
+terminal worker/cancel state and can also be regenerated through:
+
+```text
+GET /batches/{batch_id}/summary-artifact
+```
+
+The summary records the immutable template snapshot digest, batch status,
+per-status item counts, retry lineage fields, concrete run ids, and per-subject
+artifact-manifest links such as `/artifacts/{run_id}/artifact_manifest.json`.
+
+Run-level QC summary, analysis report, and export bundle paths now surface batch
+context when the selected run was created by a batch or descends from a batched
+preprocessing run. They preserve the original per-run artifact manifest and add
+batch context as an additive section:
+
+- QC summary adds `summary.batch`.
+- Analysis reports add top-level `batch`.
+- Export bundles include `batch/batch_summary.json`.

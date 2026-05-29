@@ -995,6 +995,9 @@ class BatchRunsResponse(BaseModel):
     batches: list[BatchRunPlanResponse]
 
 
+BATCH_SUMMARY_SCHEMA_VERSION = 1
+
+
 class QcSummaryResponse(BaseModel):
     dataset_id: str
     run_id: str
@@ -1967,6 +1970,19 @@ def list_batches() -> BatchRunsResponse:
     )
 
 
+@app.get("/batches/{batch_id}/summary-artifact")
+def get_batch_summary_artifact(batch_id: str) -> FileResponse:
+    batch = batch_repository.get_batch(batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    summary_path = _write_batch_summary_artifact(batch)
+    return FileResponse(
+        summary_path,
+        media_type="application/json",
+        filename="batch_summary.json",
+    )
+
+
 @app.post(
     "/batches/{batch_id}/items/{item_id}/retry",
     response_model=BatchRunPlanResponse,
@@ -2061,6 +2077,8 @@ def cancel_batch(batch_id: str) -> BatchRunPlanResponse:
         ],
     )
     batch_repository.save_batch(updated_batch)
+    if updated_batch.status == BatchStatus.CANCELLED:
+        _write_batch_summary_artifact(updated_batch)
     return _batch_run_plan_response(updated_batch)
 
 
@@ -2084,6 +2102,9 @@ def get_dataset_qc_summary(
         summary = build_qc_summary(manifest_path)
     except QcSummaryError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    batch_context = _batch_context_for_run(run)
+    if batch_context is not None:
+        summary["batch"] = batch_context
 
     return QcSummaryResponse(
         dataset_id=dataset_id,
@@ -4353,7 +4374,7 @@ def _generate_run_analysis_report(
 
     output_directory = manifest_path.parent
     report_path = output_directory / "analysis_report.json"
-    extra_sections = _erp_analysis_report_sections(run)
+    extra_sections = _analysis_report_extra_sections(run)
     write_analysis_report(
         report_path,
         dataset_id=run.dataset_id,
@@ -4526,6 +4547,18 @@ def _run_warning_payload(
     }
 
 
+def _analysis_report_extra_sections(
+    run: PreprocessingRun | EpochRun | ErpRun,
+) -> dict:
+    extra_sections: dict[str, Any] = {}
+    if isinstance(run, ErpRun):
+        extra_sections.update(_erp_analysis_report_sections(run))
+    batch_context = _batch_context_for_run(run)
+    if batch_context is not None:
+        extra_sections["batch"] = batch_context
+    return extra_sections
+
+
 def _diagnostics_report_payload(diagnostics: dict) -> dict:
     payload = _run_diagnostics_response(diagnostics)
     if isinstance(payload, RunDiagnosticsResponse):
@@ -4563,6 +4596,7 @@ def _export_bundle_response(run: PreprocessingRun | EpochRun | ErpRun) -> FileRe
                 run_kind=_run_kind_value(run),
                 artifact_manifest_path=manifest_path,
                 config_snapshot=asdict(run.config),
+                extra_sections=_analysis_report_extra_sections(run),
             )
         except (AnalysisReportError, ArtifactManifestError, QcSummaryError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -4577,6 +4611,7 @@ def _export_bundle_response(run: PreprocessingRun | EpochRun | ErpRun) -> FileRe
             artifact_manifest_path=manifest_path,
             analysis_report_path=analysis_report_path,
             output_zip_path=export_bundle_path,
+            extra_artifacts=_batch_export_artifacts_for_run(run),
         )
     except (AnalysisReportError, ArtifactManifestError, QcSummaryError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -4790,13 +4825,14 @@ def _execute_batch_run(batch_id: str) -> None:
             reason="Batch cancelled at final checkpoint.",
         )
         return
-    batch_repository.save_batch(
+    saved_batch = batch_repository.save_batch(
         replace(
             final_batch,
             status=_batch_status_from_items(final_batch.items),
             updated_at_utc=_batch_updated_at(final_batch),
         )
     )
+    _write_batch_summary_artifact(saved_batch)
 
 
 def _ensure_batch_preprocessing_run(
@@ -4988,6 +5024,7 @@ def _cancel_batch_pending_items(batch: BatchRunPlan, *, reason: str) -> BatchRun
         updated_at_utc=_batch_updated_at(batch),
     )
     batch_repository.save_batch(cancelled_batch)
+    _write_batch_summary_artifact(cancelled_batch)
     return cancelled_batch
 
 
@@ -5016,6 +5053,190 @@ def _retry_failed_batch_item(item: BatchSubjectRunPlan) -> BatchSubjectRunPlan:
         ),
         errors=[],
     )
+
+
+def _write_batch_summary_artifact(batch: BatchRunPlan) -> Path:
+    summary_path = _batch_summary_artifact_path(batch.batch_id)
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_json_file(summary_path, _batch_summary_payload(batch, summary_path))
+    return summary_path
+
+
+def _batch_summary_artifact_path(batch_id: str) -> Path:
+    return batch_repository.batch_directory(batch_id) / "batch_summary.json"
+
+
+def _batch_summary_payload(batch: BatchRunPlan, summary_path: Path) -> dict:
+    return {
+        "schema_version": BATCH_SUMMARY_SCHEMA_VERSION,
+        "batch_id": batch.batch_id,
+        "status": batch.status.value,
+        "created_at_utc": batch.created_at_utc,
+        "updated_at_utc": batch.updated_at_utc,
+        "summary_artifact_path": str(summary_path),
+        "template_snapshot": {
+            "template_id": batch.template_snapshot.template_id,
+            "template_name": batch.template_snapshot.template_name,
+            "template_updated_at_utc": (
+                batch.template_snapshot.template_updated_at_utc
+            ),
+            "captured_at_utc": batch.template_snapshot.captured_at_utc,
+            "template_digest_sha256": (
+                batch.template_snapshot.template_digest_sha256
+            ),
+        },
+        "item_counts": _batch_item_counts(batch.items),
+        "items": [_batch_summary_item_payload(item) for item in batch.items],
+        "warnings": batch.warnings,
+        "errors": batch.errors,
+    }
+
+
+def _batch_item_counts(items: list[BatchSubjectRunPlan]) -> dict[str, int]:
+    counts = {
+        "total": len(items),
+        "pending": 0,
+        "running": 0,
+        "completed": 0,
+        "failed": 0,
+        "cancelling": 0,
+        "cancelled": 0,
+    }
+    for item in items:
+        counts[item.status.value] = counts.get(item.status.value, 0) + 1
+    return counts
+
+
+def _batch_summary_item_payload(item: BatchSubjectRunPlan) -> dict:
+    return {
+        "item_id": item.item_id,
+        "dataset_id": item.dataset_id,
+        "status": item.status.value,
+        "attempt": item.attempt,
+        "retry_of_item_id": item.retry_of_item_id,
+        "run_ids": item.run_ids,
+        "previous_run_ids": item.previous_run_ids,
+        "previous_error": item.previous_error,
+        "artifact_manifests": {
+            kind: _run_artifact_manifest_link(run_id)
+            for kind, run_id in item.run_ids.items()
+        },
+        "warnings": item.warnings,
+        "errors": item.errors,
+    }
+
+
+def _run_artifact_manifest_link(run_id: str) -> dict:
+    run = _find_run_by_id(run_id)
+    manifest_path = _run_artifact_manifest_path(run) if run is not None else None
+    return {
+        "run_id": run_id,
+        "run_kind": _run_kind_value(run) if run is not None else None,
+        "run_status": _run_status_value(run) if run is not None else None,
+        "artifact_manifest_path": str(manifest_path)
+        if manifest_path is not None
+        else None,
+        "artifact_manifest_url": f"/artifacts/{run_id}/artifact_manifest.json"
+        if manifest_path is not None
+        else None,
+    }
+
+
+def _batch_context_for_run(
+    run: PreprocessingRun | EpochRun | ErpRun,
+) -> dict | None:
+    batch_source_run = _batch_source_run_for_run(run)
+    if batch_source_run is None:
+        return None
+    batch_id = batch_source_run.output_metadata.get("batch_id")
+    if not isinstance(batch_id, str) or not batch_id:
+        return None
+    batch = batch_repository.get_batch(batch_id)
+    if batch is None:
+        return None
+
+    summary_path = _write_batch_summary_artifact(batch)
+    batch_item_id = batch_source_run.output_metadata.get("batch_item_id")
+    item = (
+        _batch_item_by_id(batch, batch_item_id)
+        if isinstance(batch_item_id, str)
+        else None
+    )
+    if item is None:
+        item = _batch_item_for_run_id(batch, batch_source_run.run_id)
+
+    return {
+        "batch_id": batch.batch_id,
+        "batch_status": batch.status.value,
+        "batch_item_id": item.item_id if item is not None else batch_item_id,
+        "batch_item_status": item.status.value if item is not None else None,
+        "attempt": item.attempt if item is not None else None,
+        "source_run_id": batch_source_run.run_id,
+        "source_run_kind": _run_kind_value(batch_source_run),
+        "summary_artifact": {
+            "path": str(summary_path),
+            "url": f"/batches/{batch.batch_id}/summary-artifact",
+        },
+        "subject_manifest": _run_artifact_manifest_link(batch_source_run.run_id),
+        "template_snapshot": {
+            "template_id": batch.template_snapshot.template_id,
+            "template_name": batch.template_snapshot.template_name,
+            "template_digest_sha256": (
+                batch.template_snapshot.template_digest_sha256
+            ),
+        },
+        "item_counts": _batch_item_counts(batch.items),
+    }
+
+
+def _batch_source_run_for_run(
+    run: PreprocessingRun | EpochRun | ErpRun,
+) -> PreprocessingRun | EpochRun | ErpRun | None:
+    if isinstance(run.output_metadata.get("batch_id"), str):
+        return run
+    if isinstance(run, EpochRun):
+        preprocessing_run = run_repository.get_preprocessing_run(
+            run.config.preprocessing_run_id
+        )
+        if preprocessing_run is not None and isinstance(
+            preprocessing_run.output_metadata.get("batch_id"),
+            str,
+        ):
+            return preprocessing_run
+    if isinstance(run, ErpRun):
+        epoch_run = run_repository.get_epoch_run(run.config.epoch_run_id)
+        if epoch_run is not None:
+            return _batch_source_run_for_run(epoch_run)
+    return None
+
+
+def _batch_item_for_run_id(
+    batch: BatchRunPlan,
+    run_id: str,
+) -> BatchSubjectRunPlan | None:
+    for item in batch.items:
+        if run_id in item.run_ids.values():
+            return item
+    return None
+
+
+def _batch_export_artifacts_for_run(
+    run: PreprocessingRun | EpochRun | ErpRun,
+) -> list[dict[str, str]]:
+    batch_context = _batch_context_for_run(run)
+    if batch_context is None:
+        return []
+    summary = batch_context.get("summary_artifact")
+    if not isinstance(summary, dict) or not isinstance(summary.get("path"), str):
+        return []
+    return [
+        {
+            "logical_name": "batch_summary",
+            "artifact_type": "batch_summary_json",
+            "path": summary["path"],
+            "archive_path": "batch/batch_summary.json",
+        }
+    ]
 
 
 def _save_batch_item(

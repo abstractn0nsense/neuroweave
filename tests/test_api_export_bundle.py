@@ -8,6 +8,12 @@ from fastapi.testclient import TestClient
 
 from apps.api import main as api_main
 from eeg_core.domain import (
+    BatchDatasetSelection,
+    BatchItemStatus,
+    BatchRequest,
+    BatchRunPlan,
+    BatchStatus,
+    BatchSubjectRunPlan,
     EpochConfig,
     EpochRun,
     EpochRunStatus,
@@ -21,9 +27,13 @@ from eeg_core.domain import (
     PreprocessingRun,
     PreprocessingRunStatus,
     Recording,
+    RunKind,
+    WorkflowTemplate,
+    WorkflowTemplateWorkflow,
+    create_batch_template_snapshot,
 )
 from eeg_core.domain.recording import RecordingMetadata
-from eeg_io.registry import JsonRegistryRepository, JsonRunRepository
+from eeg_io.registry import JsonBatchRepository, JsonRegistryRepository, JsonRunRepository
 
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "qc"
@@ -93,6 +103,54 @@ def test_get_erp_run_export_bundle_accepts_direct_run_id(tmp_path, monkeypatch):
         analysis_report = json.loads(bundle.read("analysis_report.json"))
 
     assert analysis_report["run_id"] == "erp-001"
+
+
+def test_get_export_bundle_includes_batch_summary_and_report_context(
+    tmp_path,
+    monkeypatch,
+):
+    client, run_repository = _client(tmp_path, monkeypatch)
+    manifest_path = _copy_fixture(tmp_path, "preprocessing")
+    run_repository.save_preprocessing_run(
+        PreprocessingRun(
+            run_id="preprocess-001",
+            dataset_id="dataset-001",
+            config=PreprocessingConfig(reference="average"),
+            status=PreprocessingRunStatus.COMPLETED,
+            finished_at_utc="2026-05-26T00:00:00+00:00",
+            output_metadata={
+                "artifact_manifest_path": str(manifest_path),
+                "batch_id": "batch-001",
+                "batch_item_id": "batch-001-item-001",
+            },
+        )
+    )
+    _save_completed_batch_for_run("preprocess-001")
+
+    response = client.get(
+        "/datasets/dataset-001/export-bundle",
+        params={"run_id": "preprocess-001"},
+    )
+
+    assert response.status_code == 200
+    with zipfile.ZipFile(BytesIO(response.content)) as bundle:
+        assert "batch/batch_summary.json" in bundle.namelist()
+        analysis_report = json.loads(bundle.read("analysis_report.json"))
+        batch_summary = json.loads(bundle.read("batch/batch_summary.json"))
+        bundle_manifest = json.loads(bundle.read("export_bundle_manifest.json"))
+
+    assert analysis_report["batch"]["batch_id"] == "batch-001"
+    assert analysis_report["batch"]["subject_manifest"][
+        "artifact_manifest_path"
+    ] == str(manifest_path)
+    assert batch_summary["items"][0]["artifact_manifests"]["preprocessing"][
+        "artifact_manifest_url"
+    ] == "/artifacts/preprocess-001/artifact_manifest.json"
+    assert any(
+        entry["logical_name"] == "batch_summary"
+        and entry["archive_path"] == "batch/batch_summary.json"
+        for entry in bundle_manifest["entries"]
+    )
 
 
 def test_create_erp_analysis_report_writes_report_and_manifest_entry(
@@ -263,8 +321,10 @@ def test_get_export_bundle_rejects_incomplete_run(tmp_path, monkeypatch):
 def _client(tmp_path, monkeypatch):
     registry_repository = JsonRegistryRepository(tmp_path / "uploads")
     run_repository = JsonRunRepository(tmp_path / "runs")
+    batch_repository = JsonBatchRepository(tmp_path / "batches")
     monkeypatch.setattr(api_main, "registry_repository", registry_repository)
     monkeypatch.setattr(api_main, "run_repository", run_repository)
+    monkeypatch.setattr(api_main, "batch_repository", batch_repository)
     client = TestClient(api_main.app)
     client.post("/projects", json={"project_id": "project-001", "name": "Memory EEG"})
     client.post(
@@ -282,6 +342,50 @@ def _client(tmp_path, monkeypatch):
         },
     )
     return client, run_repository
+
+
+def _copy_fixture(tmp_path: Path, name: str) -> Path:
+    destination = tmp_path / "artifacts" / name
+    shutil.copytree(FIXTURE_ROOT / name, destination)
+    return destination / "artifact_manifest.json"
+
+
+def _save_completed_batch_for_run(run_id: str) -> None:
+    template = WorkflowTemplate(
+        template_id="template-001",
+        name="Batch preprocessing",
+        created_at_utc="2026-05-28T00:00:00Z",
+        updated_at_utc="2026-05-28T00:10:00Z",
+        workflow=WorkflowTemplateWorkflow(
+            preprocessing=PreprocessingConfig(reference="average")
+        ),
+    )
+    api_main.batch_repository.save_batch(
+        BatchRunPlan(
+            batch_id="batch-001",
+            request=BatchRequest(
+                template_id=template.template_id,
+                dataset_selection=BatchDatasetSelection(dataset_ids=["dataset-001"]),
+            ),
+            template_snapshot=create_batch_template_snapshot(
+                template,
+                captured_at_utc="2026-05-28T00:15:00Z",
+            ),
+            items=[
+                BatchSubjectRunPlan(
+                    item_id="batch-001-item-001",
+                    dataset_id="dataset-001",
+                    status=BatchItemStatus.COMPLETED,
+                    configs=template.workflow,
+                    planned_steps=[RunKind.PREPROCESSING],
+                    run_ids={"preprocessing": run_id},
+                )
+            ],
+            status=BatchStatus.COMPLETED,
+            created_at_utc="2026-05-28T00:16:00Z",
+            updated_at_utc="2026-05-28T00:17:00Z",
+        )
+    )
 
 
 def _copy_erp_fixture_with_figure(tmp_path: Path) -> Path:

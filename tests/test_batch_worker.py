@@ -1,4 +1,5 @@
 from dataclasses import replace
+import json
 
 from apps.api import main as api_main
 from eeg_core.domain import (
@@ -206,6 +207,23 @@ def test_batch_worker_runs_preprocessing_sequentially_and_allows_partial(
     assert batch.items[0].run_ids["preprocessing"].startswith("preprocess-")
     assert batch.items[0].warnings == ["Completed with warning."]
     assert batch.items[1].errors == ["Synthetic preprocessing failure."]
+    summary_path = api_main._batch_summary_artifact_path("batch-001")
+    assert summary_path.is_file()
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["batch_id"] == "batch-001"
+    assert summary["status"] == "partial"
+    assert summary["item_counts"] == {
+        "total": 2,
+        "pending": 0,
+        "running": 0,
+        "completed": 1,
+        "failed": 1,
+        "cancelling": 0,
+        "cancelled": 0,
+    }
+    assert summary["items"][0]["artifact_manifests"]["preprocessing"]["run_id"] == (
+        batch.items[0].run_ids["preprocessing"]
+    )
 
 
 def test_batch_worker_cancel_checkpoint_cancels_pending_items(tmp_path, monkeypatch):
