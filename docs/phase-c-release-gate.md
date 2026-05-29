@@ -311,3 +311,30 @@ Phase C is cleared to start after C0 because:
   export paths.
 - Run schema and artifact compatibility constraints are explicit before template
   and batch persistence changes begin.
+
+## Phase C Exit Gate
+
+Recorded on 2026-05-29 after C15 hardening.
+
+Gate commands:
+
+```powershell
+pytest --basetemp=data\cache\pytest
+npm.cmd run build
+npm.cmd run e2e:all
+```
+
+Local results:
+
+- `pytest --basetemp=data\cache\pytest`: 250 passed.
+- `npm.cmd run build`: passed.
+- `npm.cmd run e2e:all`: passed, including Phase 2, Phase C batch retry, Phase
+  3 epoch, and Phase 3 ERP smoke tests.
+
+Hardening checks fixed by C15:
+
+- Review-required or stale template previews are not runnable batch items.
+- Batch cancellation writes terminal cancelled state and a summary artifact.
+- Partial completion continues to preserve completed subject artifact links.
+- Batch-created runs still use the normal artifact integrity, QC summary,
+  analysis report, and export bundle contracts.

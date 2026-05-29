@@ -246,6 +246,11 @@ def test_batch_worker_cancel_checkpoint_cancels_pending_items(tmp_path, monkeypa
         BatchItemStatus.CANCELLED,
         BatchItemStatus.CANCELLED,
     ]
+    summary_path = api_main._batch_summary_artifact_path("batch-001")
+    assert summary_path.is_file()
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["status"] == "cancelled"
+    assert summary["item_counts"]["cancelled"] == 2
     assert api_main.run_repository.list_preprocessing_runs() == []
 
 

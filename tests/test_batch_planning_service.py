@@ -125,7 +125,7 @@ def test_batch_planning_service_runs_preview_for_each_selected_dataset():
     ]
     assert [item.status for item in result.plan.items] == [
         BatchItemStatus.PENDING,
-        BatchItemStatus.PENDING,
+        BatchItemStatus.FAILED,
         BatchItemStatus.FAILED,
         BatchItemStatus.FAILED,
     ]
@@ -140,7 +140,9 @@ def test_batch_planning_service_runs_preview_for_each_selected_dataset():
     )
     assert result.plan.items[1].warnings == [
         "Channel-specific fields require review.",
-        "Template apply requires review before execution.",
+    ]
+    assert result.plan.items[1].errors == [
+        "Template apply requires review before batch execution.",
     ]
     assert result.plan.items[2].errors == [
         "Recording metadata is required before preprocessing."
@@ -148,7 +150,7 @@ def test_batch_planning_service_runs_preview_for_each_selected_dataset():
     assert result.plan.items[3].errors == ["Dataset not found: dataset-missing"]
     assert [dataset.valid for dataset in result.datasets] == [
         True,
-        True,
+        False,
         False,
         False,
     ]

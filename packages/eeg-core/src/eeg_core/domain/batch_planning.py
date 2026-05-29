@@ -152,16 +152,17 @@ def _plan_subject_item(
     preview = apply_preview_resolver(template, dataset)
     item_status = (
         BatchItemStatus.FAILED
-        if preview.status == "invalid"
+        if preview.status in {"invalid", "requires_review"}
         else BatchItemStatus.PENDING
     )
     warnings = list(preview.warnings)
+    errors = list(preview.errors)
     if preview.status == "requires_review":
-        warnings.append("Template apply requires review before execution.")
+        errors.append("Template apply requires review before batch execution.")
     if request.dry_run:
         warnings.append("Batch request is dry_run; worker execution is disabled.")
     warnings = _unique_strings(warnings)
-    errors = _unique_strings(preview.errors)
+    errors = _unique_strings(errors)
     item = BatchSubjectRunPlan(
         item_id=item_id,
         dataset_id=dataset_id,

@@ -261,6 +261,46 @@ def test_batch_api_retries_failed_item_with_same_template_snapshot(
     )
 
 
+def test_batch_api_blocks_stale_review_required_template_from_execution(
+    tmp_path,
+    monkeypatch,
+):
+    client = _client_with_repositories(tmp_path, monkeypatch)
+    _seed_dataset("dataset-001")
+    create_template_response = client.post(
+        "/workflow-templates",
+        json=_template_payload(
+            workflow={
+                "preprocessing": {
+                    "reference": "average",
+                    "ica": {"eog_channels": ["Fp1"]},
+                },
+                "epoch": None,
+                "erp": None,
+            },
+        ),
+    )
+    assert create_template_response.status_code == 201
+    assert create_template_response.json()["validation"]["stale"] is True
+
+    create_response = client.post(
+        "/batches",
+        json={
+            "template_id": "template-001",
+            "dataset_selection": {"dataset_ids": ["dataset-001"]},
+        },
+    )
+
+    assert create_response.status_code == 201
+    payload = create_response.json()
+    assert payload["status"] == "failed"
+    assert payload["items"][0]["status"] == "failed"
+    assert payload["items"][0]["errors"] == [
+        "Template apply requires review before batch execution."
+    ]
+    assert payload["items"][0]["review_required_fields"] == []
+
+
 def test_batch_api_rejects_invalid_request_and_missing_template(
     tmp_path,
     monkeypatch,

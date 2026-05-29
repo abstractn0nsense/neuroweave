@@ -281,3 +281,26 @@ batch context as an additive section:
 - QC summary adds `summary.batch`.
 - Analysis reports add top-level `batch`.
 - Export bundles include `batch/batch_summary.json`.
+
+## C15 Hardening
+
+C15 closes Phase C with these release rules:
+
+- Batch cancellation must persist terminal `cancelled` state and generate a
+  `batch_summary.json` artifact with cancelled item counts.
+- Partial completion remains valid when at least one item completed and at
+  least one item failed; completed item artifact-manifest links stay available
+  in the batch summary.
+- Templates whose apply preview returns `requires_review` are not runnable in a
+  batch. The affected subject item is planned as `failed` with
+  `Template apply requires review before batch execution.` so stale or
+  channel-specific review work cannot execute automatically.
+- Batch-created subject runs continue to use the normal run artifact manifest,
+  artifact integrity, QC summary, analysis report, and export bundle paths.
+- The Phase C full regression gate is:
+
+```text
+pytest --basetemp=data\cache\pytest
+npm.cmd run build
+npm.cmd run e2e:all
+```

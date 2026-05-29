@@ -442,6 +442,9 @@ API behavior:
 - Invalid templates return `422` with validation errors.
 - Valid but stale templates can be saved and include `validation.stale: true`
   plus `stale_reasons` in the response.
+- Batch creation uses apply-preview as a release gate. If preview returns
+  `requires_review`, the batch item is marked `failed` and is not executed
+  automatically.
 - `GET /workflow-templates` returns all templates sorted by id.
 - `DELETE /workflow-templates/{template_id}` removes the registry entry and
   returns `204`; missing templates return `404`.
