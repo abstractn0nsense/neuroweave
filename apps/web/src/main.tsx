@@ -1745,6 +1745,24 @@ function App() {
     });
   }
 
+  async function retryBatchItem(batchId: string, itemId: string) {
+    await runAction(`batch-retry-${itemId}`, async () => {
+      const batch = await requestJson<BatchRunPlan>(
+        `/batches/${encodeURIComponent(batchId)}/items/${encodeURIComponent(
+          itemId,
+        )}/retry`,
+        { method: "POST" },
+      );
+      updateBatchInState(batch);
+      setSelectedBatchId(batch.batch_id);
+      await refreshBatchRunOutputs(batch);
+      setNotice({
+        tone: "neutral",
+        message: `Retry queued for ${itemId}.`,
+      });
+    });
+  }
+
   async function beginComparisonSummary() {
     const configError = getComparisonConfigError(comparisonConfig);
     if (configError) {
@@ -2466,6 +2484,7 @@ function App() {
                   onCreateBatch={beginBatchRun}
                   onFilterChange={setBatchItemFilter}
                   onRefreshBatches={() => refreshBatches({ silent: false })}
+                  onRetryItem={retryBatchItem}
                   onSelectBatch={setSelectedBatchId}
                   datasetsById={datasetsById}
                   preprocessingRunsById={batchPreprocessingRuns}
@@ -2790,6 +2809,7 @@ function BatchRunsPanel({
   onCreateBatch,
   onFilterChange,
   onRefreshBatches,
+  onRetryItem,
   onSelectBatch,
   datasetsById,
   preprocessingRunsById,
@@ -2806,6 +2826,7 @@ function BatchRunsPanel({
   onCreateBatch: () => void;
   onFilterChange: (filter: BatchItemFilter) => void;
   onRefreshBatches: () => void;
+  onRetryItem: (batchId: string, itemId: string) => void;
   onSelectBatch: (batchId: string) => void;
   datasetsById: Record<string, Dataset>;
   preprocessingRunsById: Record<string, PreprocessingRun>;
@@ -2909,6 +2930,9 @@ function BatchRunsPanel({
             datasetsById={datasetsById}
             filter={batchFilter}
             items={filteredItems}
+            batchId={selectedBatch.batch_id}
+            busyAction={busyAction}
+            onRetryItem={onRetryItem}
             preprocessingRunsById={preprocessingRunsById}
           />
         </>
@@ -2922,14 +2946,20 @@ function BatchRunsPanel({
 }
 
 function BatchSubjectTable({
+  batchId,
+  busyAction,
   datasetsById,
   filter,
   items,
+  onRetryItem,
   preprocessingRunsById,
 }: {
+  batchId: string;
+  busyAction: string | null;
   datasetsById: Record<string, Dataset>;
   filter: BatchItemFilter;
   items: BatchSubjectRunPlan[];
+  onRetryItem: (batchId: string, itemId: string) => void;
   preprocessingRunsById: Record<string, PreprocessingRun>;
 }) {
   if (items.length === 0) {
@@ -2947,6 +2977,7 @@ function BatchSubjectTable({
             <th>Output</th>
             <th>Warnings</th>
             <th>Errors</th>
+            <th>Retry</th>
           </tr>
         </thead>
         <tbody>
@@ -2973,6 +3004,14 @@ function BatchSubjectTable({
                 </td>
                 <td>{formatBatchMessages(item.warnings, preprocessingRun?.warnings)}</td>
                 <td>{formatBatchMessages(item.errors, preprocessingRun?.errors)}</td>
+                <td>
+                  <BatchRetryCell
+                    batchId={batchId}
+                    busyAction={busyAction}
+                    item={item}
+                    onRetryItem={onRetryItem}
+                  />
+                </td>
               </tr>
             );
           })}
@@ -2999,6 +3038,39 @@ function BatchOutputCell({
       <strong>{runId ?? "pending run"}</strong>
       <small>{outputPath ?? "Output pending"}</small>
     </span>
+  );
+}
+
+function BatchRetryCell({
+  batchId,
+  busyAction,
+  item,
+  onRetryItem,
+}: {
+  batchId: string;
+  busyAction: string | null;
+  item: BatchSubjectRunPlan;
+  onRetryItem: (batchId: string, itemId: string) => void;
+}) {
+  const previousRunId = item.previous_run_ids.preprocessing;
+  const isRetrying = busyAction === `batch-retry-${item.item_id}`;
+  return (
+    <div className="batch-retry-cell">
+      <span>Attempt {item.attempt}</span>
+      {previousRunId ? <small>Previous run: {previousRunId}</small> : null}
+      {item.previous_error ? <small>Previous error: {item.previous_error}</small> : null}
+      {item.status === "failed" ? (
+        <button
+          className="secondary-button compact-button"
+          data-testid={`retry-batch-item-${item.item_id}`}
+          disabled={isRetrying}
+          onClick={() => onRetryItem(batchId, item.item_id)}
+          type="button"
+        >
+          {isRetrying ? "Retrying..." : "Retry"}
+        </button>
+      ) : null}
+    </div>
   );
 }
 

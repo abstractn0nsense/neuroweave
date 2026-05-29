@@ -188,6 +188,7 @@ POST /batches
 GET /batches
 GET /batches/{batch_id}
 POST /batches/{batch_id}/cancel
+POST /batches/{batch_id}/items/{item_id}/retry
 ```
 
 `POST /batches` creates the immutable template snapshot, runs apply-preview for
@@ -195,6 +196,14 @@ each selected dataset, writes per-subject config/status records, and returns the
 persisted plan. Later edits to the workflow template registry do not change the
 embedded batch snapshot. Pending batches can be cancelled immediately; running
 batches enter `cancelling` so future workers can drain active items.
+
+`POST /batches/{batch_id}/items/{item_id}/retry` retries one failed subject
+item inside an idle batch. The endpoint preserves the batch-level template
+snapshot, moves the failed attempt's current run ids into `previous_run_ids`,
+stores the failure reason in `previous_error`, clears current `run_ids`,
+increments `attempt`, and re-queues the same batch. The worker creates a new
+concrete preprocessing run id for the retry; it does not reuse the failed run id
+or re-read a later registry template revision.
 
 ## C9 Planning Service
 

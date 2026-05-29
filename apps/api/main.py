@@ -1967,6 +1967,52 @@ def list_batches() -> BatchRunsResponse:
     )
 
 
+@app.post(
+    "/batches/{batch_id}/items/{item_id}/retry",
+    response_model=BatchRunPlanResponse,
+)
+def retry_batch_item(batch_id: str, item_id: str) -> BatchRunPlanResponse:
+    batch = batch_repository.get_batch(batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    if batch.status in {
+        BatchStatus.PENDING,
+        BatchStatus.RUNNING,
+        BatchStatus.CANCELLING,
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail="Batch must be idle before retry.",
+        )
+
+    item = _batch_item_by_id(batch, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Batch item not found")
+    if item.status != BatchItemStatus.FAILED:
+        raise HTTPException(
+            status_code=409,
+            detail="Only failed batch items can be retried.",
+        )
+
+    retry_item = _retry_failed_batch_item(item)
+    retry_batch = replace(
+        batch,
+        status=BatchStatus.PENDING,
+        updated_at_utc=_batch_updated_at(batch),
+        items=[
+            retry_item if current.item_id == item.item_id else current
+            for current in batch.items
+        ],
+    )
+    try:
+        saved_batch = batch_repository.save_batch(retry_batch)
+    except JsonRegistryError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    batch_worker.enqueue(saved_batch.batch_id)
+    return _batch_run_plan_response(saved_batch)
+
+
 @app.get("/batches/{batch_id}", response_model=BatchRunPlanResponse)
 def get_batch(batch_id: str) -> BatchRunPlanResponse:
     batch = batch_repository.get_batch(batch_id)
@@ -4953,6 +4999,23 @@ def _batch_item_by_id(
         if item.item_id == item_id:
             return item
     return None
+
+
+def _retry_failed_batch_item(item: BatchSubjectRunPlan) -> BatchSubjectRunPlan:
+    previous_error = " ".join(item.errors).strip() or item.previous_error
+    previous_run_ids = item.run_ids or item.previous_run_ids
+    return replace(
+        item,
+        status=BatchItemStatus.PENDING,
+        attempt=item.attempt + 1,
+        run_ids={},
+        previous_run_ids=previous_run_ids,
+        previous_error=previous_error,
+        warnings=_dedupe_strings(
+            [*item.warnings, "Retry queued after failed attempt."]
+        ),
+        errors=[],
+    )
 
 
 def _save_batch_item(

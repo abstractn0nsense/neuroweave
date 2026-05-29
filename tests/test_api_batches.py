@@ -1,7 +1,11 @@
+from dataclasses import replace
+
 from fastapi.testclient import TestClient
 
 from apps.api import main as api_main
 from eeg_core.domain import (
+    BatchItemStatus,
+    BatchStatus,
     Dataset,
     DatasetStatus,
     EventColumnMapping,
@@ -203,6 +207,58 @@ def test_batch_api_creates_lists_gets_cancels_and_freezes_template_snapshot(
         "cancelled",
     ]
     assert client.get(f"/batches/{created['batch_id']}").json() == cancelled
+
+
+def test_batch_api_retries_failed_item_with_same_template_snapshot(
+    tmp_path,
+    monkeypatch,
+):
+    client = _client_with_repositories(tmp_path, monkeypatch)
+    _seed_dataset("dataset-001")
+    create_template_response = client.post(
+        "/workflow-templates",
+        json=_template_payload(),
+    )
+    assert create_template_response.status_code == 201
+    create_response = client.post(
+        "/batches",
+        json={
+            "template_id": "template-001",
+            "dataset_selection": {"dataset_ids": ["dataset-001"]},
+        },
+    )
+    assert create_response.status_code == 201
+    created = create_response.json()
+    batch = api_main.batch_repository.get_batch(created["batch_id"])
+    assert batch is not None
+    failed_item = replace(
+        batch.items[0],
+        status=BatchItemStatus.FAILED,
+        run_ids={"preprocessing": "preprocess-failed"},
+        errors=["Synthetic preprocessing failure."],
+    )
+    api_main.batch_repository.save_batch(
+        replace(batch, status=BatchStatus.FAILED, items=[failed_item])
+    )
+
+    retry_response = client.post(
+        f"/batches/{created['batch_id']}/items/{failed_item.item_id}/retry"
+    )
+
+    assert retry_response.status_code == 200
+    retried = retry_response.json()
+    assert retried["status"] == "pending"
+    assert retried["template_snapshot"] == created["template_snapshot"]
+    assert retried["items"][0]["status"] == "pending"
+    assert retried["items"][0]["attempt"] == 2
+    assert retried["items"][0]["run_ids"] == {}
+    assert retried["items"][0]["previous_run_ids"] == {
+        "preprocessing": "preprocess-failed"
+    }
+    assert (
+        retried["items"][0]["previous_error"]
+        == "Synthetic preprocessing failure."
+    )
 
 
 def test_batch_api_rejects_invalid_request_and_missing_template(

@@ -32,6 +32,11 @@ from eeg_io.registry import (
 )
 
 
+class _NoopBatchWorker:
+    def enqueue(self, batch_id: str) -> None:
+        return None
+
+
 def _configure_repositories(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         api_main,
@@ -254,3 +259,70 @@ def test_cancel_batch_marks_active_preprocessing_run_cancelling(tmp_path, monkey
     assert updated_run is not None
     assert updated_run.status == PreprocessingRunStatus.CANCELLING
     assert cancelled_response.status == "cancelling"
+
+
+def test_failed_batch_item_retry_keeps_snapshot_and_creates_new_run_id(
+    tmp_path,
+    monkeypatch,
+):
+    _configure_repositories(tmp_path, monkeypatch)
+    monkeypatch.setattr(api_main, "batch_worker", _NoopBatchWorker())
+    _seed_dataset(tmp_path, "dataset-001")
+    _save_batch_plan(["dataset-001"])
+    batch = api_main.batch_repository.get_batch("batch-001")
+    assert batch is not None
+    original_snapshot = batch.template_snapshot
+    failed_item = replace(
+        batch.items[0],
+        status=BatchItemStatus.FAILED,
+        run_ids={"preprocessing": "preprocess-failed"},
+        errors=["Synthetic preprocessing failure."],
+    )
+    api_main.batch_repository.save_batch(
+        replace(batch, status=BatchStatus.FAILED, items=[failed_item])
+    )
+
+    retry_response = api_main.retry_batch_item("batch-001", failed_item.item_id)
+    retry_batch = api_main.batch_repository.get_batch("batch-001")
+    assert retry_batch is not None
+    assert retry_response.status == "pending"
+    assert retry_batch.template_snapshot == original_snapshot
+    assert retry_batch.items[0].status == BatchItemStatus.PENDING
+    assert retry_batch.items[0].attempt == 2
+    assert retry_batch.items[0].run_ids == {}
+    assert retry_batch.items[0].previous_run_ids == {
+        "preprocessing": "preprocess-failed"
+    }
+    assert retry_batch.items[0].previous_error == "Synthetic preprocessing failure."
+
+    def fake_execute_preprocessing(run_id: str) -> None:
+        assert run_id != "preprocess-failed"
+        run = api_main.run_repository.get_preprocessing_run(run_id)
+        assert run is not None
+        api_main.run_repository.save_preprocessing_run(
+            replace(
+                run,
+                status=PreprocessingRunStatus.COMPLETED,
+                finished_at_utc="2026-05-28T00:20:00Z",
+            )
+        )
+
+    monkeypatch.setattr(
+        api_main,
+        "_execute_preprocessing_run",
+        fake_execute_preprocessing,
+    )
+
+    api_main._execute_batch_run("batch-001")
+
+    completed = api_main.batch_repository.get_batch("batch-001")
+    assert completed is not None
+    assert completed.status == BatchStatus.COMPLETED
+    assert completed.template_snapshot == original_snapshot
+    assert completed.items[0].status == BatchItemStatus.COMPLETED
+    assert completed.items[0].attempt == 2
+    assert completed.items[0].run_ids["preprocessing"] != "preprocess-failed"
+    assert completed.items[0].previous_run_ids == {
+        "preprocessing": "preprocess-failed"
+    }
+    assert completed.items[0].previous_error == "Synthetic preprocessing failure."
