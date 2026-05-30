@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "profile_id": "physionet_eegmmi_s001r03",
+  "dataset": {
+    "name": "PhysioNet EEG Motor Movement/Imagery Dataset",
+    "record": "S001R03"
+  },
+  "expected_warnings": [],
+  "allowed_warnings": [
+    {
+      "code": "unstructured_warning",
+      "severity": "warning",
+      "source": "worker",
+      "impact_contains_any": [
+        "filter_length",
+        "annotations",
+        "reference",
+        "boundary",
+        "projection"
+      ],
+      "suggested_action": "Review the worker warning and document whether it changes the analysis plan."
+    }
+  ],
+  "notes": [
+    "Ingest, event mapping, and validation should not emit expected warnings for this profile.",
+    "MNE/worker warnings may vary by MNE version and local preprocessing settings; keep them structured with source=worker."
+  ]
+}

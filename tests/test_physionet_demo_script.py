@@ -1,5 +1,6 @@
 import csv
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -44,6 +45,44 @@ def test_physionet_demo_event_csv_generation_is_offline(tmp_path):
     assert rows[1]["task"] == "executed_left_right_fist"
     assert rows[1]["onset"] == "4.200000"
     assert rows[1]["duration"] == "4.100000"
+
+
+def test_physionet_demo_smoke_manifest_is_offline(tmp_path):
+    script = _load_script_module()
+    eeg_path = Path("data/raw/public-samples/S001R03.edf")
+    event_path = Path("data/raw/public-samples/S001R03_events.csv")
+    manifest_path = tmp_path / "S001R03_neuroweave_smoke.json"
+
+    payload = script.build_smoke_manifest(
+        record="S001R03",
+        eeg_path=eeg_path,
+        event_csv_path=event_path,
+        event_count=30,
+    )
+    script.write_smoke_manifest(
+        destination=manifest_path,
+        record="S001R03",
+        eeg_path=eeg_path,
+        event_csv_path=event_path,
+        event_count=30,
+    )
+
+    written = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert payload["profile_id"] == "physionet_eegmmi_s001r03"
+    assert payload["local_files"]["eeg_recording"] == "data/raw/public-samples/S001R03.edf"
+    assert payload["event_mapping"]["trial_type"] == "trial_type"
+    assert payload["epoching"]["expected_conditions"] == [
+        "rest",
+        "left_fist",
+        "right_fist",
+    ]
+    assert payload["comparison"]["condition_a"] == "left_fist"
+    assert payload["comparison"]["condition_b"] == "right_fist"
+    assert payload["expected_warnings_snapshot"].endswith(
+        "physionet_eegmmi_s001r03_expected_warnings.json"
+    )
+    assert written == payload
 
 
 def test_physionet_demo_url_targets_public_edf():

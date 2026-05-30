@@ -159,6 +159,10 @@ Acceptance:
   comparison for both samples.
 - Expected warnings are documented instead of treated as unexplained noise.
 
+Status: complete. See `docs/public-data-smoke-fixtures.md`,
+`docs/public-demo-physionet-eegmmi.md`, and
+`docs/public-demo-openneuro-bids.md`.
+
 ### D6. QC And Export Review Polish
 
 - Make the QC dashboard and export flow surface Phase D provenance, sidecar,

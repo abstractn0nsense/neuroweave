@@ -28,14 +28,21 @@ The script writes small deterministic FIF files to `tests/fixtures/eeg/` and loc
 
 This opt-in script downloads PhysioNet EEGMMI `S001R03.edf` to
 `data/raw/public-samples/` and creates `S001R03_events.csv` from the EDF+
-annotations. The generated files stay under the ignored `data/` directory and
-must not be committed.
+annotations. It also writes `S001R03_neuroweave_smoke.json`, which records the
+fixed ingest -> preprocessing -> epoch -> ERP -> comparison contract. The
+generated files stay under the ignored `data/` directory and must not be
+committed.
 
 If the EDF already exists locally, regenerate only the CSV with:
 
 ```powershell
 .\apps\api\.venv\Scripts\python.exe .\scripts\prepare_physionet_eegmmi_demo.py --events-only
 ```
+
+See `docs/public-data-smoke-fixtures.md`,
+`docs/public-demo-physionet-eegmmi.md`, and
+`docs/public-demo-openneuro-bids.md` for the public-data smoke profiles and
+expected warning snapshots.
 
 ## Click-to-Run Launcher
 

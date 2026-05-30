@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "profile_id": "openneuro_bids_style_sample",
+  "dataset": {
+    "name": "OpenNeuro EEG-BIDS sample",
+    "example_dataset": "ds002718",
+    "example_recording": "sub-019_task-FaceRecognition_eeg.set"
+  },
+  "expected_warnings": [],
+  "allowed_warnings": [
+    {
+      "code": "bids_sidecar_missing",
+      "severity": "warning",
+      "source": "bids",
+      "impact_contains_any": [
+        "optional",
+        "sidecar"
+      ],
+      "suggested_action": "Continue if the EEG and events files are readable; attach sidecars when available."
+    },
+    {
+      "code": "unstructured_warning",
+      "severity": "warning",
+      "source": "worker",
+      "impact_contains_any": [
+        "montage",
+        "reference",
+        "projection",
+        "filter"
+      ],
+      "suggested_action": "Review preprocessing output and QC summary before interpreting ERP differences."
+    }
+  ],
+  "notes": [
+    "The smoke contract expects discovered _eeg.json, _channels.tsv, and _events.tsv when present.",
+    "Invalid sidecars should produce structured diagnostics and must not corrupt the dataset upload."
+  ]
+}
