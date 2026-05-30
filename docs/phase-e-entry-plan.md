@@ -223,7 +223,27 @@ preview with chain, source, parent-run, config, and artifact checks. The plan
 uses `ready`, `partially_recoverable`, and `blocked` states; it exposes
 `blockers` and `warnings` separately and never queues or mutates reruns.
 
-### E7. Phase E Exit Gate
+### E7. Public Dataset CI Opt-In
+
+- Add a manual GitHub Actions workflow or equivalent script contract for public
+  dataset smoke checks.
+- Keep large public data downloads out of default pull request and `main` push
+  CI.
+- Make the download step explicit and opt-in.
+
+Acceptance:
+
+- Default CI still does not download public EEG data.
+- The opt-in path can run offline contract checks without downloading data.
+- Public-data downloads, when enabled, write only under ignored `data/` paths
+  and publish small manifest artifacts instead of committing raw data.
+
+Status: complete. `.github/workflows/public-dataset-smoke.yml` is a manual-only
+workflow with `download_public_data=false` by default. It always runs the offline
+public smoke contract tests and only prepares the PhysioNet EEGMMI files when a
+maintainer explicitly enables the download input.
+
+### E8. Phase E Exit Gate
 
 - Run the full Python test gate, web build, and `npm.cmd run e2e:all`.
 - Record final statistics and reproducibility behavior.

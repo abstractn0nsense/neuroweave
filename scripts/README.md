@@ -44,6 +44,12 @@ See `docs/public-data-smoke-fixtures.md`,
 `docs/public-demo-openneuro-bids.md` for the public-data smoke profiles and
 expected warning snapshots.
 
+GitHub Actions also has a manual opt-in workflow:
+`.github/workflows/public-dataset-smoke.yml`. It is not attached to pull request
+or `main` push CI. By default it only runs the offline public-smoke contract
+tests; set `download_public_data=true` in the manual dispatch form to download
+the PhysioNet EDF and prepare the manifest/event CSV artifacts.
+
 ## Click-to-Run Launcher
 
 ```powershell

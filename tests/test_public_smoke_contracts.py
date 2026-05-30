@@ -5,6 +5,7 @@ from eeg_core.domain import DiagnosticWarningSource
 
 
 FIXTURE_ROOT = Path("tests/fixtures/public_smoke")
+OPT_IN_WORKFLOW = Path(".github/workflows/public-dataset-smoke.yml")
 DOCS = [
     Path("docs/public-data-smoke-fixtures.md"),
     Path("docs/public-demo-physionet-eegmmi.md"),
@@ -67,3 +68,16 @@ def test_public_data_root_is_git_ignored():
     gitignore = Path(".gitignore").read_text(encoding="utf-8")
 
     assert "data/" in gitignore.splitlines()
+
+
+def test_public_dataset_ci_is_manual_opt_in():
+    workflow = OPT_IN_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "workflow_dispatch:" in workflow
+    assert "pull_request:" not in workflow
+    assert "push:" not in workflow
+    assert "download_public_data" in workflow
+    assert "default: false" in workflow
+    assert "tests/test_public_smoke_contracts.py" in workflow
+    assert "scripts/prepare_physionet_eegmmi_demo.py" in workflow
+    assert "data/raw/public-samples" in workflow
