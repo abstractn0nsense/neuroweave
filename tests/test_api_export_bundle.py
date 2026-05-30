@@ -28,6 +28,7 @@ from eeg_core.domain import (
     PreprocessingRunStatus,
     Recording,
     RunKind,
+    SourceFileMetadata,
     WorkflowTemplate,
     WorkflowTemplateWorkflow,
     create_batch_template_snapshot,
@@ -68,16 +69,19 @@ def test_get_dataset_export_bundle_downloads_latest_completed_run(
             "analysis_report.json",
             "artifact_manifest.json",
             "diagnostics/erp_metadata.json",
+            "diagnostics/phase_d_metadata.json",
             "export_bundle_manifest.json",
             "figures/erp_standard_plot.png",
         ]
         analysis_report = json.loads(bundle.read("analysis_report.json"))
+        phase_d_metadata = json.loads(bundle.read("diagnostics/phase_d_metadata.json"))
         bundle_manifest = json.loads(bundle.read("export_bundle_manifest.json"))
 
     assert analysis_report["dataset_id"] == "dataset-001"
     assert analysis_report["run_id"] == "erp-001"
     assert analysis_report["run_kind"] == "erp"
     assert analysis_report["config_snapshot"]["epoch_run_id"] == "epoch-001"
+    assert phase_d_metadata["dataset"]["dataset_id"] == "dataset-001"
     assert bundle_manifest["analysis_report_included"] is True
     assert bundle_manifest["diagnostics"] == {"warnings": []}
 
@@ -178,6 +182,19 @@ def test_create_erp_analysis_report_writes_report_and_manifest_entry(
                 sampling_rate_hz=100.0,
                 duration_seconds=6.0,
                 channel_names=["Cz", "Pz"],
+                source_files=[
+                    SourceFileMetadata(
+                        role="eeg",
+                        original_filename="sample.fif",
+                        stored_path="data/raw/uploads/sample.fif",
+                        size_bytes=512,
+                        checksum_sha256="abc123",
+                    )
+                ],
+                sidecar_discovery={
+                    "schema_version": 1,
+                    "candidates": [{"sidecar_type": "eeg_json", "status": "valid"}],
+                },
             ),
         )
     )
@@ -192,6 +209,7 @@ def test_create_erp_analysis_report_writes_report_and_manifest_entry(
                 trial_type="trial_type",
             ),
             row_count=3,
+            provenance={"sources": [{"role": "event_file"}]},
             events=[
                 NormalizedEvent(1.0, 1, trial_type="standard"),
                 NormalizedEvent(2.0, 2, trial_type="target"),
@@ -247,10 +265,20 @@ def test_create_erp_analysis_report_writes_report_and_manifest_entry(
     report = payload["report"]
     assert report["dataset_metadata"]["participant_label"] == "sub-001"
     assert report["dataset_metadata"]["recording"]["sampling_rate_hz"] == 100.0
+    assert report["dataset_metadata"]["recording"]["source_files"][0][
+        "original_filename"
+    ] == "sample.fif"
+    assert report["dataset_metadata"]["recording"]["sidecar_discovery"][
+        "candidates"
+    ][0]["sidecar_type"] == "eeg_json"
     assert report["event_summary"]["condition_counts"] == {
         "standard": 1,
         "target": 2,
     }
+    assert report["event_summary"]["provenance"]["sources"][0]["role"] == "event_file"
+    assert report["phase_d_metadata"]["recording"]["source_files"][0][
+        "original_filename"
+    ] == "sample.fif"
     assert report["preprocessing_config"]["high_pass_hz"] == 1.0
     assert report["epoch_config"]["condition_field"] == "trial_type"
     assert report["erp_config"]["conditions"] == ["standard", "target"]
@@ -299,6 +327,70 @@ def test_get_export_bundle_includes_missing_artifact_warning(tmp_path, monkeypat
     assert "erp_standard_plot" in bundle_manifest["diagnostics"]["warnings"][0][
         "impact"
     ]
+
+
+def test_get_export_bundle_warns_for_missing_phase_d_optional_metadata(
+    tmp_path,
+    monkeypatch,
+):
+    client, run_repository = _client(tmp_path, monkeypatch)
+    registry_repository = api_main.registry_repository
+    manifest_path = _copy_erp_fixture_with_figure(tmp_path)
+    registry_repository.save_recording(
+        Recording(
+            recording_id="recording-001",
+            dataset_id="dataset-001",
+            file_id="file-001",
+            metadata=RecordingMetadata(
+                dataset_id="dataset-001",
+                file_format="fif",
+                channel_count=2,
+                sampling_rate_hz=100.0,
+                duration_seconds=6.0,
+                channel_names=["Cz", "Pz"],
+            ),
+        )
+    )
+    registry_repository.save_event_log(
+        EventLog(
+            event_log_id="events-001",
+            dataset_id="dataset-001",
+            file_id="events-file-001",
+            mapping=EventColumnMapping(onset_seconds="onset"),
+            row_count=1,
+            events=[NormalizedEvent(1.0, 1)],
+        )
+    )
+    run_repository.save_erp_run(
+        ErpRun(
+            run_id="erp-001",
+            dataset_id="dataset-001",
+            config=ErpConfig(epoch_run_id="epoch-001"),
+            status=ErpRunStatus.COMPLETED,
+            finished_at_utc="2026-05-26T00:00:00+00:00",
+            output_metadata={"artifact_manifest_path": str(manifest_path)},
+        )
+    )
+
+    response = client.get("/datasets/dataset-001/export-bundle")
+
+    assert response.status_code == 200
+    with zipfile.ZipFile(BytesIO(response.content)) as bundle:
+        phase_d_metadata = json.loads(bundle.read("diagnostics/phase_d_metadata.json"))
+        bundle_manifest = json.loads(bundle.read("export_bundle_manifest.json"))
+
+    warning_codes = {
+        warning["code"]
+        for warning in bundle_manifest["diagnostics"]["warnings"]
+    }
+    assert warning_codes == {
+        "event_provenance_missing",
+        "recording_source_files_missing",
+        "sidecar_discovery_missing",
+    }
+    assert phase_d_metadata["diagnostics"]["warnings"] == (
+        bundle_manifest["diagnostics"]["warnings"]
+    )
 
 
 def test_get_export_bundle_rejects_incomplete_run(tmp_path, monkeypatch):

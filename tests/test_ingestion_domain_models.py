@@ -5,6 +5,7 @@ from eeg_core.domain import (
     Dataset,
     DatasetStatus,
     DiagnosticWarning,
+    DiagnosticWarningSource,
     EpochConfig,
     EpochRun,
     EpochRunStatus,
@@ -166,7 +167,7 @@ def test_validation_report_exposes_errors_and_warnings():
 def test_diagnostic_warning_serializes_as_plain_payload():
     warning = DiagnosticWarning(
         severity=ValidationSeverity.WARNING,
-        source="preprocessing",
+        source="worker",
         code="reference_unchanged",
         impact="The original EEG reference was preserved.",
         suggested_action="Confirm that this matches the analysis plan.",
@@ -176,7 +177,7 @@ def test_diagnostic_warning_serializes_as_plain_payload():
 
     assert payload == {
         "severity": "warning",
-        "source": "preprocessing",
+        "source": "worker",
         "code": "reference_unchanged",
         "impact": "The original EEG reference was preserved.",
         "suggested_action": "Confirm that this matches the analysis plan.",
@@ -187,7 +188,7 @@ def test_diagnostic_warning_deserializes_from_payload():
     warning = diagnostic_warning_from_dict(
         {
             "severity": "warning",
-            "source": "epoch",
+            "source": "worker",
             "code": "events_skipped",
             "impact": "Some events were excluded from epoching.",
             "suggested_action": "Review the event mapping and epoch window.",
@@ -196,22 +197,46 @@ def test_diagnostic_warning_deserializes_from_payload():
 
     assert warning == DiagnosticWarning(
         severity=ValidationSeverity.WARNING,
-        source="epoch",
+        source="worker",
         code="events_skipped",
         impact="Some events were excluded from epoching.",
         suggested_action="Review the event mapping and epoch window.",
     )
 
 
+def test_diagnostic_warning_source_taxonomy_is_closed():
+    assert {source.value for source in DiagnosticWarningSource} == {
+        "bids",
+        "event_mapping",
+        "validation",
+        "worker",
+        "artifact",
+        "export_bundle",
+        "batch",
+    }
+
+
+def test_diagnostic_warning_deserializes_legacy_source_alias():
+    warning = diagnostic_warning_from_dict(
+        {
+            "severity": "warning",
+            "source": "analysis_report",
+            "code": "artifact_missing",
+        }
+    )
+
+    assert warning.source == DiagnosticWarningSource.ARTIFACT
+
+
 def test_diagnostic_warnings_from_strings_uses_default_warning_contract():
     diagnostics = diagnostic_warnings_from_strings(
         ["Reference unchanged.", ""],
-        source="preprocessing",
+        source="worker",
     )
 
     assert asdict(diagnostics["warnings"][0]) == {
         "severity": "warning",
-        "source": "preprocessing",
+        "source": "worker",
         "code": "unstructured_warning",
         "impact": "Reference unchanged.",
         "suggested_action": None,

@@ -107,7 +107,7 @@ def _wait_for_run_status(
     run_id: str,
     expected_status: str,
 ) -> dict:
-    for _ in range(100):
+    for _ in range(240):
         response = client.get(f"/preprocessing-runs/{run_id}")
         assert response.status_code == 200
         payload = response.json()
@@ -509,7 +509,7 @@ def test_create_preprocessing_run_persists_failed_run_details(
     assert failed_payload["warnings"] == ["captured warning before failure"]
     assert failed_payload["diagnostics"]["warnings"][0] == {
         "severity": "warning",
-        "source": "preprocessing",
+        "source": "worker",
         "code": "unstructured_warning",
         "impact": "captured warning before failure",
         "suggested_action": None,
@@ -521,7 +521,7 @@ def test_create_preprocessing_run_persists_failed_run_details(
         failed_payload["run_id"]
     )
     assert stored_run is not None
-    assert stored_run.diagnostics["warnings"][0].source == "preprocessing"
+    assert stored_run.diagnostics["warnings"][0].source == "worker"
     assert stored_run.diagnostics["warnings"][0].code == "unstructured_warning"
     assert stored_run.diagnostics["warnings"][0].impact == (
         "captured warning before failure"

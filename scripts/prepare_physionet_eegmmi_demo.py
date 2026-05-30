@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,7 @@ import mne
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "data" / "raw" / "public-samples"
 DEFAULT_RECORD = "S001R03"
+DEFAULT_PROFILE_ID = "physionet_eegmmi_s001r03"
 PHYSIONET_EEGMMI_BASE_URL = "https://physionet.org/files/eegmmidb/1.0.0"
 CSV_FIELDS = [
     "onset",
@@ -59,6 +61,7 @@ def main() -> None:
 
     edf_path = output_dir / f"{record}.edf"
     event_csv_path = output_dir / f"{record}_events.csv"
+    manifest_path = output_dir / f"{record}_neuroweave_smoke.json"
 
     if not args.events_only and not edf_path.exists():
         download_physionet_record(record, edf_path)
@@ -70,12 +73,20 @@ def main() -> None:
 
     events = read_edf_annotations(edf_path)
     row_count = write_event_csv(events, event_csv_path, record)
+    write_smoke_manifest(
+        destination=manifest_path,
+        record=record,
+        eeg_path=edf_path,
+        event_csv_path=event_csv_path,
+        event_count=row_count,
+    )
 
     print("Prepared PhysioNet EEGMMI demo:")
     print(f"  EEG Recording: {edf_path}")
     print(f"  Event Log:     {event_csv_path}")
+    print(f"  Smoke Manifest:{manifest_path}")
     print(f"  Events:        {row_count}")
-    print("Upload both files in NeuroWeave, then map onset/duration/trial_type.")
+    print("Upload both files in NeuroWeave, then follow docs/public-demo-physionet-eegmmi.md.")
 
 
 def download_physionet_record(record: str, destination: Path) -> None:
@@ -136,6 +147,100 @@ def write_event_csv(
             count += 1
 
     return count
+
+
+def build_smoke_manifest(
+    *,
+    record: str,
+    eeg_path: Path,
+    event_csv_path: Path,
+    event_count: int,
+) -> dict:
+    run_number = parse_run_number(record)
+    return {
+        "schema_version": 1,
+        "profile_id": DEFAULT_PROFILE_ID,
+        "source_dataset": {
+            "name": "PhysioNet EEG Motor Movement/Imagery Dataset",
+            "version": "1.0.0",
+            "record": record,
+            "url": physionet_record_url(record),
+            "doi": "https://doi.org/10.13026/C28G6P",
+            "license": "Open Data Commons Attribution License v1.0",
+        },
+        "storage_policy": {
+            "public_data_root": "data/raw/public-samples/",
+            "git_policy": "Generated public EEG files remain under ignored data/ paths.",
+        },
+        "local_files": {
+            "eeg_recording": _repo_relative_path(eeg_path),
+            "event_log": _repo_relative_path(event_csv_path),
+        },
+        "event_mapping": {
+            "onset_seconds": "onset",
+            "duration_seconds": "duration",
+            "trial_type": "trial_type",
+            "stimulus": "stimulus",
+        },
+        "workflow": [
+            "ingest_eeg_and_events",
+            "save_event_mapping",
+            "validate_dataset",
+            "run_preprocessing",
+            "run_epoching",
+            "run_erp",
+            "run_comparison_summary",
+        ],
+        "epoching": {
+            "condition_field": "trial_type",
+            "expected_conditions": _expected_conditions_for_run(run_number),
+        },
+        "comparison": {
+            "condition_a": "left_fist" if run_number in {3, 4, 7, 8, 11, 12} else "both_fists",
+            "condition_b": "right_fist" if run_number in {3, 4, 7, 8, 11, 12} else "both_feet",
+            "use_gfp": True,
+            "metric": "mean_amplitude_uv",
+            "statistics_implemented": False,
+        },
+        "expected_warnings_snapshot": (
+            "tests/fixtures/public_smoke/"
+            "physionet_eegmmi_s001r03_expected_warnings.json"
+        ),
+        "event_count": event_count,
+    }
+
+
+def write_smoke_manifest(
+    *,
+    destination: Path,
+    record: str,
+    eeg_path: Path,
+    event_csv_path: Path,
+    event_count: int,
+) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    payload = build_smoke_manifest(
+        record=record,
+        eeg_path=eeg_path,
+        event_csv_path=event_csv_path,
+        event_count=event_count,
+    )
+    destination.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _expected_conditions_for_run(run_number: int) -> list[str]:
+    if run_number in {3, 4, 7, 8, 11, 12}:
+        return ["rest", "left_fist", "right_fist"]
+    if run_number in {5, 6, 9, 10, 13, 14}:
+        return ["rest", "both_fists", "both_feet"]
+    return ["rest"]
+
+
+def _repo_relative_path(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return str(path)
 
 
 def parse_run_number(record: str) -> int:

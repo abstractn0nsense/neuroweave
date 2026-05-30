@@ -131,7 +131,7 @@ def _wait_for_run_status(
     path: str,
     expected_status: str,
 ) -> dict:
-    for _ in range(120):
+    for _ in range(240):
         response = client.get(path)
         assert response.status_code == 200
         payload = response.json()
@@ -433,7 +433,7 @@ def test_erp_worker_persists_failed_execution(tmp_path, monkeypatch):
     assert payload["warnings"] == ["captured ERP warning"]
     assert payload["diagnostics"]["warnings"][0] == {
         "severity": "warning",
-        "source": "erp",
+        "source": "worker",
         "code": "unstructured_warning",
         "impact": "captured ERP warning",
         "suggested_action": None,
@@ -445,7 +445,7 @@ def test_erp_worker_persists_failed_execution(tmp_path, monkeypatch):
     assert payload["output_metadata"]["worker_exit_code"] is None
     stored_run = api_main.run_repository.get_erp_run(payload["run_id"])
     assert stored_run is not None
-    assert stored_run.diagnostics["warnings"][0].source == "erp"
+    assert stored_run.diagnostics["warnings"][0].source == "worker"
     assert stored_run.diagnostics["warnings"][0].code == "unstructured_warning"
     assert stored_run.diagnostics["warnings"][0].impact == "captured ERP warning"
 

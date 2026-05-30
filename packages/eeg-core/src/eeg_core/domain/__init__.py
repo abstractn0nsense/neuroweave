@@ -15,6 +15,7 @@ from eeg_core.domain.ingestion import (
     BatchTemplateSnapshot,
     ComparisonConfig,
     DiagnosticWarning,
+    DiagnosticWarningSource,
     EpochConfig,
     EpochRun,
     EpochRunStatus,
@@ -54,6 +55,7 @@ from eeg_core.domain.ingestion import (
     WorkflowTemplateWorkflow,
     create_batch_template_snapshot,
     diagnostic_warning_from_dict,
+    diagnostic_warning_source_from_value,
     diagnostic_warnings_from_strings,
     validate_batch_request,
     validate_batch_run_plan,
@@ -70,8 +72,10 @@ from eeg_core.domain.batch_planning import (
 from eeg_core.domain.recording import (
     ChannelMetadata,
     RecordingMetadata,
+    SourceFileMetadata,
     channel_metadata_from_dict,
     recording_metadata_from_dict,
+    source_file_metadata_from_dict,
 )
 from eeg_core.domain.validation import validate_ingestion_dataset
 
@@ -96,6 +100,7 @@ __all__ = [
     "BatchTemplateSnapshot",
     "ComparisonConfig",
     "DiagnosticWarning",
+    "DiagnosticWarningSource",
     "EpochConfig",
     "EpochRun",
     "EpochRunStatus",
@@ -118,8 +123,10 @@ __all__ = [
     "Recording",
     "ChannelMetadata",
     "RecordingMetadata",
+    "SourceFileMetadata",
     "channel_metadata_from_dict",
     "recording_metadata_from_dict",
+    "source_file_metadata_from_dict",
     "RunDiagnostics",
     "RunKind",
     "Session",
@@ -139,6 +146,7 @@ __all__ = [
     "WorkflowTemplateWorkflow",
     "create_batch_template_snapshot",
     "diagnostic_warning_from_dict",
+    "diagnostic_warning_source_from_value",
     "diagnostic_warnings_from_strings",
     "plan_batch_run",
     "validate_batch_request",

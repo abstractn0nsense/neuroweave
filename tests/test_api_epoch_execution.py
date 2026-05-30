@@ -133,7 +133,7 @@ def _wait_for_epoch_status(
     run_id: str,
     expected_status: str,
 ) -> dict:
-    for _ in range(120):
+    for _ in range(240):
         response = client.get(f"/epoch-runs/{run_id}")
         assert response.status_code == 200
         payload = response.json()

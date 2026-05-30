@@ -30,6 +30,7 @@ The script writes local files under the ignored `data/` directory:
 ```text
 data/raw/public-samples/S001R03.edf
 data/raw/public-samples/S001R03_events.csv
+data/raw/public-samples/S001R03_neuroweave_smoke.json
 ```
 
 Use `--events-only` if the EDF already exists and only the event CSV should be
@@ -57,11 +58,36 @@ regenerated:
    `160`.
 10. Create epochs using `trial_type` as the condition field.
 11. Generate ERP preview from the completed epoch run.
+12. Create a comparison summary:
+   - `condition_a` -> `left_fist`
+   - `condition_b` -> `right_fist`
+   - target -> GFP
+   - metric -> mean amplitude
+
+The generated smoke manifest records the same mapping, epoching, and comparison
+contract so a local run can be checked without committing the downloaded EDF.
+
+## Expected Warnings
+
+Snapshot fixture:
+
+```text
+tests/fixtures/public_smoke/physionet_eegmmi_s001r03_expected_warnings.json
+```
+
+Expected warnings are empty for ingest, event mapping, and validation. Worker
+warnings can vary by MNE version and preprocessing settings, but any such warning
+must be preserved as structured diagnostics with `source=worker` while the legacy
+`warnings: list[str]` remains available.
+
+If a warning appears during the smoke, record whether it changes the analysis
+plan before treating the ERP comparison as interpretable.
 
 ## Test Policy
 
 The committed smoke test is offline. It validates the event CSV generation
-logic and expected PhysioNet URL without downloading public data.
+logic, generated smoke manifest, expected warning snapshot, and expected
+PhysioNet URL without downloading public data.
 
 The actual public EDF download is opt-in because it depends on network access
 and writes local data under `data/`, which is intentionally git-ignored.

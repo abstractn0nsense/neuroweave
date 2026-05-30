@@ -133,7 +133,7 @@ def test_build_analysis_report_reports_missing_manifest_artifacts(tmp_path):
         {
             "code": "artifact_missing",
             "severity": "warning",
-            "source": "analysis_report",
+            "source": "artifact",
             "impact": (
                 "Artifact 'drop_log' is listed in the manifest but was not found."
             ),

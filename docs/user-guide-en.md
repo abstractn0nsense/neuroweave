@@ -46,7 +46,8 @@ Use Analysis for file intake and processing.
 - `Ingestion And Preprocessing`: EEG upload, event upload, event mapping, validation, and preprocessing.
 - `Epoch Controls`: create epochs from completed preprocessing output.
 - `ERP Preview`: generate evoked artifacts and preview plots from completed epochs.
-- `QC Dashboard`: inspect manifest-backed artifact and warning summaries.
+- `QC Dashboard`: inspect manifest-backed artifact, warning, source sidecar,
+  provenance, and Phase D diagnostic summaries.
 
 ## 3. Quick Test Files
 
@@ -82,7 +83,9 @@ The PhysioNet file is a real public EDF recording. The fixture files are smaller
 and useful for quick smoke tests.
 
 For the full public demo walkthrough, see
-`docs/public-demo-physionet-eegmmi.md`.
+`docs/public-demo-physionet-eegmmi.md`. For the shared public smoke policy and
+the BIDS/OpenNeuro-style workflow, see `docs/public-data-smoke-fixtures.md` and
+`docs/public-demo-openneuro-bids.md`.
 
 ## 4. Create A Dataset
 
@@ -224,12 +227,19 @@ This is currently descriptive only. Statistical testing is planned for a later p
 Completed runs preserve:
 
 - input file checksums and metadata;
+- EEG, event, and discovered sidecar source provenance when available;
 - immutable config snapshots;
 - output artifact paths;
 - diagnostic JSON;
+- structured warning diagnostics with code, severity, source, impact, and
+  suggested action;
 - artifact manifests;
 - warnings and errors;
 - MNE/Python version information.
+
+Export bundles also include Phase D provenance and sidecar context in
+`diagnostics/phase_d_metadata.json` when that metadata exists. Missing optional
+Phase D metadata is recorded as a structured warning instead of blocking export.
 
 These records are the basis for reproducing an analysis or explaining why two runs
 differ.
@@ -264,3 +274,7 @@ If the UI state looks wrong:
 - ICA and advanced artifact correction are planned future work.
 - Collaboration, accounts, and cloud storage are not part of the current local prototype.
 - The current priority is reproducible local workflow execution and artifact generation.
+- Public dataset smoke workflows are local and opt-in. Public EEG files should
+  stay under ignored `data/` paths and are not committed.
+- Inferential statistics, full reproducibility graphs, one-click rerun, and
+  broad public-dataset CI are planned for Phase E or later.

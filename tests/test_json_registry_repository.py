@@ -31,6 +31,7 @@ from eeg_core.domain import (
     Recording,
     RecordingMetadata,
     RunKind,
+    SourceFileMetadata,
     UploadedFile,
     UploadedFileKind,
     ValidationSeverity,
@@ -182,6 +183,8 @@ def test_registry_persists_uploaded_files_and_recording(tmp_path):
     assert stored["metadata"]["channel_details"] == []
     assert stored["metadata"]["line_frequency_hz"] is None
     assert stored["metadata"]["reference"] is None
+    assert stored["metadata"]["source_files"] == []
+    assert stored["metadata"]["sidecar_discovery"] == {}
 
 
 def test_registry_loads_legacy_recording_metadata_without_sidecar_fields(tmp_path):
@@ -214,6 +217,8 @@ def test_registry_loads_legacy_recording_metadata_without_sidecar_fields(tmp_pat
     assert recording.metadata.channel_details == []
     assert recording.metadata.line_frequency_hz is None
     assert recording.metadata.reference is None
+    assert recording.metadata.source_files == []
+    assert recording.metadata.sidecar_discovery == {}
 
 
 def test_registry_loads_recording_metadata_with_sidecar_fields(tmp_path):
@@ -279,6 +284,65 @@ def test_registry_loads_recording_metadata_with_sidecar_fields(tmp_path):
     ]
     assert recording.metadata.line_frequency_hz == 60.0
     assert recording.metadata.reference == "Cz"
+
+
+def test_registry_persists_recording_source_files_and_sidecar_discovery(tmp_path):
+    repository = JsonRegistryRepository(tmp_path / "uploads")
+    recording = Recording(
+        recording_id="recording-001",
+        dataset_id="dataset-001",
+        file_id="file-001",
+        metadata=RecordingMetadata(
+            dataset_id="dataset-001",
+            file_format="fif",
+            channel_count=2,
+            sampling_rate_hz=256,
+            duration_seconds=4,
+            channel_names=["Fp1", "Fp2"],
+            source_files=[
+                SourceFileMetadata(
+                    role="eeg_file",
+                    original_filename="sub-001_task-rest_eeg.fif",
+                    stored_path="data/raw/uploads/dataset-001/eeg/sub-001_task-rest_eeg.fif",
+                    size_bytes=123,
+                    checksum_sha256="abc123",
+                    content_type="application/octet-stream",
+                ),
+                SourceFileMetadata(
+                    role="bids_sidecar",
+                    original_filename="sub-001_task-rest_eeg.json",
+                    stored_path="data/raw/uploads/dataset-001/eeg/sub-001_task-rest_eeg.json",
+                    size_bytes=45,
+                    checksum_sha256="def456",
+                    content_type="application/json",
+                    sidecar_type="eeg_json",
+                    status="valid",
+                ),
+            ],
+            sidecar_discovery={
+                "schema_version": 1,
+                "bids_basename": "sub-001_task-rest",
+                "candidates": [
+                    {
+                        "sidecar_type": "eeg_json",
+                        "status": "valid",
+                    }
+                ],
+            },
+        ),
+    )
+
+    repository.save_recording(recording)
+
+    loaded = repository.get_recording("dataset-001")
+    assert loaded == recording
+    stored = json.loads(
+        repository.recording_path("dataset-001").read_text(encoding="utf-8")
+    )
+    assert stored["metadata"]["source_files"][1]["sidecar_type"] == "eeg_json"
+    assert stored["metadata"]["sidecar_discovery"]["bids_basename"] == (
+        "sub-001_task-rest"
+    )
 
 
 def test_registry_preserves_concurrent_uploaded_file_writes(tmp_path):
@@ -371,6 +435,7 @@ def test_registry_persists_filtered_event_log_metadata(tmp_path):
             include=[EventRowFilterCondition(column="trial_type", equals="target")],
             exclude=[EventRowFilterCondition(column="status", equals="reject")],
         ),
+        condition_column="value",
         provenance={
             "schema_version": 1,
             "preset": "bids_events",
@@ -380,7 +445,19 @@ def test_registry_persists_filtered_event_log_metadata(tmp_path):
                 "exclude": [{"column": "status", "equals": "reject"}],
             },
         },
-        events=[NormalizedEvent(onset_seconds=1.0, source_row=1, trial_type="target")],
+        events=[
+            NormalizedEvent(
+                onset_seconds=1.0,
+                source_row=1,
+                trial_type="target",
+                source_columns={
+                    "onset": "1.0",
+                    "trial_type": "target",
+                    "status": "keep",
+                    "value": "target",
+                },
+            )
+        ],
     )
 
     repository.save_event_log(event_log)
@@ -410,7 +487,9 @@ def test_registry_loads_legacy_event_log_without_filter_metadata(tmp_path):
     assert event_log is not None
     assert event_log.filter_count == 0
     assert event_log.row_filter is None
+    assert event_log.condition_column is None
     assert event_log.provenance == {}
+    assert event_log.events[0].source_columns == {}
 
 
 def test_run_repository_persists_preprocessing_runs(tmp_path):
@@ -434,11 +513,11 @@ def test_run_repository_persists_preprocessing_runs(tmp_path):
         warnings=["reference unchanged"],
         diagnostics={
             "warnings": [
-                DiagnosticWarning(
-                    severity=ValidationSeverity.WARNING,
-                    source="preprocessing",
-                    code="reference_unchanged",
-                    impact="The original EEG reference was preserved.",
+                    DiagnosticWarning(
+                        severity=ValidationSeverity.WARNING,
+                        source="worker",
+                        code="reference_unchanged",
+                        impact="The original EEG reference was preserved.",
                     suggested_action="Confirm that this matches the analysis plan.",
                 )
             ]

@@ -579,6 +579,7 @@ def _event_log_from_json(data: JsonObject) -> EventLog:
         row_count=int(data["row_count"]),
         filter_count=int(data.get("filter_count", 0)),
         row_filter=_event_row_filter_from_json(data.get("row_filter")),
+        condition_column=data.get("condition_column"),
         provenance=dict(provenance) if isinstance(provenance, dict) else {},
         events=[
             _normalized_event_from_json(event)
@@ -1124,7 +1125,17 @@ def _normalized_event_from_json(data: JsonObject) -> NormalizedEvent:
         response=data.get("response"),
         correct=data.get("correct"),
         reaction_time_seconds=_optional_float(data.get("reaction_time_seconds")),
+        source_columns=_source_columns_from_json(data.get("source_columns")),
     )
+
+
+def _source_columns_from_json(value: Any) -> dict[str, str | None]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        str(key): None if column_value is None else str(column_value)
+        for key, column_value in value.items()
+    }
 
 
 def _optional_float(value: Any) -> float | None:

@@ -198,6 +198,64 @@ def test_map_dataset_events_applies_row_filter(tmp_path, monkeypatch):
     }
 
 
+def test_map_dataset_events_accepts_condition_column(tmp_path, monkeypatch):
+    repository = JsonRegistryRepository(tmp_path / "uploads")
+    monkeypatch.setattr(api_main, "registry_repository", repository)
+    client = TestClient(api_main.app)
+    client.post("/projects", json={"project_id": "project-001", "name": "Memory EEG"})
+    client.post(
+        "/projects/project-001/experiments",
+        json={
+            "experiment_id": "experiment-001",
+            "name": "Oddball task",
+            "default_event_mapping": {
+                "onset_seconds": "onset",
+                "trial_type": "trial_type",
+            },
+        },
+    )
+    client.post(
+        "/datasets",
+        json={
+            "dataset_id": "dataset-001",
+            "project_id": "project-001",
+            "experiment_id": "experiment-001",
+            "participant_label": "sub-001",
+            "session_label": "ses-001",
+        },
+    )
+    client.post(
+        "/datasets/dataset-001/files/events",
+        files={
+            "file": (
+                "events.tsv",
+                b"onset\ttrial_type\tvalue\tstim_file\n"
+                b"1.0\tignored\t111\tface-a.png\n"
+                b"2.0\tstandard\t222\tNA\n",
+                "text/tab-separated-values",
+            )
+        },
+    )
+
+    response = client.post(
+        "/datasets/dataset-001/events/mapping",
+        json={"condition_column": "stim_file"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["condition_column"] == "stim_file"
+    assert [event["trial_type"] for event in payload["events"]] == ["face-a.png", None]
+    assert payload["events"][0]["source_columns"] == {
+        "onset": "1.0",
+        "trial_type": "ignored",
+        "stim_file": "face-a.png",
+    }
+    event_log = repository.get_event_log("dataset-001")
+    assert event_log.condition_column == "stim_file"
+    assert event_log.provenance["condition_column"] == "stim_file"
+
+
 def test_map_dataset_events_reports_missing_onset_mapping(tmp_path, monkeypatch):
     repository = JsonRegistryRepository(tmp_path / "uploads")
     client = _create_dataset_with_event_upload(repository, monkeypatch)

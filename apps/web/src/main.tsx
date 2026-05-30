@@ -130,6 +130,7 @@ type NormalizedEvent = {
   response: string | null;
   correct: boolean | null;
   reaction_time_seconds: number | null;
+  source_columns?: Record<string, string | null>;
 };
 
 type EventLogResponse = {
@@ -139,6 +140,7 @@ type EventLogResponse = {
   mapping: EventColumnMapping;
   row_count: number;
   filter_count: number;
+  condition_column?: string | null;
   events: NormalizedEvent[];
 };
 
@@ -413,8 +415,15 @@ type BatchRunsResponse = {
 type BatchItemFilter = "all" | "pending" | "completed" | "failed";
 
 type DiagnosticWarning = {
-  severity: string;
-  source: string;
+  severity: "error" | "warning";
+  source:
+    | "bids"
+    | "event_mapping"
+    | "validation"
+    | "worker"
+    | "artifact"
+    | "export_bundle"
+    | "batch";
   code: string;
   impact: string | null;
   suggested_action: string | null;
@@ -495,6 +504,8 @@ type QcSummaryPayload = {
   preprocessing?: Record<string, unknown>;
   epoch?: Record<string, unknown>;
   erp?: Record<string, unknown>;
+  batch?: Record<string, unknown>;
+  phase_d?: Record<string, unknown>;
 };
 
 type DatasetContext = {
@@ -5001,6 +5012,7 @@ function QcDashboard({
           <span>{missingArtifacts.map((artifact) => artifact.logical_name).join(", ")}</span>
         </div>
       ) : null}
+      <PhaseDQc summary={asRecord(qcSummary.data.summary.phase_d)} />
       {qcSummary.data.summary.run_kind === "preprocessing" ? (
         <PreprocessingQc
           onPreprocessingConfigChange={onPreprocessingConfigChange}
@@ -5013,6 +5025,66 @@ function QcDashboard({
       ) : null}
       {qcSummary.data.summary.run_kind === "erp" ? (
         <ErpQc summary={qcSummary.data.summary.erp ?? {}} />
+      ) : null}
+    </div>
+  );
+}
+
+function PhaseDQc({ summary }: { summary: Record<string, unknown> }) {
+  if (Object.keys(summary).length === 0) {
+    return null;
+  }
+  const recording = asRecord(summary.recording);
+  const eventLog = asRecord(summary.event_log);
+  const diagnostics = asRecord(summary.diagnostics);
+  const warnings = Array.isArray(diagnostics.warnings)
+    ? diagnostics.warnings.filter(isRecord)
+    : [];
+  const sourceFiles = Array.isArray(recording.source_files)
+    ? recording.source_files.filter(isRecord)
+    : [];
+  const sidecarDiscovery = asRecord(recording.sidecar_discovery);
+  const candidates = Array.isArray(sidecarDiscovery.candidates)
+    ? sidecarDiscovery.candidates.filter(isRecord)
+    : [];
+  const eventSourceColumns = asRecord(eventLog.source_columns);
+  const sourceColumnNames = Array.isArray(eventSourceColumns.column_names)
+    ? eventSourceColumns.column_names.map(String)
+    : [];
+  const batch = asRecord(summary.batch);
+
+  return (
+    <div className="qc-section">
+      <h3>Phase D Context</h3>
+      <dl className="run-summary-grid">
+        <QcMetric label="Source Files" value={stringValue(sourceFiles.length)} />
+        <QcMetric label="Sidecars" value={stringValue(candidates.length)} />
+        <QcMetric label="Event Rows" value={stringValue(eventLog.row_count)} />
+        <QcMetric label="Filtered Rows" value={stringValue(eventLog.filter_count)} />
+        <QcMetric
+          label="Condition Column"
+          value={stringValue(eventLog.condition_column)}
+        />
+        <QcMetric label="Batch" value={stringValue(batch.batch_id)} />
+      </dl>
+      {sourceColumnNames.length > 0 ? (
+        <p className="muted">Event source columns: {sourceColumnNames.join(", ")}</p>
+      ) : null}
+      {warnings.length > 0 ? (
+        <div className="run-warning-list" aria-label="QC diagnostics">
+          {warnings.map((warning, index) => (
+            <div className="run-warning" key={`${warning.code}-${index}`}>
+              <strong>{stringValue(warning.code)}</strong>
+              <span>
+                {stringValue(warning.source)} / {stringValue(warning.severity)}
+              </span>
+              {warning.impact ? <p>{stringValue(warning.impact)}</p> : null}
+              {warning.suggested_action ? (
+                <small>{stringValue(warning.suggested_action)}</small>
+              ) : null}
+            </div>
+          ))}
+        </div>
       ) : null}
     </div>
   );

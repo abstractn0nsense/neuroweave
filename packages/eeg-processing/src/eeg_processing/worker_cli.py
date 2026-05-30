@@ -671,8 +671,7 @@ def _metadata_warnings(metadata: dict[str, Any] | None) -> list[str]:
 
 
 def _warning_source_from_payload(payload: dict[str, Any]) -> str:
-    job = payload.get("job")
-    return str(job) if isinstance(job, str) and job else "worker"
+    return "worker"
 
 
 if __name__ == "__main__":

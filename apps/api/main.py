@@ -67,7 +67,9 @@ from eeg_core.domain import (  # noqa: E402
     PreprocessingRunStatus,
     Project,
     Recording,
+    RecordingMetadata,
     RunKind,
+    SourceFileMetadata,
     UploadedFile as IngestionUploadedFile,
     UploadedFileKind,
     ValidationIssue,
@@ -81,6 +83,7 @@ from eeg_core.domain import (  # noqa: E402
     WorkflowTemplateFieldPolicy,
     WorkflowTemplateFieldPolicyEntry,
     WorkflowTemplateWorkflow,
+    diagnostic_warning_source_from_value,
     diagnostic_warnings_from_strings,
     plan_batch_run,
     validate_ingestion_dataset,
@@ -96,7 +99,9 @@ from eeg_processing import (  # noqa: E402
 )
 from eeg_processing.epoching import SUPPORTED_CONDITION_FIELDS  # noqa: E402
 from eeg_io.bids_sidecars import (  # noqa: E402
+    BidsSidecarDiscovery,
     BidsSidecarError,
+    discover_bids_sidecars,
     read_channels_tsv,
     read_eeg_json,
 )
@@ -481,6 +486,18 @@ class ChannelMetadataPayload(BaseModel):
     status_description: str | None = None
 
 
+class SourceFileMetadataPayload(BaseModel):
+    role: str
+    original_filename: str
+    stored_path: str
+    size_bytes: int | None = None
+    checksum_sha256: str | None = None
+    content_type: str | None = None
+    sidecar_type: str | None = None
+    status: str | None = None
+    diagnostics: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class DatasetMetadata(BaseModel):
     id: str
     format: str
@@ -491,6 +508,8 @@ class DatasetMetadata(BaseModel):
     channel_details: list[ChannelMetadataPayload] = Field(default_factory=list)
     line_frequency_hz: float | None = None
     reference: str | None = None
+    source_files: list[SourceFileMetadataPayload] = Field(default_factory=list)
+    sidecar_discovery: dict[str, Any] = Field(default_factory=dict)
 
 
 class CreateDatasetRequest(BaseModel):
@@ -532,6 +551,29 @@ class UploadedFileResponse(BaseModel):
     checksum_sha256: str | None
 
 
+class BidsSidecarDiagnosticResponse(BaseModel):
+    severity: str
+    source: str
+    code: str
+    impact: str | None
+    suggested_action: str | None
+
+
+class BidsSidecarCandidateResponse(BaseModel):
+    sidecar_type: str
+    path: str
+    status: str
+    diagnostics: list[BidsSidecarDiagnosticResponse] = Field(default_factory=list)
+
+
+class BidsSidecarDiscoveryResponse(BaseModel):
+    schema_version: int
+    reference_path: str
+    bids_basename: str
+    candidates: list[BidsSidecarCandidateResponse] = Field(default_factory=list)
+    diagnostics: list[BidsSidecarDiagnosticResponse] = Field(default_factory=list)
+
+
 class RecordingResponse(BaseModel):
     recording_id: str
     dataset_id: str
@@ -543,6 +585,8 @@ class EegUploadResponse(BaseModel):
     dataset: DatasetResponse
     uploaded_file: UploadedFileResponse
     recording: RecordingResponse
+    sidecar_discovery: BidsSidecarDiscoveryResponse | None = None
+    sidecar_files: list[UploadedFileResponse] = Field(default_factory=list)
 
 
 class SidecarUploadResponse(BaseModel):
@@ -562,6 +606,8 @@ class EventUploadResponse(BaseModel):
     dataset: DatasetResponse
     uploaded_file: UploadedFileResponse
     preview: EventLogPreviewResponse
+    sidecar_discovery: BidsSidecarDiscoveryResponse | None = None
+    sidecar_files: list[UploadedFileResponse] = Field(default_factory=list)
 
 
 class EventColumnMappingPayload(BaseModel):
@@ -583,6 +629,7 @@ class NormalizedEventResponse(BaseModel):
     response: str | None
     correct: bool | None
     reaction_time_seconds: float | None
+    source_columns: dict[str, str | None] = Field(default_factory=dict)
 
 
 class EventLogResponse(BaseModel):
@@ -592,6 +639,7 @@ class EventLogResponse(BaseModel):
     mapping: EventColumnMappingPayload
     row_count: int
     filter_count: int
+    condition_column: str | None = None
     events: list[NormalizedEventResponse]
 
 
@@ -625,6 +673,7 @@ class EventMappingRequest(BaseModel):
     mapping: EventColumnMappingPayload | None = None
     preset: Literal["psychopy", "bids_events", "eeglab_annotations"] | None = None
     row_filter: EventRowFilterPayload | None = None
+    condition_column: str | None = None
 
 
 class BadChannelDetectionConfigPayload(BaseModel):
@@ -1319,12 +1368,25 @@ def upload_dataset_eeg_file(
     )
     registry_repository.save_uploaded_file(uploaded_file)
 
+    sidecar_discovery = discover_bids_sidecars(stored_path)
+    sidecar_files = _save_discovered_sidecar_files(
+        dataset_id=dataset_id,
+        discovery=sidecar_discovery,
+    )
+    metadata = _recording_metadata_with_source_manifest(
+        metadata=metadata,
+        primary_file=uploaded_file,
+        primary_role="eeg_file",
+        sidecar_files=sidecar_files,
+        sidecar_discovery=sidecar_discovery,
+    )
     recording = Recording(
         recording_id=_new_id("recording"),
         dataset_id=dataset_id,
         file_id=uploaded_file.file_id,
         metadata=metadata,
     )
+    recording = _recording_with_discovered_sidecars(recording, sidecar_discovery)
     registry_repository.save_recording(recording)
 
     updated_dataset = replace(
@@ -1338,6 +1400,11 @@ def upload_dataset_eeg_file(
         dataset=_dataset_response(updated_dataset),
         uploaded_file=_uploaded_file_response(uploaded_file),
         recording=_recording_response(recording),
+        sidecar_discovery=_bids_sidecar_discovery_response(sidecar_discovery),
+        sidecar_files=[
+            _uploaded_file_response(sidecar_file)
+            for sidecar_file in sidecar_files
+        ],
     )
 
 
@@ -1379,6 +1446,20 @@ def upload_dataset_sidecar_file(
         checksum_sha256=_sha256_file(stored_path),
     )
     registry_repository.save_uploaded_file(uploaded_file)
+    enriched_recording = replace(
+        enriched_recording,
+        metadata=_recording_metadata_with_added_sources(
+            enriched_recording.metadata,
+            [
+                _source_file_metadata_from_upload(
+                    uploaded_file,
+                    role="bids_sidecar",
+                    sidecar_type=_sidecar_type_for_path(stored_path),
+                    status="valid",
+                )
+            ],
+        ),
+    )
     registry_repository.save_recording(enriched_recording)
 
     return SidecarUploadResponse(
@@ -1423,6 +1504,11 @@ def upload_dataset_events_file(
     )
     registry_repository.save_uploaded_file(uploaded_file)
     registry_repository.save_events_preview(dataset_id, preview)
+    sidecar_discovery = discover_bids_sidecars(stored_path)
+    sidecar_files = _save_discovered_sidecar_files(
+        dataset_id=dataset_id,
+        discovery=sidecar_discovery,
+    )
 
     updated_dataset = replace(
         dataset,
@@ -1435,6 +1521,11 @@ def upload_dataset_events_file(
         dataset=_dataset_response(updated_dataset),
         uploaded_file=_uploaded_file_response(uploaded_file),
         preview=EventLogPreviewResponse(**preview),
+        sidecar_discovery=_bids_sidecar_discovery_response(sidecar_discovery),
+        sidecar_files=[
+            _uploaded_file_response(sidecar_file)
+            for sidecar_file in sidecar_files
+        ],
     )
 
 
@@ -1458,6 +1549,7 @@ def map_dataset_events(
 
     mapping = _resolve_event_mapping(dataset, request.mapping, request.preset)
     row_filter = _event_row_filter_from_payload(request.row_filter)
+    condition_column = _event_condition_column_from_payload(request.condition_column)
     try:
         event_log = normalize_event_log(
             dataset_id=dataset_id,
@@ -1466,6 +1558,7 @@ def map_dataset_events(
             path=Path(uploaded_file.stored_path),
             mapping=mapping,
             row_filter=row_filter,
+            condition_column=condition_column,
             provenance=_event_log_provenance(
                 dataset_id=dataset_id,
                 uploaded_file=uploaded_file,
@@ -1473,6 +1566,7 @@ def map_dataset_events(
                 preset_applied=request.mapping is None and request.preset is not None,
                 mapping=mapping,
                 row_filter=row_filter,
+                condition_column=condition_column,
             ),
         )
     except (EventLogPreviewError, EventLogNormalizationError) as exc:
@@ -1694,7 +1788,7 @@ def create_epoch_run(
             recording=recording,
         ),
         warnings=config_warnings,
-        diagnostics=_diagnostics_from_warnings(config_warnings, "epoch"),
+        diagnostics=_diagnostics_from_warnings(config_warnings, "validation"),
     )
     run_repository.save_epoch_run(run)
     epoch_worker.enqueue(run_id)
@@ -1766,7 +1860,7 @@ def create_erp_run(
         output_path=str(output_path),
         output_metadata=_erp_input_provenance(epoch_run),
         warnings=config_warnings,
-        diagnostics=_diagnostics_from_warnings(config_warnings, "erp"),
+        diagnostics=_diagnostics_from_warnings(config_warnings, "validation"),
     )
     run_repository.save_erp_run(run)
     erp_worker.enqueue(run_id)
@@ -2105,6 +2199,7 @@ def get_dataset_qc_summary(
     batch_context = _batch_context_for_run(run)
     if batch_context is not None:
         summary["batch"] = batch_context
+    summary["phase_d"] = _phase_d_metadata_for_run(run)
 
     return QcSummaryResponse(
         dataset_id=dataset_id,
@@ -2340,8 +2435,302 @@ def _recording_response(recording: Recording) -> RecordingResponse:
             ],
             line_frequency_hz=recording.metadata.line_frequency_hz,
             reference=recording.metadata.reference,
+            source_files=[
+                _source_file_metadata_payload(source_file)
+                for source_file in recording.metadata.source_files
+            ],
+            sidecar_discovery=recording.metadata.sidecar_discovery,
         ),
     )
+
+
+def _source_file_metadata_payload(
+    source_file: SourceFileMetadata,
+) -> SourceFileMetadataPayload:
+    return SourceFileMetadataPayload(
+        role=source_file.role,
+        original_filename=source_file.original_filename,
+        stored_path=source_file.stored_path,
+        size_bytes=source_file.size_bytes,
+        checksum_sha256=source_file.checksum_sha256,
+        content_type=source_file.content_type,
+        sidecar_type=source_file.sidecar_type,
+        status=source_file.status,
+        diagnostics=source_file.diagnostics,
+    )
+
+
+def _bids_sidecar_discovery_response(
+    discovery: BidsSidecarDiscovery,
+) -> BidsSidecarDiscoveryResponse:
+    return BidsSidecarDiscoveryResponse(
+        schema_version=discovery.schema_version,
+        reference_path=str(discovery.reference_path),
+        bids_basename=discovery.bids_basename,
+        candidates=[
+            BidsSidecarCandidateResponse(
+                sidecar_type=candidate.sidecar_type,
+                path=str(candidate.path),
+                status=candidate.status,
+                diagnostics=[
+                    BidsSidecarDiagnosticResponse(
+                        severity=diagnostic.severity,
+                        source=diagnostic.source,
+                        code=diagnostic.code,
+                        impact=diagnostic.impact,
+                        suggested_action=diagnostic.suggested_action,
+                    )
+                    for diagnostic in candidate.diagnostics
+                ],
+            )
+            for candidate in discovery.candidates
+        ],
+        diagnostics=[
+            BidsSidecarDiagnosticResponse(
+                severity=diagnostic.severity,
+                source=diagnostic.source,
+                code=diagnostic.code,
+                impact=diagnostic.impact,
+                suggested_action=diagnostic.suggested_action,
+            )
+            for diagnostic in discovery.diagnostics
+        ],
+    )
+
+
+def _save_discovered_sidecar_files(
+    *,
+    dataset_id: str,
+    discovery: BidsSidecarDiscovery,
+) -> list[IngestionUploadedFile]:
+    existing_paths = {
+        str(Path(uploaded_file.stored_path).resolve())
+        for uploaded_file in registry_repository.list_uploaded_files(dataset_id)
+    }
+    reference_path = str(discovery.reference_path.resolve())
+    uploaded_sidecars: list[IngestionUploadedFile] = []
+
+    for candidate in discovery.candidates:
+        resolved_path = str(candidate.path.resolve())
+        if resolved_path == reference_path or resolved_path in existing_paths:
+            continue
+        uploaded_file = IngestionUploadedFile(
+            file_id=_new_id("file"),
+            dataset_id=dataset_id,
+            kind=UploadedFileKind.METADATA,
+            original_filename=candidate.path.name,
+            stored_path=str(candidate.path),
+            content_type=_content_type_for_path(candidate.path),
+            size_bytes=candidate.path.stat().st_size,
+            checksum_sha256=_sha256_file(candidate.path),
+        )
+        registry_repository.save_uploaded_file(uploaded_file)
+        existing_paths.add(resolved_path)
+        uploaded_sidecars.append(uploaded_file)
+
+    return uploaded_sidecars
+
+
+def _recording_metadata_with_source_manifest(
+    *,
+    metadata: RecordingMetadata,
+    primary_file: IngestionUploadedFile,
+    primary_role: str,
+    sidecar_files: list[IngestionUploadedFile],
+    sidecar_discovery: BidsSidecarDiscovery,
+) -> RecordingMetadata:
+    return replace(
+        _recording_metadata_with_added_sources(
+            metadata,
+            [
+                _source_file_metadata_from_upload(primary_file, role=primary_role),
+                *[
+                    _source_file_metadata_from_upload(
+                        sidecar_file,
+                        role="bids_sidecar",
+                        sidecar_type=_sidecar_type_for_path(
+                            Path(sidecar_file.stored_path)
+                        ),
+                        status=_sidecar_status_for_path(
+                            sidecar_discovery,
+                            Path(sidecar_file.stored_path),
+                        ),
+                        diagnostics=_sidecar_diagnostics_for_path(
+                            sidecar_discovery,
+                            Path(sidecar_file.stored_path),
+                        ),
+                    )
+                    for sidecar_file in sidecar_files
+                ],
+            ],
+        ),
+        sidecar_discovery=_bids_sidecar_discovery_metadata(sidecar_discovery),
+    )
+
+
+def _recording_metadata_with_added_sources(
+    metadata: RecordingMetadata,
+    source_files: list[SourceFileMetadata],
+) -> RecordingMetadata:
+    by_key = {
+        (source_file.role, source_file.stored_path): source_file
+        for source_file in metadata.source_files
+    }
+    for source_file in source_files:
+        by_key[(source_file.role, source_file.stored_path)] = source_file
+    return replace(metadata, source_files=list(by_key.values()))
+
+
+def _source_file_metadata_from_upload(
+    uploaded_file: IngestionUploadedFile,
+    *,
+    role: str,
+    sidecar_type: str | None = None,
+    status: str | None = None,
+    diagnostics: list[dict[str, Any]] | None = None,
+) -> SourceFileMetadata:
+    return SourceFileMetadata(
+        role=role,
+        original_filename=uploaded_file.original_filename,
+        stored_path=uploaded_file.stored_path,
+        size_bytes=uploaded_file.size_bytes,
+        checksum_sha256=uploaded_file.checksum_sha256,
+        content_type=uploaded_file.content_type,
+        sidecar_type=sidecar_type,
+        status=status,
+        diagnostics=diagnostics or [],
+    )
+
+
+def _source_file_payload_from_upload(
+    uploaded_file: IngestionUploadedFile,
+    *,
+    role: str,
+    sidecar_type: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "role": role,
+        "file_id": uploaded_file.file_id,
+        "original_filename": uploaded_file.original_filename,
+        "stored_path": uploaded_file.stored_path,
+        "path": uploaded_file.stored_path,
+        "content_type": uploaded_file.content_type,
+        "size_bytes": uploaded_file.size_bytes,
+        "checksum_sha256": uploaded_file.checksum_sha256,
+    }
+    if sidecar_type is not None:
+        payload["sidecar_type"] = sidecar_type
+    return payload
+
+
+def _bids_sidecar_discovery_metadata(discovery: BidsSidecarDiscovery) -> dict[str, Any]:
+    return {
+        "schema_version": discovery.schema_version,
+        "reference_path": str(discovery.reference_path),
+        "bids_basename": discovery.bids_basename,
+        "candidates": [
+            {
+                "sidecar_type": candidate.sidecar_type,
+                "path": str(candidate.path),
+                "status": candidate.status,
+                "diagnostics": [
+                    {
+                        "severity": diagnostic.severity,
+                        "source": diagnostic.source,
+                        "code": diagnostic.code,
+                        "impact": diagnostic.impact,
+                        "suggested_action": diagnostic.suggested_action,
+                    }
+                    for diagnostic in candidate.diagnostics
+                ],
+            }
+            for candidate in discovery.candidates
+        ],
+        "diagnostics": [
+            {
+                "severity": diagnostic.severity,
+                "source": diagnostic.source,
+                "code": diagnostic.code,
+                "impact": diagnostic.impact,
+                "suggested_action": diagnostic.suggested_action,
+            }
+            for diagnostic in discovery.diagnostics
+        ],
+    }
+
+
+def _sidecar_status_for_path(
+    discovery: BidsSidecarDiscovery,
+    path: Path,
+) -> str | None:
+    resolved_path = path.resolve()
+    for candidate in discovery.candidates:
+        if candidate.path.resolve() == resolved_path:
+            return candidate.status
+    return None
+
+
+def _sidecar_diagnostics_for_path(
+    discovery: BidsSidecarDiscovery,
+    path: Path,
+) -> list[dict[str, Any]]:
+    resolved_path = path.resolve()
+    for candidate in discovery.candidates:
+        if candidate.path.resolve() == resolved_path:
+            return [
+                {
+                    "severity": diagnostic.severity,
+                    "source": diagnostic.source,
+                    "code": diagnostic.code,
+                    "impact": diagnostic.impact,
+                    "suggested_action": diagnostic.suggested_action,
+                }
+                for diagnostic in candidate.diagnostics
+            ]
+    return []
+
+
+def _sidecar_type_for_path(path: Path) -> str | None:
+    lower_name = path.name.lower()
+    if lower_name.endswith("_eeg.json"):
+        return "eeg_json"
+    if lower_name.endswith("_channels.tsv"):
+        return "channels_tsv"
+    if lower_name.endswith("_events.tsv"):
+        return "events_tsv"
+    if lower_name.endswith("_electrodes.tsv"):
+        return "electrodes_tsv"
+    if lower_name.endswith("_coordsystem.json"):
+        return "coordsystem_json"
+    return None
+
+
+def _content_type_for_path(path: Path) -> str | None:
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        return "application/json"
+    if suffix == ".tsv":
+        return "text/tab-separated-values"
+    if suffix == ".csv":
+        return "text/csv"
+    return None
+
+
+def _recording_with_discovered_sidecars(
+    recording: Recording,
+    discovery: BidsSidecarDiscovery,
+) -> Recording:
+    enriched_recording = recording
+    for candidate in discovery.candidates:
+        if candidate.status != "valid":
+            continue
+        if candidate.sidecar_type not in {"channels_tsv", "eeg_json"}:
+            continue
+        enriched_recording = _recording_with_sidecar(
+            enriched_recording,
+            candidate.path,
+        )
+    return enriched_recording
 
 
 def _recording_with_sidecar(recording: Recording, sidecar_path: Path) -> Recording:
@@ -2400,6 +2789,7 @@ def _event_log_response(event_log: EventLog) -> EventLogResponse:
         mapping=EventColumnMappingPayload(**event_log.mapping.__dict__),
         row_count=event_log.row_count,
         filter_count=event_log.filter_count,
+        condition_column=event_log.condition_column,
         events=[
             NormalizedEventResponse(
                 onset_seconds=event.onset_seconds,
@@ -2410,6 +2800,7 @@ def _event_log_response(event_log: EventLog) -> EventLogResponse:
                 response=event.response,
                 correct=event.correct,
                 reaction_time_seconds=event.reaction_time_seconds,
+                source_columns=event.source_columns,
             )
             for event in event_log.events
         ],
@@ -3408,6 +3799,13 @@ def _diagnostic_warning_field(warning: object, field_name: str) -> str:
     value = _diagnostic_warning_optional_field(warning, field_name)
     if isinstance(value, ValidationSeverity):
         return value.value
+    if field_name == "severity":
+        try:
+            return ValidationSeverity(str(value)).value
+        except ValueError:
+            return ValidationSeverity.WARNING.value
+    if field_name == "source":
+        return diagnostic_warning_source_from_value(value).value
     return str(value) if value is not None else ""
 
 
@@ -4492,6 +4890,15 @@ def _report_dataset_metadata(
             "file_format": recording_metadata.file_format
             if recording_metadata is not None
             else None,
+            "source_files": [
+                _source_file_metadata_payload(source_file).model_dump()
+                for source_file in recording_metadata.source_files
+            ]
+            if recording_metadata is not None
+            else [],
+            "sidecar_discovery": recording_metadata.sidecar_discovery
+            if recording_metadata is not None
+            else {},
         },
     }
 
@@ -4519,6 +4926,23 @@ def _report_event_summary(event_log: EventLog | None) -> dict:
         "event_count": len(event_log.events),
         "condition_counts": condition_counts,
         "mapping": event_log.mapping.__dict__,
+        "condition_column": event_log.condition_column,
+        "provenance": event_log.provenance,
+        "source_columns": _event_source_column_summary(event_log),
+    }
+
+
+def _event_source_column_summary(event_log: EventLog) -> dict:
+    column_names: set[str] = set()
+    example_values: dict[str, str | None] = {}
+    for event in event_log.events:
+        for column_name, value in event.source_columns.items():
+            column_names.add(column_name)
+            if column_name not in example_values and value is not None:
+                example_values[column_name] = value
+    return {
+        "column_names": sorted(column_names),
+        "example_values": example_values,
     }
 
 
@@ -4556,6 +4980,7 @@ def _analysis_report_extra_sections(
     batch_context = _batch_context_for_run(run)
     if batch_context is not None:
         extra_sections["batch"] = batch_context
+    extra_sections["phase_d_metadata"] = _phase_d_metadata_for_run(run)
     return extra_sections
 
 
@@ -4606,12 +5031,25 @@ def _export_bundle_response(run: PreprocessingRun | EpochRun | ErpRun) -> FileRe
 
     output_directory = manifest_path.parent
     export_bundle_path = output_directory / "export_bundle.zip"
+    phase_d_metadata_path, phase_d_metadata = _write_phase_d_metadata_artifact(
+        run,
+        output_directory,
+    )
     try:
         build_export_bundle(
             artifact_manifest_path=manifest_path,
             analysis_report_path=analysis_report_path,
             output_zip_path=export_bundle_path,
-            extra_artifacts=_batch_export_artifacts_for_run(run),
+            extra_artifacts=[
+                *_batch_export_artifacts_for_run(run),
+                {
+                    "logical_name": "phase_d_metadata",
+                    "artifact_type": "phase_d_metadata_json",
+                    "path": str(phase_d_metadata_path),
+                    "archive_path": "diagnostics/phase_d_metadata.json",
+                },
+            ],
+            diagnostics_warnings=phase_d_metadata["diagnostics"]["warnings"],
         )
     except (AnalysisReportError, ArtifactManifestError, QcSummaryError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -5237,6 +5675,121 @@ def _batch_export_artifacts_for_run(
             "archive_path": "batch/batch_summary.json",
         }
     ]
+
+
+def _write_phase_d_metadata_artifact(
+    run: PreprocessingRun | EpochRun | ErpRun,
+    output_directory: Path,
+) -> tuple[Path, dict]:
+    payload = _phase_d_metadata_for_run(run)
+    path = output_directory / "phase_d_metadata.json"
+    _write_json_file(path, payload)
+    return path, payload
+
+
+def _phase_d_metadata_for_run(run: PreprocessingRun | EpochRun | ErpRun) -> dict:
+    dataset = registry_repository.get_dataset(run.dataset_id)
+    recording = registry_repository.get_recording(run.dataset_id)
+    event_log = registry_repository.get_event_log(run.dataset_id)
+    recording_metadata = recording.metadata if recording is not None else None
+    warnings = _phase_d_optional_metadata_warnings(
+        recording=recording,
+        event_log=event_log,
+    )
+
+    return {
+        "schema_version": 1,
+        "dataset": {
+            "dataset_id": dataset.dataset_id if dataset is not None else run.dataset_id,
+            "project_id": dataset.project_id if dataset is not None else None,
+            "experiment_id": dataset.experiment_id if dataset is not None else None,
+            "participant_id": dataset.participant_id if dataset is not None else None,
+            "session_id": dataset.session_id if dataset is not None else None,
+            "status": dataset.status.value if dataset is not None else None,
+            "metadata": dataset.metadata if dataset is not None else {},
+        },
+        "recording": {
+            "recording_id": recording.recording_id if recording is not None else None,
+            "file_id": recording.file_id if recording is not None else None,
+            "source_files": [
+                _source_file_metadata_payload(source_file).model_dump()
+                for source_file in recording_metadata.source_files
+            ]
+            if recording_metadata is not None
+            else [],
+            "sidecar_discovery": recording_metadata.sidecar_discovery
+            if recording_metadata is not None
+            else {},
+        },
+        "event_log": {
+            "event_log_id": event_log.event_log_id if event_log is not None else None,
+            "file_id": event_log.file_id if event_log is not None else None,
+            "row_count": event_log.row_count if event_log is not None else 0,
+            "filter_count": event_log.filter_count if event_log is not None else 0,
+            "condition_column": event_log.condition_column
+            if event_log is not None
+            else None,
+            "mapping": event_log.mapping.__dict__ if event_log is not None else {},
+            "provenance": event_log.provenance if event_log is not None else {},
+            "source_columns": _event_source_column_summary(event_log)
+            if event_log is not None
+            else {"column_names": [], "example_values": {}},
+        },
+        "run": {
+            "run_id": run.run_id,
+            "run_kind": _run_kind_value(run),
+            "status": _run_status_value(run),
+            "warnings": run.warnings,
+            "diagnostics": _diagnostics_report_payload(run.diagnostics),
+        },
+        "batch": _batch_context_for_run(run),
+        "diagnostics": {
+            "warnings": warnings,
+        },
+    }
+
+
+def _phase_d_optional_metadata_warnings(
+    *,
+    recording: Recording | None,
+    event_log: EventLog | None,
+) -> list[dict[str, str]]:
+    warnings: list[dict[str, str]] = []
+    if recording is not None and not recording.metadata.source_files:
+        warnings.append(
+            _optional_metadata_warning(
+                "recording_source_files_missing",
+                "Recording source file metadata is not available for this export.",
+            )
+        )
+    if recording is not None and not recording.metadata.sidecar_discovery:
+        warnings.append(
+            _optional_metadata_warning(
+                "sidecar_discovery_missing",
+                "BIDS sidecar discovery metadata is not available for this recording.",
+            )
+        )
+    if event_log is not None and not event_log.provenance:
+        warnings.append(
+            _optional_metadata_warning(
+                "event_provenance_missing",
+                "Event log provenance metadata is not available for this export.",
+            )
+        )
+    return warnings
+
+
+def _optional_metadata_warning(code: str, impact: str) -> dict[str, str]:
+    return {
+        "code": code,
+        "severity": "warning",
+        "source": "export_bundle",
+        "impact": impact,
+        "suggested_action": (
+            "Re-ingest or remap the dataset with Phase D metadata enabled if this "
+            "metadata is required for review."
+        ),
+    }
 
 
 def _save_batch_item(
@@ -6473,6 +7026,15 @@ def _event_row_filter_from_payload(
     )
 
 
+def _event_condition_column_from_payload(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    if stripped.lower() in {"", "n/a", "na", "none", "null"}:
+        return None
+    return stripped
+
+
 def _event_log_provenance(
     *,
     dataset_id: str,
@@ -6481,8 +7043,9 @@ def _event_log_provenance(
     preset_applied: bool,
     mapping: EventColumnMapping,
     row_filter: EventRowFilter | None,
+    condition_column: str | None,
 ) -> dict:
-    return build_event_log_provenance_payload(
+    payload = build_event_log_provenance_payload(
         dataset_id=dataset_id,
         event_log_id=uploaded_file.file_id,
         event_file={
@@ -6499,6 +7062,17 @@ def _event_log_provenance(
         row_filter_snapshot=asdict(row_filter) if row_filter is not None else None,
         created_at_utc=_utc_now_iso(),
     )
+    payload["condition_column"] = condition_column
+    payload["sources"].extend(
+        _source_file_payload_from_upload(
+            source_file,
+            role="bids_sidecar",
+            sidecar_type=_sidecar_type_for_path(Path(source_file.stored_path)),
+        )
+        for source_file in registry_repository.list_uploaded_files(dataset_id)
+        if source_file.kind == UploadedFileKind.METADATA
+    )
+    return payload
 
 
 def _new_id(prefix: str) -> str:
