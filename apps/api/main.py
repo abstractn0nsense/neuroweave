@@ -4871,6 +4871,7 @@ def _erp_analysis_report_sections(run: ErpRun) -> dict:
         run.output_metadata.get("comparison_summary_path")
     )
 
+    comparison_statistics = _comparison_statistics_report_payload(comparison_summary)
     return {
         "dataset_metadata": _report_dataset_metadata(dataset, recording),
         "event_summary": _report_event_summary(event_log),
@@ -4892,6 +4893,7 @@ def _erp_analysis_report_sections(run: ErpRun) -> dict:
             "channel": run.output_metadata.get("preview_plot_channel"),
         },
         "comparison_summary": comparison_summary,
+        "comparison_statistics": comparison_statistics,
     }
 
 
@@ -5046,6 +5048,101 @@ def _read_optional_json_path(value: object) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _comparison_statistics_report_payload(
+    comparison_summary: dict | None,
+) -> dict:
+    statistics = (
+        comparison_summary.get("statistics")
+        if isinstance(comparison_summary, dict)
+        else None
+    )
+    if not isinstance(statistics, dict):
+        return {
+            "available": False,
+            "status": "missing",
+            "implemented": False,
+            "method": None,
+            "result": None,
+            "diagnostics": {"warnings": []},
+        }
+    result = statistics.get("result")
+    return {
+        "available": True,
+        "schema_version": statistics.get("schema_version"),
+        "status": statistics.get("status"),
+        "implemented": statistics.get("implemented"),
+        "phase": statistics.get("phase"),
+        "method": statistics.get("method"),
+        "design": statistics.get("design"),
+        "input_metric": statistics.get("input_metric"),
+        "observation_level": statistics.get("observation_level"),
+        "condition_pair": statistics.get("condition_pair"),
+        "sample": statistics.get("sample"),
+        "result": result if isinstance(result, dict) else None,
+        "assumptions": statistics.get("assumptions", []),
+        "diagnostics": statistics.get("diagnostics", {"warnings": []}),
+    }
+
+
+def _comparison_statistics_warnings(
+    run: PreprocessingRun | EpochRun | ErpRun,
+) -> list[dict[str, Any]]:
+    if not isinstance(run, ErpRun):
+        return []
+    comparison_summary = _read_optional_json_path(
+        run.output_metadata.get("comparison_summary_path")
+    )
+    statistics = _comparison_statistics_report_payload(comparison_summary)
+    diagnostics = statistics.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return []
+    warnings = diagnostics.get("warnings")
+    if not isinstance(warnings, list):
+        return []
+    return [warning for warning in warnings if isinstance(warning, dict)]
+
+
+def _export_bundle_extra_manifest_sections(
+    run: PreprocessingRun | EpochRun | ErpRun,
+) -> dict[str, Any]:
+    if not isinstance(run, ErpRun):
+        return {}
+    comparison_summary = _read_optional_json_path(
+        run.output_metadata.get("comparison_summary_path")
+    )
+    if comparison_summary is None:
+        return {
+            "comparison_summary": {"available": False},
+            "comparison_statistics": {
+                "available": False,
+                "status": "missing",
+                "implemented": False,
+            },
+        }
+    return {
+        "comparison_summary": {
+            "available": True,
+            "metric": comparison_summary.get("metric"),
+            "condition_a": (
+                comparison_summary.get("conditions", {})
+                .get("a", {})
+                .get("label")
+            ),
+            "condition_b": (
+                comparison_summary.get("conditions", {})
+                .get("b", {})
+                .get("label")
+            ),
+            "difference": comparison_summary.get("difference"),
+            "target": comparison_summary.get("target"),
+            "window": comparison_summary.get("window"),
+        },
+        "comparison_statistics": _comparison_statistics_report_payload(
+            comparison_summary
+        ),
+    }
+
+
 def _export_bundle_response(run: PreprocessingRun | EpochRun | ErpRun) -> FileResponse:
     if isinstance(run, ErpRun):
         _, completed_run, analysis_report_path = _generate_run_analysis_report(run)
@@ -5094,7 +5191,11 @@ def _export_bundle_response(run: PreprocessingRun | EpochRun | ErpRun) -> FileRe
                     "archive_path": "diagnostics/phase_d_metadata.json",
                 },
             ],
-            diagnostics_warnings=phase_d_metadata["diagnostics"]["warnings"],
+            diagnostics_warnings=[
+                *phase_d_metadata["diagnostics"]["warnings"],
+                *_comparison_statistics_warnings(run),
+            ],
+            extra_manifest_sections=_export_bundle_extra_manifest_sections(run),
         )
     except (AnalysisReportError, ArtifactManifestError, QcSummaryError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

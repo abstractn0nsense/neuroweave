@@ -28,6 +28,14 @@ artifacts/
 - `provenance/`: provenance JSON and source/run lineage artifacts.
 - `artifacts/`: primary or uncategorized artifacts such as FIF outputs.
 
+ERP export bundle manifests may also include:
+
+- `comparison_summary`: selected comparison metric, condition pair, target,
+  window, and descriptive difference when a comparison summary exists.
+- `comparison_statistics`: Phase E statistics status, method, sample, result,
+  assumptions, and structured diagnostics. Unavailable statistics are warnings,
+  not export failures.
+
 ## Missing Artifacts
 
 If an artifact is listed in `artifact_manifest.json` but the file is missing,

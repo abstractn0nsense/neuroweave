@@ -167,6 +167,10 @@ Acceptance:
 - Missing or unsupported statistics appear as structured diagnostics.
 - Existing export bundle tests still pass.
 
+Status: complete. Analysis reports now include `comparison_statistics`, and
+export bundle manifests include comparison/statistics summaries plus statistics
+diagnostics.
+
 ### E4. Reproducibility Graph Contract
 
 - Define a reproducibility graph artifact for completed analysis paths.

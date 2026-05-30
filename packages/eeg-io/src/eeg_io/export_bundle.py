@@ -21,6 +21,7 @@ def build_export_bundle(
     analysis_report_path: Path | None = None,
     extra_artifacts: list[dict[str, Any]] | None = None,
     diagnostics_warnings: list[dict[str, Any]] | None = None,
+    extra_manifest_sections: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     manifest = load_artifact_manifest(artifact_manifest_path)
     diagnostics = {
@@ -115,6 +116,8 @@ def build_export_bundle(
             "entries": entries,
             "diagnostics": diagnostics,
         }
+        if extra_manifest_sections:
+            bundle_manifest.update(extra_manifest_sections)
         bundle.writestr(
             "export_bundle_manifest.json",
             json.dumps(bundle_manifest, indent=2, sort_keys=True) + "\n",

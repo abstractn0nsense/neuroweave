@@ -181,3 +181,44 @@ def test_build_export_bundle_warns_when_analysis_report_is_missing(tmp_path):
             "artifact_manifest.json",
             "export_bundle_manifest.json",
         ]
+
+
+def test_build_export_bundle_includes_extra_manifest_sections(tmp_path):
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    manifest_path = run_root / "artifact_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "artifact_root": str(run_root),
+                "artifact_count": 0,
+                "artifacts": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    build_export_bundle(
+        artifact_manifest_path=manifest_path,
+        output_zip_path=tmp_path / "export_bundle.zip",
+        extra_manifest_sections={
+            "comparison_statistics": {
+                "available": True,
+                "status": "implemented",
+                "method": "paired_t_test",
+            }
+        },
+    )
+
+    with zipfile.ZipFile(tmp_path / "export_bundle.zip") as bundle:
+        bundle_manifest = json.loads(
+            bundle.read("export_bundle_manifest.json").decode("utf-8")
+        )
+
+    assert bundle_manifest["comparison_statistics"] == {
+        "available": True,
+        "status": "implemented",
+        "method": "paired_t_test",
+    }
