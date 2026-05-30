@@ -5528,6 +5528,22 @@ function ComparisonSummary({ run }: { run: ErpRun }) {
   if (metadata.comparison_available !== true) {
     return null;
   }
+  const statisticsStatus =
+    typeof metadata.comparison_statistics_status === "string"
+      ? metadata.comparison_statistics_status
+      : "deferred";
+  const statisticsMethod =
+    typeof metadata.comparison_statistics_method === "string"
+      ? metadata.comparison_statistics_method
+      : null;
+  const statisticsPValue =
+    typeof metadata.comparison_statistics_p_value === "number"
+      ? metadata.comparison_statistics_p_value
+      : null;
+  const statisticsText =
+    metadata.comparison_statistics_implemented === true && statisticsPValue !== null
+      ? `${statisticsMethod ?? "statistics"} p=${statisticsPValue.toPrecision(3)}`
+      : statisticsStatus;
 
   return (
     <dl className="run-summary-grid" data-testid="comparison-summary">
@@ -5564,7 +5580,7 @@ function ComparisonSummary({ run }: { run: ErpRun }) {
       </div>
       <div>
         <dt>Statistics</dt>
-        <dd>deferred</dd>
+        <dd>{statisticsText}</dd>
       </div>
     </dl>
   );

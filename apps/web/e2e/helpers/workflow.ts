@@ -224,5 +224,5 @@ export async function createComparisonSummary(page: Page) {
   await page.getByTestId("start-comparison-button").click();
   await expect(page.getByText("Comparison summary generated.")).toBeVisible();
   await expect(page.getByTestId("comparison-summary")).toContainText("Difference");
-  await expect(page.getByTestId("comparison-summary")).toContainText("deferred");
+  await expect(page.getByTestId("comparison-summary")).toContainText("unavailable");
 }

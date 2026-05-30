@@ -2,6 +2,7 @@ from dataclasses import asdict
 
 from eeg_core.domain import (
     ComparisonConfig,
+    ComparisonObservation,
     Dataset,
     DatasetStatus,
     DiagnosticWarning,
@@ -120,7 +121,7 @@ def test_erp_run_contract_defaults_to_pending_erp_run():
     assert payload["diagnostics"] == {}
 
 
-def test_comparison_config_contract_is_descriptive_only():
+def test_comparison_config_contract_accepts_optional_paired_observations():
     config = ComparisonConfig(
         erp_run_id="erp-001",
         condition_a="target",
@@ -129,6 +130,13 @@ def test_comparison_config_contract_is_descriptive_only():
         use_gfp=True,
         window_start_seconds=-0.05,
         window_end_seconds=0.2,
+        paired_observations=[
+            ComparisonObservation(
+                subject_id="sub-001",
+                condition_a_mean_amplitude_uv=1.2,
+                condition_b_mean_amplitude_uv=0.8,
+            )
+        ],
     )
 
     payload = asdict(config)
@@ -137,6 +145,13 @@ def test_comparison_config_contract_is_descriptive_only():
     assert payload["condition_a"] == "target"
     assert payload["condition_b"] == "standard"
     assert payload["metric"] == "mean_amplitude_uv"
+    assert payload["paired_observations"] == [
+        {
+            "subject_id": "sub-001",
+            "condition_a_mean_amplitude_uv": 1.2,
+            "condition_b_mean_amplitude_uv": 0.8,
+        }
+    ]
 
 
 def test_validation_report_exposes_errors_and_warnings():

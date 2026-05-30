@@ -46,6 +46,7 @@ from eeg_core.domain import (  # noqa: E402
     BatchTemplateSnapshot,
     ChannelMetadata,
     ComparisonConfig,
+    ComparisonObservation,
     Dataset as IngestionDataset,
     DatasetStatus,
     EpochConfig,
@@ -1061,6 +1062,12 @@ class ArtifactIntegrityResponse(BaseModel):
     integrity: dict
 
 
+class ComparisonObservationPayload(BaseModel):
+    subject_id: str
+    condition_a_mean_amplitude_uv: float
+    condition_b_mean_amplitude_uv: float
+
+
 class ComparisonConfigPayload(BaseModel):
     condition_a: str
     condition_b: str
@@ -1069,6 +1076,9 @@ class ComparisonConfigPayload(BaseModel):
     window_start_seconds: float
     window_end_seconds: float
     metric: str = "mean_amplitude_uv"
+    paired_observations: list[ComparisonObservationPayload] = Field(
+        default_factory=list
+    )
 
 
 class ComparisonSummaryResponse(BaseModel):
@@ -2286,6 +2296,18 @@ def create_comparison_summary(
         window_start_seconds=config_payload.window_start_seconds,
         window_end_seconds=config_payload.window_end_seconds,
         metric=config_payload.metric,
+        paired_observations=[
+            ComparisonObservation(
+                subject_id=observation.subject_id,
+                condition_a_mean_amplitude_uv=(
+                    observation.condition_a_mean_amplitude_uv
+                ),
+                condition_b_mean_amplitude_uv=(
+                    observation.condition_b_mean_amplitude_uv
+                ),
+            )
+            for observation in config_payload.paired_observations
+        ],
     )
 
     try:
@@ -4246,6 +4268,10 @@ def _comparison_completed_metadata(
     difference = summary.get("difference", {})
     target = summary.get("target", {})
     window = summary.get("window", {})
+    statistics = summary.get("statistics", {})
+    statistics_result = (
+        statistics.get("result") if isinstance(statistics, dict) else None
+    )
     return {
         **run.output_metadata,
         "artifact_count": manifest_metadata["artifact_count"],
@@ -4263,7 +4289,26 @@ def _comparison_completed_metadata(
         "comparison_mean_a_uv": condition_a.get("mean_amplitude_uv"),
         "comparison_mean_b_uv": condition_b.get("mean_amplitude_uv"),
         "comparison_difference_uv": difference.get("mean_amplitude_uv"),
-        "comparison_statistics_implemented": False,
+        "comparison_statistics_implemented": (
+            statistics.get("implemented") if isinstance(statistics, dict) else False
+        ),
+        "comparison_statistics_status": (
+            statistics.get("status") if isinstance(statistics, dict) else None
+        ),
+        "comparison_statistics_method": (
+            statistics.get("method") if isinstance(statistics, dict) else None
+        ),
+        "comparison_statistics_p_value": (
+            statistics_result.get("p_value")
+            if isinstance(statistics_result, dict)
+            else None
+        ),
+        "comparison_statistics_effect_size": (
+            statistics_result.get("effect_size", {}).get("value")
+            if isinstance(statistics_result, dict)
+            and isinstance(statistics_result.get("effect_size"), dict)
+            else None
+        ),
     }
 
 
@@ -6919,6 +6964,14 @@ def _validate_comparison_config(
         errors.append("Use either GFP or a channel, not both.")
     if not config_payload.use_gfp and not config_payload.channel:
         errors.append("A channel is required when use_gfp is false.")
+    subject_ids = [
+        observation.subject_id.strip()
+        for observation in config_payload.paired_observations
+    ]
+    if any(not subject_id for subject_id in subject_ids):
+        errors.append("Paired observation subject_id values must not be empty.")
+    if len(subject_ids) != len(set(subject_ids)):
+        errors.append("Paired observation subject_id values must be unique.")
     return errors
 
 

@@ -126,7 +126,7 @@ Phase 3 analysis output roots are configurable with `NEUROWEAVE_EPOCHS_DIR` and 
 
 Artifact files are served through `GET /artifacts/{run_id}/{filename}` with run artifact-root validation instead of exposing unrestricted filesystem paths.
 
-`POST /erp-runs/{run_id}/comparison-summary` writes descriptive Phase 3 comparison prep under the ERP run artifact directory as `comparison_summary.json`. The summary stores the selected condition pair, channel or GFP target, mean-amplitude window, condition means, A-B difference, and an explicit marker that statistical testing is deferred to Phase 4.
+`POST /erp-runs/{run_id}/comparison-summary` writes comparison prep under the ERP run artifact directory as `comparison_summary.json`. The summary stores the selected condition pair, channel or GFP target, mean-amplitude window, condition means, and A-B difference. Phase E adds an optional paired mean-amplitude t-test when the request supplies subject-level paired observations; otherwise the statistics object is written as `unavailable` with structured diagnostics instead of inventing inferential values from two evoked averages.
 
 Preprocessing runs also persist captured MNE/Python warnings in `warnings`. Failed runs persist `errors`, retain input provenance, and remain available through the run lookup endpoints.
 

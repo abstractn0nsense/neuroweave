@@ -150,6 +150,10 @@ Acceptance:
 - `comparison_summary.json` includes the new statistics object.
 - Existing Phase 3 ERP smoke still passes.
 
+Status: complete. ERP comparison summaries now support Phase E paired
+mean-amplitude t-test statistics when subject-level paired observations are
+supplied, and structured unavailable diagnostics otherwise.
+
 ### E3. Statistics Report And Export Integration
 
 - Surface the E2 statistics result in ERP comparison API responses.
