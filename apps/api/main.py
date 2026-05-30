@@ -96,7 +96,9 @@ from eeg_processing import (  # noqa: E402
 )
 from eeg_processing.epoching import SUPPORTED_CONDITION_FIELDS  # noqa: E402
 from eeg_io.bids_sidecars import (  # noqa: E402
+    BidsSidecarDiscovery,
     BidsSidecarError,
+    discover_bids_sidecars,
     read_channels_tsv,
     read_eeg_json,
 )
@@ -532,6 +534,29 @@ class UploadedFileResponse(BaseModel):
     checksum_sha256: str | None
 
 
+class BidsSidecarDiagnosticResponse(BaseModel):
+    severity: str
+    source: str
+    code: str
+    impact: str | None
+    suggested_action: str | None
+
+
+class BidsSidecarCandidateResponse(BaseModel):
+    sidecar_type: str
+    path: str
+    status: str
+    diagnostics: list[BidsSidecarDiagnosticResponse] = Field(default_factory=list)
+
+
+class BidsSidecarDiscoveryResponse(BaseModel):
+    schema_version: int
+    reference_path: str
+    bids_basename: str
+    candidates: list[BidsSidecarCandidateResponse] = Field(default_factory=list)
+    diagnostics: list[BidsSidecarDiagnosticResponse] = Field(default_factory=list)
+
+
 class RecordingResponse(BaseModel):
     recording_id: str
     dataset_id: str
@@ -543,6 +568,7 @@ class EegUploadResponse(BaseModel):
     dataset: DatasetResponse
     uploaded_file: UploadedFileResponse
     recording: RecordingResponse
+    sidecar_discovery: BidsSidecarDiscoveryResponse | None = None
 
 
 class SidecarUploadResponse(BaseModel):
@@ -562,6 +588,7 @@ class EventUploadResponse(BaseModel):
     dataset: DatasetResponse
     uploaded_file: UploadedFileResponse
     preview: EventLogPreviewResponse
+    sidecar_discovery: BidsSidecarDiscoveryResponse | None = None
 
 
 class EventColumnMappingPayload(BaseModel):
@@ -1325,6 +1352,8 @@ def upload_dataset_eeg_file(
         file_id=uploaded_file.file_id,
         metadata=metadata,
     )
+    sidecar_discovery = discover_bids_sidecars(stored_path)
+    recording = _recording_with_discovered_sidecars(recording, sidecar_discovery)
     registry_repository.save_recording(recording)
 
     updated_dataset = replace(
@@ -1338,6 +1367,7 @@ def upload_dataset_eeg_file(
         dataset=_dataset_response(updated_dataset),
         uploaded_file=_uploaded_file_response(uploaded_file),
         recording=_recording_response(recording),
+        sidecar_discovery=_bids_sidecar_discovery_response(sidecar_discovery),
     )
 
 
@@ -1423,6 +1453,7 @@ def upload_dataset_events_file(
     )
     registry_repository.save_uploaded_file(uploaded_file)
     registry_repository.save_events_preview(dataset_id, preview)
+    sidecar_discovery = discover_bids_sidecars(stored_path)
 
     updated_dataset = replace(
         dataset,
@@ -1435,6 +1466,7 @@ def upload_dataset_events_file(
         dataset=_dataset_response(updated_dataset),
         uploaded_file=_uploaded_file_response(uploaded_file),
         preview=EventLogPreviewResponse(**preview),
+        sidecar_discovery=_bids_sidecar_discovery_response(sidecar_discovery),
     )
 
 
@@ -2342,6 +2374,61 @@ def _recording_response(recording: Recording) -> RecordingResponse:
             reference=recording.metadata.reference,
         ),
     )
+
+
+def _bids_sidecar_discovery_response(
+    discovery: BidsSidecarDiscovery,
+) -> BidsSidecarDiscoveryResponse:
+    return BidsSidecarDiscoveryResponse(
+        schema_version=discovery.schema_version,
+        reference_path=str(discovery.reference_path),
+        bids_basename=discovery.bids_basename,
+        candidates=[
+            BidsSidecarCandidateResponse(
+                sidecar_type=candidate.sidecar_type,
+                path=str(candidate.path),
+                status=candidate.status,
+                diagnostics=[
+                    BidsSidecarDiagnosticResponse(
+                        severity=diagnostic.severity,
+                        source=diagnostic.source,
+                        code=diagnostic.code,
+                        impact=diagnostic.impact,
+                        suggested_action=diagnostic.suggested_action,
+                    )
+                    for diagnostic in candidate.diagnostics
+                ],
+            )
+            for candidate in discovery.candidates
+        ],
+        diagnostics=[
+            BidsSidecarDiagnosticResponse(
+                severity=diagnostic.severity,
+                source=diagnostic.source,
+                code=diagnostic.code,
+                impact=diagnostic.impact,
+                suggested_action=diagnostic.suggested_action,
+            )
+            for diagnostic in discovery.diagnostics
+        ],
+    )
+
+
+def _recording_with_discovered_sidecars(
+    recording: Recording,
+    discovery: BidsSidecarDiscovery,
+) -> Recording:
+    enriched_recording = recording
+    for candidate in discovery.candidates:
+        if candidate.status != "valid":
+            continue
+        if candidate.sidecar_type not in {"channels_tsv", "eeg_json"}:
+            continue
+        enriched_recording = _recording_with_sidecar(
+            enriched_recording,
+            candidate.path,
+        )
+    return enriched_recording
 
 
 def _recording_with_sidecar(recording: Recording, sidecar_path: Path) -> Recording:
