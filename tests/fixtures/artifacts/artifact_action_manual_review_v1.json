@@ -1,0 +1,73 @@
+{
+  "action_id": "artifact-action-001",
+  "action_kind": "ica_exclude_components",
+  "config_patch": {
+    "preprocessing": {
+      "ica": {
+        "enabled": true,
+        "exclude_components": [
+          0,
+          2
+        ]
+      }
+    }
+  },
+  "diagnostics": {
+    "warnings": [
+      {
+        "code": "manual_review_pending",
+        "impact": "ICA component exclusions are proposed but have not been approved for a rerun.",
+        "severity": "warning",
+        "source": "artifact",
+        "suggested_action": "Review component topographies and approve or reject the action before creating a derived preprocessing run."
+      }
+    ]
+  },
+  "effects": {
+    "creates_artifacts": [
+      "artifact_action_json",
+      "manual_review_summary_json"
+    ],
+    "invalidates_downstream": [
+      "preprocessing",
+      "epoch",
+      "erp",
+      "comparison",
+      "report",
+      "export"
+    ],
+    "mutates_signal": true,
+    "requires_new_run": true
+  },
+  "export_report_policy": {
+    "block_export_when_pending": false,
+    "include_in_analysis_report": true,
+    "include_in_artifact_manifest": true,
+    "include_in_export_bundle": true
+  },
+  "review_state": {
+    "reason": "ICA components require human confirmation before exclusion.",
+    "required": true,
+    "reviewed_at_utc": null,
+    "reviewer": null,
+    "state": "pending"
+  },
+  "schema_version": 1,
+  "source": {
+    "artifact_manifest_path": "data/processed/dataset-001/preprocess-001/artifact_manifest.json",
+    "dataset_id": "dataset-001",
+    "qc_summary_path": "data/processed/dataset-001/preprocess-001/artifact_summary.json",
+    "run_id": "preprocess-001",
+    "run_kind": "preprocessing"
+  },
+  "status": "pending_manual_review",
+  "targets": {
+    "annotations": [],
+    "channels": [],
+    "ica_components": [
+      0,
+      2
+    ],
+    "time_windows": []
+  }
+}

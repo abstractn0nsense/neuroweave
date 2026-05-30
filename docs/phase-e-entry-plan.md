@@ -282,7 +282,30 @@ panel reports the visible item count for the active filter. The Phase C batch
 smoke exercises failed-only and completed-only views before retry, then verifies
 the empty failed view after the retry completes.
 
-### E10. Phase E Exit Gate
+### E10. Advanced Artifact Workflow Planning
+
+- Split advanced artifact workflow planning from immediate ICA/manual review
+  execution.
+- Define artifact action schema, pending/manual-review states, and export/report
+  impact.
+- Keep current preprocessing worker behavior unchanged.
+
+Acceptance:
+
+- Artifact actions have a schema covering ICA component exclusions, bad-channel
+  marking/interpolation, manual artifact annotation rejection, and review notes.
+- Pending manual review is an auditable state, not an implicit data mutation.
+- Report/export behavior is explicit: include pending actions as diagnostics,
+  warn when review is pending, and do not block export solely because review is
+  pending.
+
+Status: complete. `docs/advanced-artifact-workflow-contract.md` now defines the
+artifact action lifecycle, manual-review states, and report/export policy. The
+contract is pinned by `docs/schemas/artifact-action.schema.json`,
+`tests/fixtures/artifacts/artifact_action_manual_review_v1.json`, and
+`tests/test_advanced_artifact_workflow_contract.py`.
+
+### E11. Phase E Exit Gate
 
 - Run the full Python test gate, web build, and `npm.cmd run e2e:all`.
 - Record final statistics and reproducibility behavior.
