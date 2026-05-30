@@ -185,6 +185,10 @@ Acceptance:
   lineage.
 - Missing optional provenance creates warnings, not hard failures.
 
+Status: contract complete. See `docs/reproducibility-graph-contract.md`,
+`docs/schemas/reproducibility-graph.schema.json`, and
+`tests/fixtures/reproducibility/`.
+
 ### E5. Reproducibility Graph Read-Only UI
 
 - Add a compact read-only view for the reproducibility graph.
