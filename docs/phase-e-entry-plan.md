@@ -243,7 +243,26 @@ workflow with `download_public_data=false` by default. It always runs the offlin
 public smoke contract tests and only prepares the PhysioNet EEGMMI files when a
 maintainer explicitly enables the download input.
 
-### E8. Phase E Exit Gate
+### E8. ERP/QC Visual Regression Seed
+
+- Add one or two Playwright screenshot baselines before building a larger visual
+  regression suite.
+- Center the seed on deterministic ERP preview and QC dashboard UI.
+- Keep the visual seed separate from the default browser smoke gate.
+
+Acceptance:
+
+- Playwright stores stable screenshots for deterministic fixture data.
+- ERP preview and QC dashboard are covered by locator-level snapshots.
+- The seed can be run explicitly without changing the default `e2e:all` gate.
+
+Status: complete. `apps/web/e2e/visual-regression-seed.spec.ts` adds two
+locator-level Playwright baselines for the deterministic Phase 3 ERP fixture:
+`erp-preview-seed-win32.png` and `qc-dashboard-erp-seed-win32.png`. The seed is
+available through `npm.cmd run e2e:visual-seed` and remains separate from the
+default `e2e:all` browser gate.
+
+### E9. Phase E Exit Gate
 
 - Run the full Python test gate, web build, and `npm.cmd run e2e:all`.
 - Record final statistics and reproducibility behavior.

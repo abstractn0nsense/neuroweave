@@ -12,6 +12,7 @@
     "e2e:phase3:epoch": "playwright test e2e/phase3-epoch-smoke.spec.ts",
     "e2e:phase3:erp": "playwright test e2e/phase3-erp-smoke.spec.ts",
     "e2e:phase3": "playwright test e2e/phase3-epoch-smoke.spec.ts e2e/phase3-erp-smoke.spec.ts",
+    "e2e:visual-seed": "playwright test e2e/visual-regression-seed.spec.ts",
     "e2e:all": "npm run e2e:phase2 && npm run e2e:phase-c && npm run e2e:phase3:epoch && npm run e2e:phase3:erp"
   },
   "dependencies": {
