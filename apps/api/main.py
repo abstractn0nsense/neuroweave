@@ -1062,6 +1062,13 @@ class ArtifactIntegrityResponse(BaseModel):
     integrity: dict
 
 
+class RerunPlanResponse(BaseModel):
+    run_id: str
+    dataset_id: str
+    run_kind: str
+    plan: dict
+
+
 class ComparisonObservationPayload(BaseModel):
     subject_id: str
     condition_a_mean_amplitude_uv: float
@@ -2378,6 +2385,21 @@ def get_run_artifact_integrity(run_id: str) -> ArtifactIntegrityResponse:
         dataset_id=run.dataset_id,
         run_kind=_run_kind_value(run),
         integrity=integrity,
+    )
+
+
+@app.get("/runs/{run_id}/rerun-plan", response_model=RerunPlanResponse)
+def get_run_rerun_plan(run_id: str) -> RerunPlanResponse:
+    run = _find_run_by_id(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    plan = _build_rerun_plan(run)
+    return RerunPlanResponse(
+        run_id=run.run_id,
+        dataset_id=run.dataset_id,
+        run_kind=_run_kind_value(run),
+        plan=plan,
     )
 
 
@@ -4806,6 +4828,573 @@ def _run_artifact_manifest_path(
         if path.is_file():
             return path
     return None
+
+
+def _build_rerun_plan(run: PreprocessingRun | EpochRun | ErpRun) -> dict:
+    blockers: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    parent_context = _rerun_parent_context(run, blockers)
+    source_checks = _rerun_source_checks(run, blockers, warnings)
+    artifact_checks = [
+        _rerun_artifact_check(chain_run, blockers)
+        for chain_run in parent_context["runs"]
+    ]
+    config_checks = _rerun_config_checks(
+        target_run=run,
+        chain_runs=parent_context["runs"],
+        mismatches=parent_context["config_mismatches"],
+    )
+    for chain_run in parent_context["runs"]:
+        if _run_status_value(chain_run) != "completed":
+            blockers.append(
+                _rerun_diagnostic(
+                    code="run_not_completed",
+                    source="validation",
+                    impact=(
+                        f"{_run_kind_value(chain_run)} run {chain_run.run_id} is "
+                        "not completed, so a deterministic rerun preview cannot "
+                        "be marked ready."
+                    ),
+                    suggested_action="Wait for the run to complete or select a completed run.",
+                    context={
+                        "run_id": chain_run.run_id,
+                        "run_kind": _run_kind_value(chain_run),
+                        "status": _run_status_value(chain_run),
+                    },
+                )
+            )
+
+    status_value = "ready"
+    if blockers:
+        status_value = "blocked"
+    elif warnings:
+        status_value = "partially_recoverable"
+
+    return {
+        "schema_version": 1,
+        "plan_kind": "rerun_plan",
+        "run_id": run.run_id,
+        "run_kind": _run_kind_value(run),
+        "dataset_id": run.dataset_id,
+        "status": status_value,
+        "can_rerun": not blockers,
+        "would_execute": False,
+        "execution": {
+            "queued": False,
+            "reason": "Planning only; no rerun was created.",
+        },
+        "chain": parent_context["chain"],
+        "checks": {
+            "sources": source_checks,
+            "parent_runs": parent_context["parent_checks"],
+            "config": config_checks,
+            "artifacts": artifact_checks,
+        },
+        "blockers": blockers,
+        "warnings": warnings,
+        "diagnostics": {
+            "blockers": blockers,
+            "warnings": warnings,
+        },
+    }
+
+
+def _rerun_parent_context(
+    run: PreprocessingRun | EpochRun | ErpRun,
+    blockers: list[dict[str, Any]],
+) -> dict[str, Any]:
+    runs: list[PreprocessingRun | EpochRun | ErpRun] = []
+    chain: list[dict[str, Any]] = []
+    parent_checks: list[dict[str, Any]] = []
+    config_mismatches: list[dict[str, Any]] = []
+
+    def add_run_item(chain_run: PreprocessingRun | EpochRun | ErpRun) -> None:
+        runs.append(chain_run)
+        chain.append(_rerun_chain_item(chain_run))
+
+    def missing_parent(run_kind: str, run_id: str, child_run_id: str) -> None:
+        item = {
+            "run_id": run_id,
+            "run_kind": run_kind,
+            "status": "missing",
+            "child_run_id": child_run_id,
+        }
+        chain.append(item)
+        parent_checks.append(
+            {
+                "status": "missing",
+                "run_id": run_id,
+                "run_kind": run_kind,
+                "child_run_id": child_run_id,
+            }
+        )
+        blockers.append(
+            _rerun_diagnostic(
+                code="parent_run_missing",
+                source="validation",
+                impact=f"Parent {run_kind} run {run_id} is not available.",
+                suggested_action="Restore the parent run registry entry before rerun.",
+                context=item,
+            )
+        )
+
+    if isinstance(run, PreprocessingRun):
+        add_run_item(run)
+    elif isinstance(run, EpochRun):
+        preprocessing_run_id = run.config.preprocessing_run_id
+        recorded_preprocessing_run_id = _metadata_string(
+            run.output_metadata,
+            "input_preprocessing_run_id",
+        )
+        if (
+            recorded_preprocessing_run_id is not None
+            and recorded_preprocessing_run_id != preprocessing_run_id
+        ):
+            config_mismatches.append(
+                _rerun_config_mismatch(
+                    run_id=run.run_id,
+                    field="config.preprocessing_run_id",
+                    configured=preprocessing_run_id,
+                    recorded=recorded_preprocessing_run_id,
+                )
+            )
+        preprocessing_run = run_repository.get_preprocessing_run(preprocessing_run_id)
+        if preprocessing_run is None:
+            missing_parent("preprocessing", preprocessing_run_id, run.run_id)
+        else:
+            add_run_item(preprocessing_run)
+            parent_checks.append(_rerun_parent_check_item(preprocessing_run, run))
+        add_run_item(run)
+    else:
+        epoch_run_id = run.config.epoch_run_id
+        recorded_epoch_run_id = _metadata_string(
+            run.output_metadata,
+            "input_epoch_run_id",
+        )
+        if recorded_epoch_run_id is not None and recorded_epoch_run_id != epoch_run_id:
+            config_mismatches.append(
+                _rerun_config_mismatch(
+                    run_id=run.run_id,
+                    field="config.epoch_run_id",
+                    configured=epoch_run_id,
+                    recorded=recorded_epoch_run_id,
+                )
+            )
+        epoch_run = run_repository.get_epoch_run(epoch_run_id)
+        if epoch_run is None:
+            missing_parent("epoch", epoch_run_id, run.run_id)
+            recorded_preprocessing_run_id = _metadata_string(
+                run.output_metadata,
+                "input_preprocessing_run_id",
+            )
+            if recorded_preprocessing_run_id is not None:
+                missing_parent(
+                    "preprocessing",
+                    recorded_preprocessing_run_id,
+                    run.run_id,
+                )
+        else:
+            preprocessing_run_id = epoch_run.config.preprocessing_run_id
+            recorded_preprocessing_run_id = _metadata_string(
+                epoch_run.output_metadata,
+                "input_preprocessing_run_id",
+            )
+            if (
+                recorded_preprocessing_run_id is not None
+                and recorded_preprocessing_run_id != preprocessing_run_id
+            ):
+                config_mismatches.append(
+                    _rerun_config_mismatch(
+                        run_id=epoch_run.run_id,
+                        field="config.preprocessing_run_id",
+                        configured=preprocessing_run_id,
+                        recorded=recorded_preprocessing_run_id,
+                    )
+                )
+            erp_recorded_preprocessing_run_id = _metadata_string(
+                run.output_metadata,
+                "input_preprocessing_run_id",
+            )
+            if (
+                erp_recorded_preprocessing_run_id is not None
+                and recorded_preprocessing_run_id is not None
+                and erp_recorded_preprocessing_run_id != recorded_preprocessing_run_id
+            ):
+                config_mismatches.append(
+                    _rerun_config_mismatch(
+                        run_id=run.run_id,
+                        field="output_metadata.input_preprocessing_run_id",
+                        configured=recorded_preprocessing_run_id,
+                        recorded=erp_recorded_preprocessing_run_id,
+                    )
+                )
+            preprocessing_run = run_repository.get_preprocessing_run(
+                preprocessing_run_id
+            )
+            if preprocessing_run is None:
+                missing_parent("preprocessing", preprocessing_run_id, epoch_run.run_id)
+            else:
+                add_run_item(preprocessing_run)
+                parent_checks.append(_rerun_parent_check_item(preprocessing_run, epoch_run))
+            add_run_item(epoch_run)
+            parent_checks.append(_rerun_parent_check_item(epoch_run, run))
+        add_run_item(run)
+
+    for mismatch in config_mismatches:
+        blockers.append(
+            _rerun_diagnostic(
+                code="config_parent_mismatch",
+                source="validation",
+                impact=(
+                    f"{mismatch['run_id']} has conflicting configured and "
+                    f"recorded parent values for {mismatch['field']}."
+                ),
+                suggested_action=(
+                    "Review the run registry before enabling one-click rerun."
+                ),
+                context=mismatch,
+            )
+        )
+
+    return {
+        "runs": runs,
+        "chain": chain,
+        "parent_checks": parent_checks,
+        "config_mismatches": config_mismatches,
+    }
+
+
+def _rerun_source_checks(
+    run: PreprocessingRun | EpochRun | ErpRun,
+    blockers: list[dict[str, Any]],
+    warnings: list[dict[str, Any]],
+) -> dict[str, Any]:
+    dataset = registry_repository.get_dataset(run.dataset_id)
+    recording = registry_repository.get_recording(run.dataset_id)
+    event_log = registry_repository.get_event_log(run.dataset_id)
+    recording_sources: list[dict[str, Any]] = []
+    event_sources: list[dict[str, Any]] = []
+
+    if dataset is None:
+        blockers.append(
+            _rerun_diagnostic(
+                code="dataset_missing",
+                source="validation",
+                impact=f"Dataset {run.dataset_id} is not available.",
+                suggested_action="Restore the dataset registry entry before rerun.",
+                context={"dataset_id": run.dataset_id},
+            )
+        )
+    if recording is None:
+        blockers.append(
+            _rerun_diagnostic(
+                code="recording_missing",
+                source="validation",
+                impact=f"Recording metadata for dataset {run.dataset_id} is missing.",
+                suggested_action="Re-ingest the dataset before rerun.",
+                context={"dataset_id": run.dataset_id},
+            )
+        )
+    elif not recording.metadata.source_files:
+        warnings.append(
+            _rerun_diagnostic(
+                code="recording_source_files_missing",
+                severity="warning",
+                source="export_bundle",
+                impact="Recording source file metadata is not available.",
+                suggested_action=(
+                    "Re-ingest the dataset with Phase D metadata to improve rerun "
+                    "auditability."
+                ),
+                context={"recording_id": recording.recording_id},
+            )
+        )
+    else:
+        for source_file in recording.metadata.source_files:
+            item = _rerun_path_check(
+                path_value=source_file.stored_path,
+                role=source_file.role,
+                original_filename=source_file.original_filename,
+            )
+            recording_sources.append(item)
+            if item["status"] != "ok":
+                blockers.append(
+                    _rerun_diagnostic(
+                        code="source_file_missing",
+                        source="validation",
+                        impact=f"Source file is missing: {source_file.stored_path}",
+                        suggested_action=(
+                            "Restore the source file or re-ingest the dataset."
+                        ),
+                        context=item,
+                    )
+                )
+
+    if isinstance(run, (EpochRun, ErpRun)):
+        if event_log is None:
+            blockers.append(
+                _rerun_diagnostic(
+                    code="event_log_missing",
+                    source="validation",
+                    impact=f"Event log for dataset {run.dataset_id} is missing.",
+                    suggested_action="Restore or remap the event log before rerun.",
+                    context={"dataset_id": run.dataset_id},
+                )
+            )
+        elif not event_log.provenance:
+            warnings.append(
+                _rerun_diagnostic(
+                    code="event_provenance_missing",
+                    severity="warning",
+                    source="export_bundle",
+                    impact="Event log provenance metadata is not available.",
+                    suggested_action=(
+                        "Remap the event log with Phase D metadata to improve "
+                        "rerun auditability."
+                    ),
+                    context={"event_log_id": event_log.event_log_id},
+                )
+            )
+        else:
+            for event_source in _event_file_sources(event_log):
+                item = _rerun_path_check(
+                    path_value=event_source.get("stored_path")
+                    or event_source.get("path"),
+                    role=str(event_source.get("role") or "event_file"),
+                    original_filename=event_source.get("original_filename"),
+                )
+                event_sources.append(item)
+                if item["status"] != "ok":
+                    blockers.append(
+                        _rerun_diagnostic(
+                            code="event_source_file_missing",
+                            source="validation",
+                            impact=(
+                                "Event source file is missing: "
+                                f"{item.get('path')}"
+                            ),
+                            suggested_action=(
+                                "Restore the event source file or remap events."
+                            ),
+                            context=item,
+                        )
+                    )
+
+    return {
+        "dataset": {
+            "dataset_id": run.dataset_id,
+            "status": "ok" if dataset is not None else "missing",
+        },
+        "recording": {
+            "recording_id": recording.recording_id if recording is not None else None,
+            "status": "ok" if recording is not None else "missing",
+            "source_files": recording_sources,
+        },
+        "event_log": {
+            "event_log_id": event_log.event_log_id if event_log is not None else None,
+            "status": "ok" if event_log is not None else "missing",
+            "source_files": event_sources,
+        },
+    }
+
+
+def _rerun_artifact_check(
+    run: PreprocessingRun | EpochRun | ErpRun,
+    blockers: list[dict[str, Any]],
+) -> dict[str, Any]:
+    manifest_path_value = run.output_metadata.get("artifact_manifest_path")
+    manifest_path = _run_artifact_manifest_path(run)
+    if manifest_path is None:
+        item = {
+            "run_id": run.run_id,
+            "run_kind": _run_kind_value(run),
+            "status": "missing",
+            "artifact_manifest_path": manifest_path_value,
+        }
+        blockers.append(
+            _rerun_diagnostic(
+                code="artifact_manifest_missing",
+                source="artifact",
+                impact=f"Artifact manifest for run {run.run_id} is missing.",
+                suggested_action="Restore the artifact manifest before rerun.",
+                context=item,
+            )
+        )
+        return item
+
+    try:
+        integrity = check_artifact_integrity(manifest_path)
+    except ArtifactManifestError as exc:
+        item = {
+            "run_id": run.run_id,
+            "run_kind": _run_kind_value(run),
+            "status": "invalid",
+            "artifact_manifest_path": str(manifest_path),
+            "error": str(exc),
+        }
+        blockers.append(
+            _rerun_diagnostic(
+                code="artifact_manifest_invalid",
+                source="artifact",
+                impact=f"Artifact manifest for run {run.run_id} is invalid.",
+                suggested_action="Repair or regenerate the artifact manifest.",
+                context=item,
+            )
+        )
+        return item
+
+    if integrity["status"] != "ok":
+        blockers.append(
+            _rerun_diagnostic(
+                code="artifact_integrity_failed",
+                source="artifact",
+                impact=f"Artifacts for run {run.run_id} are missing or mismatched.",
+                suggested_action="Restore missing artifacts or regenerate this run.",
+                context={
+                    "run_id": run.run_id,
+                    "run_kind": _run_kind_value(run),
+                    "status": integrity["status"],
+                    "status_counts": integrity["status_counts"],
+                },
+            )
+        )
+
+    return {
+        "run_id": run.run_id,
+        "run_kind": _run_kind_value(run),
+        "status": integrity["status"],
+        "artifact_manifest_path": integrity["manifest_path"],
+        "status_counts": integrity["status_counts"],
+    }
+
+
+def _rerun_config_checks(
+    *,
+    target_run: PreprocessingRun | EpochRun | ErpRun,
+    chain_runs: list[PreprocessingRun | EpochRun | ErpRun],
+    mismatches: list[dict[str, Any]],
+) -> dict[str, Any]:
+    snapshots = [
+        {
+            "run_id": chain_run.run_id,
+            "run_kind": _run_kind_value(chain_run),
+            "config_snapshot": asdict(chain_run.config),
+            "config_digest_sha256": _stable_sha256(asdict(chain_run.config)),
+        }
+        for chain_run in chain_runs
+    ]
+    return {
+        "status": "mismatch" if mismatches else "ok",
+        "target_run_id": target_run.run_id,
+        "target_config_digest_sha256": _stable_sha256(asdict(target_run.config)),
+        "chain_config_snapshots": snapshots,
+        "mismatches": mismatches,
+    }
+
+
+def _rerun_chain_item(run: PreprocessingRun | EpochRun | ErpRun) -> dict[str, Any]:
+    return {
+        "run_id": run.run_id,
+        "run_kind": _run_kind_value(run),
+        "status": _run_status_value(run),
+        "artifact_manifest_path": run.output_metadata.get("artifact_manifest_path"),
+    }
+
+
+def _rerun_parent_check_item(
+    parent_run: PreprocessingRun | EpochRun | ErpRun,
+    child_run: EpochRun | ErpRun,
+) -> dict[str, Any]:
+    return {
+        "status": "ok" if _run_status_value(parent_run) == "completed" else "blocked",
+        "run_id": parent_run.run_id,
+        "run_kind": _run_kind_value(parent_run),
+        "child_run_id": child_run.run_id,
+        "child_run_kind": _run_kind_value(child_run),
+        "parent_status": _run_status_value(parent_run),
+    }
+
+
+def _rerun_config_mismatch(
+    *,
+    run_id: str,
+    field: str,
+    configured: str,
+    recorded: str,
+) -> dict[str, Any]:
+    return {
+        "run_id": run_id,
+        "field": field,
+        "configured": configured,
+        "recorded": recorded,
+    }
+
+
+def _rerun_path_check(
+    *,
+    path_value: object,
+    role: str,
+    original_filename: object | None = None,
+) -> dict[str, Any]:
+    path = str(path_value).strip() if path_value is not None else ""
+    exists = bool(path) and Path(path).is_file()
+    return {
+        "role": role,
+        "original_filename": str(original_filename)
+        if original_filename is not None
+        else None,
+        "path": path or None,
+        "status": "ok" if exists else "missing",
+    }
+
+
+def _event_file_sources(event_log: EventLog) -> list[dict[str, Any]]:
+    sources = event_log.provenance.get("sources")
+    if not isinstance(sources, list):
+        return []
+    return [
+        dict(source)
+        for source in sources
+        if isinstance(source, dict)
+        and str(source.get("role") or "").lower() == "event_file"
+    ]
+
+
+def _metadata_string(metadata: dict[str, Any], key: str) -> str | None:
+    value = metadata.get(key)
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
+
+
+def _stable_sha256(value: dict[str, Any]) -> str:
+    payload = json.dumps(
+        value,
+        default=str,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _rerun_diagnostic(
+    *,
+    code: str,
+    source: str,
+    impact: str,
+    suggested_action: str,
+    severity: str = "error",
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "severity": severity,
+        "source": source,
+        "code": code,
+        "impact": impact,
+        "suggested_action": suggested_action,
+        "context": context or {},
+    }
 
 
 def _generate_run_analysis_report(

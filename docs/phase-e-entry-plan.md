@@ -218,6 +218,11 @@ Acceptance:
 - The plan is deterministic and does not mutate existing runs.
 - The response clearly separates blockers from warnings.
 
+Status: complete. `GET /runs/{run_id}/rerun-plan` now returns a read-only
+preview with chain, source, parent-run, config, and artifact checks. The plan
+uses `ready`, `partially_recoverable`, and `blocked` states; it exposes
+`blockers` and `warnings` separately and never queues or mutates reruns.
+
 ### E7. Phase E Exit Gate
 
 - Run the full Python test gate, web build, and `npm.cmd run e2e:all`.
