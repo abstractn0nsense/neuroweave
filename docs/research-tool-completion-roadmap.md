@@ -2,56 +2,78 @@
 
 작성일: 2026-05-25
 
-업데이트: 2026-05-26, `main` 기준 코드 재검토 및 worker CLI preprocessing/epoching/ERP subpipeline 머지 반영
+업데이트: 2026-05-30, Phase C exit gate 및 Phase D entry plan 반영
 
 ## 현재 판단
 
-현재 NeuroWeave는 "실제 데이터로 끝까지 도는 분석 MVP"에서 "research exploration alpha 기반"으로 한 단계 올라왔다. UI hydration/CORS 안정화와 preprocessing/epoching/ERP worker CLI 분리는 완료되어 `main`에 머지되었다. processing pipeline의 실행 경계는 이제 API process 내부 multiprocessing target이 아니라 worker CLI subprocess로 통일되었다.
+NeuroWeave는 현재 "실제 데이터로 끝까지 도는 분석 MVP"를 넘어
+"research exploration alpha" 기반에 도달했다. 실행 경계는
+preprocessing, epoching, ERP 모두 worker CLI subprocess로 통일되었고,
+workflow template, batch execution, retry/cancel, QC summary, analysis report,
+export bundle까지 단일 run과 batch-created run 양쪽에서 검증되어 있다.
 
-6월 10일까지의 현실적인 목표는 여전히 "논문 결과 산출용 완성판"이 아니라, 실제 공개 EEG 데이터를 반복해서 넣고 검토할 수 있는 내부 연구 탐색용 alpha이다.
+Phase D는 새 대형 기능을 벌리는 단계가 아니라, 이미 들어간
+BIDS/event/QC/export/batch MVP를 실제 공개 EEG 데이터 기준으로 단단하게
+닫는 단계다. 기준 문서는 `docs/phase-d-entry-plan.md`이다.
+
+6월 10일까지의 현실적인 목표는 여전히 "논문 결과 산출용 완성판"이
+아니다. 목표는 PhysioNet EEGMMI와 OpenNeuro/BIDS 계열 공개 데이터에서
+ingest -> preprocessing -> epoch -> ERP -> comparison 흐름을 반복 검증할
+수 있는 내부 연구 탐색용 alpha이다.
 
 ## 진행 수준 요약
 
 | 항목 | 현재 수준 | 근거 | 다음 판단 |
 | --- | --- | --- | --- |
-| UI hydration + CORS | 완료 | `loadDatasetContext(datasetId)` 도입, CORS env/localhost port 옵션 반영, PR #5 머지 | 유지보수만 |
-| preprocessing worker CLI | 완료 | `eeg_processing.worker_cli preprocessing`, API subprocess 전환, worker artifact 저장, PR #6 머지 | 유지보수만 |
-| Phase 2/3 browser smoke | 완료 | `npm run e2e:all` 추가, Phase 2 + Phase 3 epoch + ERP smoke 통과 | CI/릴리스 검증에 계속 사용 |
-| epoching/ERP worker CLI | 완료 | `eeg_processing.worker_cli epoching/erp`, API subprocess 전환, worker artifact/exit code 저장, PR #8 머지 | 유지보수만 |
-| BIDS sidecar ingest MVP | 미완료 | `packages/eeg-io/src/eeg_io/bids_sidecars.py` 없음 | 다음 subpipeline 1순위 |
-| Event mapping v2 | 미완료 | null 처리/row filter/condition preset 모델 없음 | BIDS sidecar ingest와 같이 설계 |
-| structured warning/diagnostics | 미완료 | 기존 `warnings: list[str]` 중심 | BIDS ingest 후 warning inventory 기반으로 추가 |
-| QC dashboard MVP | 미완료 | artifact는 있으나 단계별 QC UI/JSON은 아직 제한적 | 6월 초 MVP |
-| Export bundle MVP | 미완료 | artifact manifest는 있으나 report bundle 없음 | QC 후 진행 |
+| UI hydration + CORS | 완료 | `loadDatasetContext(datasetId)` 도입, CORS env/localhost port 옵션 반영 | 유지보수만 |
+| preprocessing worker CLI | 완료 | `eeg_processing.worker_cli preprocessing`, API subprocess 전환, worker artifact 저장 | 유지보수만 |
+| epoching/ERP worker CLI | 완료 | `eeg_processing.worker_cli epoching/erp`, API subprocess 전환, worker artifact/exit code 저장 | 유지보수만 |
+| Phase 2/3/C browser smoke | 완료 | `npm run e2e:all`이 Phase 2, Phase C batch, Phase 3 epoch, Phase 3 ERP smoke 실행 | CI/릴리스 검증에 계속 사용 |
+| Workflow templates | 완료 | template persistence, apply preview, subject-specific field exclusion, review-required handling 테스트 보유 | Phase D에서는 호환성 유지 |
+| Batch execution | 완료 | persisted batch plan, worker execution, retry, cancellation, partial completion, summary artifact 구현 | Phase D에서는 public data smoke와 export 호환성 유지 |
+| BIDS sidecar parsing | MVP 있음 | `packages/eeg-io/src/eeg_io/bids_sidecars.py`, `_channels.tsv`, `_eeg.json` parser 테스트 | Phase D에서 discovery/upload 연동으로 hardening |
+| Event mapping v2 | MVP 있음 | preset, row filter, provenance snapshot API/UI 경로와 테스트 존재 | Phase D에서 BIDS `events.tsv` normalization hardening |
+| Structured warning/diagnostics | MVP 있음 | run diagnostics에 structured warning 병행, UI는 structured warning 우선 표시 | Phase D에서 taxonomy 안정화 |
+| QC dashboard/summary | MVP 있음 | preprocessing/epoch/ERP QC summary와 UI dashboard 경로 존재 | Phase D에서 sidecar/provenance/diagnostics 표시 보강 |
+| Export bundle | MVP 있음 | report, manifest, diagnostics, figures, provenance, artifacts, batch context 포함 | Phase D에서 public data metadata 포함 보강 |
 
 ## 현재 코드 검증 결과
 
-검증 기준 시점: 2026-05-26, `main` 커밋 `afe0df9 Run epoching and ERP through worker CLI`
+검증 기준 시점: 2026-05-30, Phase C exit gate 이후 current-regression check
 
-- Git 상태: clean, `main...origin/main`
+- Git 상태:
+  - 명령: `git status --short --branch`
+  - 결과: `## main...origin/main`
 - Python 테스트:
-  - 명령: `apps/api/.venv/Scripts/python.exe -m pytest tests --basetemp=data/cache/pytest-tmp -o cache_dir=data/cache/pytest-cache`
-  - 결과: 126 passed
-  - 주의: Windows 기본 temp 권한 문제를 피하기 위해 repo 내부 `--basetemp`를 표준 테스트 명령으로 사용한다.
+  - 명령: `.\apps\api\.venv\Scripts\python.exe -m pytest --basetemp=data\cache\pytest`
+  - 결과: 250 passed
+  - 주의: Windows 기본 temp/cache 권한 문제를 피하기 위해 repo 내부
+    `--basetemp`를 표준 테스트 명령으로 사용한다.
 - Web build:
-  - 명령: `C:\Program Files\nodejs\npm.cmd run build`
+  - 명령: `npm.cmd run build`
+  - 작업 경로: `apps/web`
   - 결과: TypeScript check 및 Vite build 통과
-  - 주의: PowerShell에서 `npm.ps1`이 execution policy에 막힐 수 있으므로 `npm.cmd`를 직접 호출한다.
+  - 주의: PowerShell에서 `npm.ps1`이 execution policy에 막힐 수 있으므로
+    `npm.cmd`를 직접 호출한다.
 - Browser smoke:
-  - 명령: `C:\Program Files\nodejs\npm.cmd run e2e:all`
-  - 결과: Phase 2 preprocessing, Phase 3 epoch, Phase 3 ERP smoke 통과
+  - 명령: `npm.cmd run e2e:all`
+  - 작업 경로: `apps/web`
+  - 결과: Phase 2 preprocessing, Phase C batch retry, Phase 3 epoch,
+    Phase 3 ERP smoke 통과
 
 ## 완료된 안정화
 
-### 1. UI hydration + CORS
+### 1. UI Hydration + CORS
 
 완료 범위:
 
 - `apps/web/src/main.tsx`에 `loadDatasetContext(datasetId)` 도입
-- active dataset 변경/새로고침 후 dataset detail, event log, validation, preprocessing/epoch/ERP runs 동시 hydration
+- active dataset 변경/새로고침 후 dataset detail, event log, validation,
+  preprocessing/epoch/ERP runs 동시 hydration
 - `/events`, `/validation`의 정상 404는 빈 상태로 처리
 - `NEUROWEAVE_CORS_ORIGINS` env 기반 allowlist 추가
-- `NEUROWEAVE_CORS_ALLOW_LOCALHOST_PORTS=true`로 임시 localhost/127.0.0.1 포트 허용 가능
+- `NEUROWEAVE_CORS_ALLOW_LOCALHOST_PORTS=true`로 임시 localhost/127.0.0.1
+  포트 허용 가능
 
 완료 기준 충족:
 
@@ -59,41 +81,222 @@
 - dev server port가 바뀌어도 설정 기반으로 API 연결 가능
 - Python/API CORS 테스트와 web build 통과
 
-### 2. preprocessing worker CLI
+### 2. Worker CLI Execution Boundary
 
 완료 범위:
 
 - `packages/eeg-processing/src/eeg_processing/worker_cli.py`
-- 실행 형태: `python -m eeg_processing.worker_cli preprocessing --payload payload.json --result result.json`
-- payload/result JSON schema v1 고정
-- API preprocessing 실행을 worker CLI subprocess로 전환
+- preprocessing, epoching, ERP job routing
+- payload/result JSON schema v1 유지
+- API processing 실행을 worker CLI subprocess로 전환
 - Windows subprocess 호환을 위해 API가 `PYTHONPATH`를 명시적으로 전달
 - worker payload/result/stdout/stderr artifact 저장
-- `output_metadata`에 worker artifact path, schema version, exit code 기록
-- worker failure에서도 exit code와 artifact 보존
+- worker exit code와 schema version을 run metadata에 기록
+- result JSON 누락, invalid JSON, non-object JSON 실패 테스트 보유
 
 완료 기준 충족:
 
-- preprocessing run이 API 내부 multiprocessing target 직접 호출 없이 실행됨
+- preprocessing -> epoch -> ERP 전체가 API 내부 multiprocessing target 직접
+  호출 없이 실행됨
 - Windows spawn/pickle/result queue 의존 제거
 - 기존 API response shape 유지
 - Python 테스트, web build, browser smoke 통과
 
-## 6월 10일까지의 현실 목표
+### 3. Workflow Templates And Batch Execution
 
-6월 10일까지 완료 가능한 범위는 초반 안정화 전체와 중반 일부이다.
+완료 범위:
+
+- workflow template persistence와 apply preview
+- source run id 같은 application-time binding 제외
+- subject-specific field exclusion
+- review-required/stale preview batch item 실행 차단
+- persisted batch plan과 immutable template snapshot
+- local batch worker execution
+- failed item retry
+- pending/running batch cancellation
+- partial completion
+- `batch_summary.json` artifact
+- QC summary, analysis report, export bundle의 batch context
+
+완료 기준 충족:
+
+- Phase C browser smoke가 multi-dataset batch와 failed subject retry를 검증
+- batch-created runs도 일반 run의 artifact integrity, QC summary,
+  analysis report, export bundle contract를 유지
+- cancellation은 terminal cancelled state와 summary artifact를 남김
+
+## Phase D: Public Data Hardening
+
+기준 문서: `docs/phase-d-entry-plan.md`
+
+Phase D 목표:
+
+- BIDS sidecar discovery를 upload/registration 흐름에 연결
+- source/provenance manifest와 checksum 최소 구현
+- BIDS `events.tsv` normalization hardening
+- structured diagnostic warning taxonomy 안정화
+- QC dashboard와 export bundle에 sidecar/provenance/diagnostics 반영
+- PhysioNet EEGMMI와 OpenNeuro/BIDS 계열 공개 데이터 smoke 고정
+
+Phase D에서 추가한 범위:
+
+- 오래된 roadmap 상태 갱신
+- public-dataset validation matrix
+- sidecar discovery contract
+- dataset metadata/provenance attachment
+- event normalization source row/source column 보존
+- BIDS, event mapping, validation, worker, artifact, export, batch warning
+  taxonomy
+- user guide와 release checklist 업데이트
+
+Phase D 제외 범위:
+
+- full statistics phase
+- permutation test 및 multiple comparison correction
+- full reproducibility graph와 one-click rerun
+- collaboration/share snapshot
+- 대규모 visual regression suite
+- multi-subject batch의 완성형 UI
+
+## Phase D 작업 단위
+
+### D0. Baseline And Roadmap Sync
+
+문서 정리 단계다. 런타임 코드는 건드리지 않는다.
+
+- `docs/research-tool-completion-roadmap.md`를 현재 코드 상태에 맞게 갱신
+- Phase C exit 상태 반영
+- `docs/phase-d-entry-plan.md` 링크/참조 추가
+- BIDS parser, event preset, structured warnings, QC summary, export bundle이
+  "완전 미구현"이 아니라 "MVP 있음, Phase D에서 hardening" 상태임을 명확히 표시
+
+완료 기준:
+
+- 문서가 현재 코드와 충돌하지 않음
+- Phase D scope와 exclusions가 명시됨
+
+### D1. BIDS Sidecar Discovery Contract
+
+- EEG/event 파일 근처에서 sidecar 후보 탐색
+- `_eeg.json`, `_channels.tsv`, `_events.tsv` 감지
+- optional future sidecar 자리 확보
+- sidecar가 없어도 기존 upload 흐름은 그대로 동작
+- invalid sidecar는 dataset을 망가뜨리지 않고 diagnostics로 기록
+
+완료 기준:
+
+- 기존 non-BIDS upload 회귀 없음
+- sidecar fixture로 discovery/parser 테스트 통과
+- invalid sidecar가 structured diagnostic warning/error로 남음
+
+### D2. Dataset Metadata And Provenance Attachment
+
+- optional metadata 필드로 sidecar 정보 저장
+- EEG 파일, event 파일, sidecar 파일의 role, original filename, path, size,
+  checksum 기록
+- 기존 JSON registry record backward compatibility 유지
+- API response에는 additive field로만 노출
+
+완료 기준:
+
+- 오래된 registry JSON도 로드됨
+- 새 dataset API response에 provenance/sidecar metadata가 추가됨
+- checksum/source manifest 테스트 추가
+
+### D3. BIDS Events Normalization Hardening
+
+- `n/a`, `NA`, empty string 등 null 처리 일관화
+- row filter 결과와 원본 row count/filter count 보존
+- `source_row`, selected source columns 보존
+- condition derivation 지원
+- 기존 PsychoPy/custom mapping 유지
+
+완료 기준:
+
+- BIDS events fixture가 EventLog로 안정 변환됨
+- API preview와 UI preview 결과 일치
+- 기존 event upload/mapping 테스트 유지
+
+### D4. Diagnostic Warning Taxonomy
+
+- 공통 warning schema 확정:
+  - `code`
+  - `severity`
+  - `source`
+  - `impact`
+  - `suggested_action`
+- source 범주 정리:
+  - `bids`
+  - `event_mapping`
+  - `validation`
+  - `worker`
+  - `artifact`
+  - `export_bundle`
+  - `batch`
+- legacy `warnings: list[str]` 유지
+- UI는 structured diagnostics 우선 표시
+
+완료 기준:
+
+- 새 warning path는 structured diagnostics로 남음
+- 기존 warning 테스트 통과
+- UI warning card가 code/source/severity/impact/action을 안정 표시
+
+### D5. Public Dataset Smoke Fixtures
+
+- PhysioNet EEGMMI smoke workflow 정리
+- OpenNeuro/BIDS-style sample workflow 추가 또는 문서화
+- public EEG data는 `data/` 아래 ignored path에만 저장
+- expected warnings snapshot 또는 문서화
+- ingest -> preprocessing -> epoch -> ERP -> comparison 재현 절차 고정
+
+완료 기준:
+
+- maintainer가 명령만 따라 두 public dataset smoke를 재현 가능
+- public data는 git에 커밋되지 않음
+- warning이 예상/검토 항목으로 기록됨
+
+### D6. QC And Export Review Polish
+
+- QC dashboard에 sidecar/provenance/diagnostics 표시
+- export bundle에 Phase D provenance/sidecar metadata 포함
+- batch-created run의 batch context 유지
+- missing optional metadata는 hard failure가 아니라 structured warning 처리
+
+완료 기준:
+
+- completed ERP run ZIP에 report, manifest, diagnostics, provenance, figures,
+  artifacts 포함
+- batch-created run도 QC/report/export에서 batch context 유지
+- bundle structure는 기존과 호환
+
+### D7. Phase D Exit Gate
+
+- Python full test
+- web build
+- browser smoke `npm.cmd run e2e:all`
+- 두 public dataset smoke 결과 기록
+- user guide/release checklist 업데이트
+- 남은 작업을 Phase E 이후로 명시 이관
+
+완료 기준:
+
+- regression gate 통과
+- public dataset smoke 결과가 날짜/명령/결과와 함께 기록됨
+- Phase E 범위가 분리됨
+
+## 6월 10일까지의 현실 목표
 
 완료 목표:
 
-- UI hydration + CORS env화: 완료
-- preprocessing worker CLI 분리: 완료
-- epoching/ERP worker CLI 분리: 완료
-- BIDS sidecar ingest MVP
-- BIDS event mapping/filter preset MVP
-- structured warning/diagnostics MVP
-- QC dashboard 1차
-- export bundle MVP
-- 공개 EEG 데이터 최소 2종에서 ingest -> preprocessing -> epoch -> ERP -> comparison 통합 smoke
+- Phase C template/batch foundation 유지
+- BIDS sidecar discovery와 metadata/provenance 연결
+- BIDS event mapping/filter preset hardening
+- structured warning/diagnostics taxonomy
+- QC dashboard 1차 polish
+- export bundle provenance/diagnostics polish
+- 공개 EEG 데이터 최소 2종에서 ingest -> preprocessing -> epoch -> ERP ->
+  comparison 통합 smoke
 
 6월 10일 이후로 미루는 범위:
 
@@ -104,241 +307,15 @@
 - 대규모 visual regression suite
 - multi-subject batch의 완성형 UI
 
-### 3. epoching/ERP worker CLI
-
-완료 범위:
-
-- `worker_cli.py`에 `epoching`, `erp` job routing 추가
-- epoching payload/result JSON schema v1 정의
-- ERP payload/result JSON schema v1 정의
-- API epoching 실행을 worker CLI subprocess로 전환
-- API ERP 실행을 worker CLI subprocess로 전환
-- preprocessing/epoching/ERP 공통 subprocess helper 정리
-- worker payload/result/stdout/stderr artifact 저장
-- worker exit code와 schema version을 run metadata에 기록
-- result JSON 누락, invalid JSON, non-object JSON 실패 테스트 추가
-
-완료 기준 충족:
-
-- preprocessing -> epoch -> ERP 전체가 CLI worker 경유로 실행됨
-- cancellation warning 문구와 기존 API response shape 유지
-- ERP preview artifact endpoint와 comparison summary 흐름 유지
-- Python 전체 테스트, web build, browser smoke, GitHub CI 통과
-
-## 완료된 subpipeline: epoching/ERP worker CLI 확장
-
-목표: preprocessing에서 검증된 worker CLI 계약을 epoching/ERP에도 확장해, 전체 processing pipeline의 실행 경계를 API process 밖으로 통일한다.
-
-상태: 완료, PR #8 머지.
-
-### 작업 0. Baseline 및 브랜치
-
-- `main` 최신 상태 확인
-- 새 브랜치 생성: `codex/worker-cli-epoch-erp`
-- 전체 Python 테스트, web build, `npm run e2e:all` baseline 실행
-- 아직 코드 수정 없음
-
-완료 기준:
-
-- branch clean
-- Python tests 126 passed
-- web build 통과
-- browser smoke 통과
-
-### 작업 1. worker CLI job routing 확장
-
-- `worker_cli.py`에 `epoching`, `erp` job command 추가
-- 기존 preprocessing schema는 유지
-- epoching/ERP payload/result v1 초안 추가
-- job mismatch, schema mismatch, payload validation 실패 처리 공통화
-
-완료 기준:
-
-- `python -m eeg_processing.worker_cli epoching --help`
-- `python -m eeg_processing.worker_cli erp --help`
-- 기존 preprocessing CLI 테스트 통과
-
-### 작업 2. epoching CLI 실행 추가
-
-- `run_epoching_job`의 Queue 결과 shape를 CLI result JSON으로 이식
-- event log/config payload를 JSON 직렬화 가능한 형태로 정의
-- API response shape는 변경하지 않음
-- worker artifact 저장 경로는 preprocessing과 같은 패턴 사용
-
-완료 기준:
-
-- epoching CLI success/failure 단위 테스트 통과
-- API epoch run이 CLI subprocess 경유로 completed/failed 처리
-- cancellation warning 문구 유지
-
-### 작업 3. ERP CLI 실행 추가
-
-- `run_erp_job`의 Queue 결과 shape를 CLI result JSON으로 이식
-- ERP config, comparison prep과 충돌 없이 artifact root 유지
-- plot warning/failure를 기존 warning 흐름과 호환
-
-완료 기준:
-
-- ERP CLI success/failure 단위 테스트 통과
-- API ERP run이 CLI subprocess 경유로 completed/failed 처리
-- ERP preview artifact endpoint 유지
-
-### 작업 4. 공통 worker subprocess wrapper 정리
-
-- preprocessing/epoching/ERP의 payload write, subprocess launch, result read, stdout/stderr 저장 로직 중복 최소화
-- job별 validation과 metadata만 분리
-- 과한 abstraction은 피하고 API 호출부 가독성 유지
-
-완료 기준:
-
-- 세 job 모두 worker artifact path와 exit code 기록
-- result JSON 누락/invalid JSON/non-object result 실패 테스트 통과
-- 기존 run JSON backward compatibility 유지
-
-### 작업 5. 통합 회귀 및 browser smoke
-
-- `tests/test_api_preprocessing.py`
-- `tests/test_api_epoch_execution.py`
-- `tests/test_api_epoch_runs.py`
-- `tests/test_api_erp_runs.py`
-- `tests/test_worker_cli.py`
-- 전체 Python tests
-- web build
-- `npm run e2e:all`
-
-완료 기준:
-
-- preprocessing -> epoch -> ERP 전체가 CLI worker 경유
-- Python tests 통과
-- browser smoke 통과
-- PR mergeable
-
-## 이번 주 남은 계획: 5월 27일-5월 31일
-
-### 5월 27일 수요일
-
-- BIDS sidecar ingest 설계 및 모듈 추가
-- `_channels.tsv`, `_eeg.json` 파서 추가
-- `RecordingMetadata` optional 확장 지점 확정
-
-완료 기준:
-
-- sidecar 파일이 없어도 기존 ingest 흐름이 깨지지 않음
-- `_channels.tsv`의 channel type/status/units 후보를 구조화해서 읽을 수 있음
-
-### 5월 28일 목요일
-
-- `_eeg.json` metadata 반영
-- line frequency, reference, sampling metadata 저장
-- OpenNeuro `.set` 계열 warning을 structured warning 후보로 분류
-
-완료 기준:
-
-- sidecar metadata가 registry optional field로 보존됨
-- 기존 JSON registry와 API response backward compatibility 유지
-
-### 5월 29일 금요일
-
-- BIDS events normalization 시작
-- `n/a`, `NA`, empty null 처리
-- row filter 모델 초안
-- `bids_events` preset 초안
-
-완료 기준:
-
-- BIDS `events.tsv`를 기존 EventLog 모델로 안정적으로 변환
-- condition derivation 입력이 UI/API에서 일관되게 보임
-
-### 5월 30일 토요일
-
-- Event mapping v2 확장
-- `psychopy`, `eeglab_annotations` preset 초안
-- raw row/source column 일부 보존
-- mapping preview와 validation 메시지 갱신
-
-완료 기준:
-
-- null/filter/preset 처리가 API와 UI에서 같은 결과를 낸다
-- 기존 event upload/mapping API 테스트가 유지된다
-
-### 5월 31일 일요일
-
-- structured diagnostics 모델 초안
-- 기존 string warning과 병행
-- 실제 공개 데이터 2종 통합 smoke
-- 6월 1일 이후 backlog 재조정
-
-완료 기준:
-
-- warning 원인/영향/조치가 최소 구조로 저장됨
-- 6월 1일 QC/export 착수 여부 판단 가능
-
-## 6월 1일-6월 10일 큰 흐름
-
-- 6월 1일-3일: ResearchDataset/provenance 계층 정리, source manifest/checksum 최소 구현
-- 6월 4일-5일: QC dashboard MVP
-- 6월 6일-7일: export bundle MVP, artifact manifest schema 정리
-- 6월 8일: validation suite smoke 고정
-- 6월 9일: 버그 수정, UX 정리, docs 업데이트
-- 6월 10일: release candidate tag, demo dataset 기준 최종 검증
-
-## 초반 안정화: 구조 안정화 중심
-
-목표: 지금 MVP를 "실제 공개 데이터 여러 개를 반복해서 안전하게 처리하는 기반"으로 바꾼다.
-
-### 1. `ResearchDataset` 계층 추가
-
-기존 `Dataset`, `Recording`, `EventLog`, `Run`은 유지하되 source/provenance 계층을 분리한다.
-
-- `SourceDataset`: source name, URL, DOI, license, downloaded file manifest
-- `BidsSidecarSet`: eeg_json, channels_tsv, electrodes_tsv, coordsystem_json, events_tsv
-- `RecordingMetadata`: 기존 channel names 외에 channel types, bads, line frequency, reference, units 추가
-- 기존 JSON registry는 깨지지 않게 optional field로 확장
-
-### 2. BIDS sidecar ingest
-
-새 모듈 권장:
-
-- `packages/eeg-io/src/eeg_io/bids_sidecars.py`
-- `read_bids_sidecars(base_path)`
-- `apply_channel_sidecar(raw, channels_tsv)`
-- `normalize_bids_events(events_tsv, preset)`
-
-처리 목표:
-
-- `_channels.tsv`의 `type`, `status`, `units` 반영
-- `_eeg.json`의 `PowerLineFrequency`, `EEGReference`, sampling metadata 저장
-- OpenNeuro `.set` warning을 "자동 보정됨/metadata 부족"으로 구조화
-
-### 3. Event mapping v2
-
-현재 mapping은 column mapping 중심이다. 연구용은 filtering과 condition derivation이 필요하다.
-
-- `row_filter`: `trial_type == stimulus`
-- `condition_column`: `value`, `trial_type`, `stim_file` 등
-- `null_values`: `["n/a", "NA", ""]`
-- preset: `psychopy`, `bids_events`, `eeglab_annotations`
-- normalized event에는 `raw_row`, `source_file`, `source_columns` 일부 보존
-
-### 4. Structured warning model
-
-기존 `warnings: list[str]`는 유지하되, 새 `diagnostics.warnings[]`를 추가한다.
-
-- `code`: `mne_unknown_channel_types`
-- `severity`: `info | warning | risk | error`
-- `source`: `mne | bids | validation | worker`
-- `impact`
-- `suggested_action`
-
-UI는 raw warning 대신 이 구조를 우선 표시한다.
-
 ## 중반: 연구 워크플로우 확장
 
 목표: 단일 파일 데모를 넘어서 "분석 검토가 가능한 워크벤치"로 만든다.
 
 - QC dashboard
-  - preprocessing: channel type, reference, filter, resampling, bad channels, annotations
-  - epoch: condition counts, dropped epochs, out-of-bounds events, baseline summary
+  - preprocessing: channel type, reference, filter, resampling, bad channels,
+    annotations
+  - epoch: condition counts, dropped epochs, out-of-bounds events, baseline
+    summary
   - ERP: nave, GFP peak, selected channel peak, plot status
 - Batch/multi-run support
   - subject/session/run grouping
@@ -360,17 +337,18 @@ UI는 raw warning 대신 이 구조를 우선 표시한다.
   - source/provenance
   - config snapshots
 
-초반과의 호환성 유의점:
+호환성 유의점:
 
 - `output_metadata`는 compact summary만 유지하고, 큰 QC는 별도 JSON artifact로 저장
-- legacy `raw_preprocessed.fif`, `epochs.fif`, `evoked_*.fif` fallback은 최소 한두 phase 유지
+- legacy `raw_preprocessed.fif`, `epochs.fif`, `evoked_*.fif` fallback은 최소
+  한두 phase 유지
 - API response shape는 optional field 추가 방식으로만 확장
 
 ## 후반: 연구급 완성
 
 목표: "결과를 논문/프로젝트 분석에 쓸 수 있다"고 말할 수 있는 수준으로 올린다.
 
-- 통계 Phase
+- 통계 phase
   - subject-level table
   - paired/unpaired test
   - permutation test option
@@ -400,16 +378,25 @@ UI는 raw warning 대신 이 구조를 우선 표시한다.
 1. UI hydration + CORS env화: 완료
 2. preprocessing worker CLI 분리: 완료
 3. epoching/ERP worker CLI 확장: 완료
-4. BIDS sidecar ingest
-5. BIDS event mapping/filter preset
-6. structured warning/diagnostics
-7. QC dashboard MVP
-8. export bundle MVP
-9. batch/multi-subject foundation
-10. statistics/reproducibility/collaboration
+4. workflow template + batch foundation: 완료
+5. D0 roadmap sync: 완료
+6. D1 BIDS sidecar discovery contract
+7. D2 dataset metadata/provenance attachment
+8. D3 BIDS events normalization hardening
+9. D4 diagnostic warning taxonomy
+10. D5 public dataset smoke fixtures
+11. D6 QC/export review polish
+12. D7 Phase D exit gate
+13. statistics/reproducibility/collaboration
 
 ## 결론
 
-현재는 "research exploration alpha 기반"이 확보된 상태다. worker CLI 경계는 preprocessing/epoching/ERP까지 통일되었으므로, 다음 단계는 실제 공개 EEG 데이터 호환성을 높이는 BIDS sidecar ingest와 Event mapping v2이다. 이 작업이 끝나야 structured diagnostics, QC, export를 안정적으로 얹을 수 있다.
+현재는 Phase C foundation이 닫힌 상태이며 Phase D를 시작할 수 있다. worker
+CLI 경계, template, batch, QC summary, analysis report, export bundle은 이미
+기본 계약을 갖췄다. 다음 핵심은 실제 공개 EEG 데이터 호환성을 높이는
+BIDS sidecar discovery, event normalization, provenance, structured diagnostics
+hardening이다.
 
-6월 10일까지는 research exploration alpha를 목표로 한다. 즉, 실제 공개 EEG 데이터를 안정적으로 반복 처리하고, mapping/validation/run 상태가 새로고침 후에도 일관되며, worker 실행 경계가 CLI로 분리되어 이후 BIDS ingest, QC, export, 재현성 기능을 얹을 수 있는 기반을 만드는 것이 핵심이다.
+Phase D는 이 기반을 public dataset smoke로 검증 가능한 형태까지 끌어올리는
+단계다. 통계 검정, full reproducibility graph, collaboration snapshot은 Phase D
+이후로 분리한다.
