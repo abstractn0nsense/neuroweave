@@ -202,6 +202,9 @@ Acceptance:
   stable.
 - Web build passes.
 
+Status: complete. Run rows now show a read-only lineage list for dataset,
+preprocessing, epoch, ERP, and comparison stages using existing run metadata.
+
 ### E6. One-Click Rerun Planning Contract
 
 - Add an API path or service that creates a rerun plan for a completed analysis.

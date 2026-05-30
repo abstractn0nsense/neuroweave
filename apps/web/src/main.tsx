@@ -4235,6 +4235,7 @@ function PreprocessingRunList({
               </button>
             ) : null}
           </div>
+          <ReproducibilityLineage run={run} />
           <RunWarnings diagnostics={run.diagnostics} warnings={run.warnings} />
           {run.errors.length > 0 ? (
             <p className="error-text">{run.errors.join(" ")}</p>
@@ -4526,6 +4527,7 @@ function EpochRunList({
             ) : null}
           </div>
           <ConditionCountSummary metadata={run.output_metadata} />
+          <ReproducibilityLineage run={run} />
           <RunWarnings diagnostics={run.diagnostics} warnings={run.warnings} />
           {run.errors.length > 0 ? (
             <p className="error-text">{run.errors.join(" ")}</p>
@@ -4882,6 +4884,7 @@ function ErpRunList({
                 {exportBusy ? "Preparing..." : "Export ZIP"}
               </button>
             </div>
+            <ReproducibilityLineage run={run} />
             <ErpPreview run={run} />
             <RunWarnings diagnostics={run.diagnostics} warnings={run.warnings} />
             {run.errors.length > 0 ? (
@@ -4892,6 +4895,119 @@ function ErpRunList({
       })}
     </div>
   );
+}
+
+type LineageRun = PreprocessingRun | EpochRun | ErpRun;
+
+type LineageStage = {
+  label: string;
+  value: string;
+  kind: string;
+};
+
+function ReproducibilityLineage({ run }: { run: LineageRun }) {
+  const stages = reproducibilityStages(run);
+  const batchLabel = runBatchLabel(run.output_metadata);
+
+  return (
+    <section
+      aria-label={`Reproducibility lineage ${run.run_id}`}
+      className="lineage-panel"
+      data-testid={`reproducibility-lineage-${run.run_id}`}
+    >
+      <div className="lineage-heading">
+        <strong>Lineage</strong>
+        {batchLabel ? <span>{batchLabel}</span> : null}
+      </div>
+      <ol className="lineage-list">
+        {stages.map((stage) => (
+          <li data-kind={stage.kind} key={`${stage.kind}-${stage.value}`}>
+            <span>{stage.label}</span>
+            <strong>{stage.value}</strong>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+function reproducibilityStages(run: LineageRun): LineageStage[] {
+  const metadata = run.output_metadata;
+  const stages: LineageStage[] = [
+    {
+      label: "Dataset",
+      value: run.dataset_id,
+      kind: "dataset",
+    },
+  ];
+
+  if (run.run_kind === "preprocessing") {
+    stages.push({
+      label: "Preprocessing",
+      value: run.run_id,
+      kind: "preprocessing",
+    });
+    return stages;
+  }
+
+  const preprocessingRunId =
+    metadataString(metadata.input_preprocessing_run_id) ??
+    ("preprocessing_run_id" in run.config
+      ? metadataString(run.config.preprocessing_run_id)
+      : null);
+  if (preprocessingRunId) {
+    stages.push({
+      label: "Preprocessing",
+      value: preprocessingRunId,
+      kind: "preprocessing",
+    });
+  }
+
+  if (run.run_kind === "epoch") {
+    stages.push({
+      label: "Epoch",
+      value: run.run_id,
+      kind: "epoch",
+    });
+    return stages;
+  }
+
+  const epochRunId =
+    metadataString(metadata.input_epoch_run_id) ??
+    ("epoch_run_id" in run.config ? metadataString(run.config.epoch_run_id) : null);
+  if (epochRunId) {
+    stages.push({
+      label: "Epoch",
+      value: epochRunId,
+      kind: "epoch",
+    });
+  }
+  stages.push({
+    label: "ERP",
+    value: run.run_id,
+    kind: "erp",
+  });
+  if (metadata.comparison_available === true) {
+    stages.push({
+      label: "Comparison",
+      value: "comparison_summary",
+      kind: "comparison",
+    });
+  }
+  return stages;
+}
+
+function runBatchLabel(metadata: Record<string, MetadataValue>): string | null {
+  const batchId = metadataString(metadata.batch_id);
+  const batchItemId = metadataString(metadata.batch_item_id);
+  if (!batchId) {
+    return null;
+  }
+  return batchItemId ? `${batchId} / ${batchItemId}` : batchId;
+}
+
+function metadataString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
 }
 
 function ArtifactIntegritySummary({
