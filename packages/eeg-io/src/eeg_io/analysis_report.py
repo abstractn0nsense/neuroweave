@@ -49,7 +49,7 @@ def build_analysis_report(
                     {
                         "code": "artifact_missing",
                         "severity": "warning",
-                        "source": "analysis_report",
+                        "source": "artifact",
                         "impact": (
                             f"Artifact {artifact.logical_name!r} is listed in the "
                             "manifest but was not found."
@@ -126,7 +126,7 @@ def _read_provenance(
             {
                 "code": "provenance_missing",
                 "severity": "warning",
-                "source": "analysis_report",
+                "source": "artifact",
                 "impact": "No provenance artifact was found in the artifact manifest.",
                 "suggested_action": (
                     "Run the analysis with provenance-enabled output metadata."

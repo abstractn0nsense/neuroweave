@@ -31,6 +31,16 @@ class ValidationSeverity(StrEnum):
     WARNING = "warning"
 
 
+class DiagnosticWarningSource(StrEnum):
+    BIDS = "bids"
+    EVENT_MAPPING = "event_mapping"
+    VALIDATION = "validation"
+    WORKER = "worker"
+    ARTIFACT = "artifact"
+    EXPORT_BUNDLE = "export_bundle"
+    BATCH = "batch"
+
+
 class RunKind(StrEnum):
     PREPROCESSING = "preprocessing"
     EPOCH = "epoch"
@@ -217,7 +227,7 @@ class ValidationIssue:
 @dataclass(frozen=True)
 class DiagnosticWarning:
     severity: ValidationSeverity
-    source: str
+    source: DiagnosticWarningSource
     code: str
     impact: str | None = None
     suggested_action: str | None = None
@@ -589,26 +599,58 @@ class ErpRun:
 
 def diagnostic_warning_from_dict(data: dict) -> DiagnosticWarning:
     return DiagnosticWarning(
-        severity=ValidationSeverity(data["severity"]),
-        source=str(data["source"]),
+        severity=_diagnostic_warning_severity(data.get("severity")),
+        source=diagnostic_warning_source_from_value(data.get("source")),
         code=str(data["code"]),
         impact=data.get("impact"),
         suggested_action=data.get("suggested_action"),
     )
 
 
+def diagnostic_warning_source_from_value(value: object) -> DiagnosticWarningSource:
+    if isinstance(value, DiagnosticWarningSource):
+        return value
+    normalized = str(value or "").strip().lower()
+    aliases = {
+        "": DiagnosticWarningSource.WORKER,
+        "mne": DiagnosticWarningSource.WORKER,
+        "preprocessing": DiagnosticWarningSource.WORKER,
+        "epoch": DiagnosticWarningSource.WORKER,
+        "epoching": DiagnosticWarningSource.WORKER,
+        "erp": DiagnosticWarningSource.WORKER,
+        "analysis_report": DiagnosticWarningSource.ARTIFACT,
+        "qc": DiagnosticWarningSource.ARTIFACT,
+        "qc_summary": DiagnosticWarningSource.ARTIFACT,
+        "artifact_manifest": DiagnosticWarningSource.ARTIFACT,
+    }
+    if normalized in aliases:
+        return aliases[normalized]
+    try:
+        return DiagnosticWarningSource(normalized)
+    except ValueError:
+        return DiagnosticWarningSource.WORKER
+
+
+def _diagnostic_warning_severity(value: object) -> ValidationSeverity:
+    try:
+        return ValidationSeverity(str(value))
+    except ValueError:
+        return ValidationSeverity.WARNING
+
+
 def diagnostic_warnings_from_strings(
     warnings: list[str],
     *,
-    source: str,
+    source: str | DiagnosticWarningSource,
     code: str = "unstructured_warning",
     severity: ValidationSeverity = ValidationSeverity.WARNING,
     suggested_action: str | None = None,
 ) -> RunDiagnostics:
+    diagnostic_source = diagnostic_warning_source_from_value(source)
     structured_warnings = [
         DiagnosticWarning(
             severity=severity,
-            source=source,
+            source=diagnostic_source,
             code=code,
             impact=warning,
             suggested_action=suggested_action,

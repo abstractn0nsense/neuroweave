@@ -415,8 +415,15 @@ type BatchRunsResponse = {
 type BatchItemFilter = "all" | "pending" | "completed" | "failed";
 
 type DiagnosticWarning = {
-  severity: string;
-  source: string;
+  severity: "error" | "warning";
+  source:
+    | "bids"
+    | "event_mapping"
+    | "validation"
+    | "worker"
+    | "artifact"
+    | "export_bundle"
+    | "batch";
   code: string;
   impact: string | null;
   suggested_action: string | null;

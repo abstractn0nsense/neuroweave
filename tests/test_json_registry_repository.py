@@ -513,11 +513,11 @@ def test_run_repository_persists_preprocessing_runs(tmp_path):
         warnings=["reference unchanged"],
         diagnostics={
             "warnings": [
-                DiagnosticWarning(
-                    severity=ValidationSeverity.WARNING,
-                    source="preprocessing",
-                    code="reference_unchanged",
-                    impact="The original EEG reference was preserved.",
+                    DiagnosticWarning(
+                        severity=ValidationSeverity.WARNING,
+                        source="worker",
+                        code="reference_unchanged",
+                        impact="The original EEG reference was preserved.",
                     suggested_action="Confirm that this matches the analysis plan.",
                 )
             ]

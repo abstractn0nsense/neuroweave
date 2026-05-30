@@ -2,7 +2,7 @@
 
 작성일: 2026-05-25
 
-업데이트: 2026-05-30, Phase D3 BIDS events normalization hardening 반영
+업데이트: 2026-05-30, Phase D4 diagnostic warning taxonomy 반영
 
 ## 현재 판단
 
@@ -34,20 +34,20 @@ ingest -> preprocessing -> epoch -> ERP -> comparison 흐름을 반복 검증할
 | BIDS sidecar discovery | 완료 | parser에서 adjacent sidecar discovery contract로 확장, EEG/event upload 응답에 discovery diagnostics 추가 | D3에서 BIDS events normalization hardening |
 | Dataset metadata/provenance attachment | 완료 | recording metadata에 source file manifest와 sidecar discovery snapshot 저장, discovered sidecars를 uploaded metadata files로 보존 | D3에서 event source row/source column 보존 |
 | Event mapping v2 | D3 hardening 완료 | preset, row filter, provenance snapshot에 더해 BIDS null token, condition derivation, source row/source column 보존 테스트 존재 | public data smoke에서 fixture 확대 |
-| Structured warning/diagnostics | MVP 있음 | run diagnostics에 structured warning 병행, UI는 structured warning 우선 표시 | Phase D에서 taxonomy 안정화 |
+| Structured warning/diagnostics | D4 taxonomy 완료 | `DiagnosticWarningSource`로 공통 source 범주 고정, legacy source alias 정규화, UI는 structured warning 우선 표시 | public data smoke에서 expected warning snapshot 확대 |
 | QC dashboard/summary | MVP 있음 | preprocessing/epoch/ERP QC summary와 UI dashboard 경로 존재 | Phase D에서 sidecar/provenance/diagnostics 표시 보강 |
 | Export bundle | MVP 있음 | report, manifest, diagnostics, figures, provenance, artifacts, batch context 포함 | Phase D에서 public data metadata 포함 보강 |
 
 ## 현재 코드 검증 결과
 
-검증 기준 시점: 2026-05-30, Phase D3 이후 current-regression check
+검증 기준 시점: 2026-05-30, Phase D4 이후 current-regression check
 
 - Git 상태:
   - 명령: `git status --short --branch`
   - 결과: `## codex/phase-d-roadmap-sync...origin/codex/phase-d-roadmap-sync`
 - Python 테스트:
-  - 명령: `.\apps\api\.venv\Scripts\python.exe -m pytest --basetemp=data\cache\pytest-full-d3-final`
-  - 결과: 262 passed
+  - 명령: `.\apps\api\.venv\Scripts\python.exe -m pytest --basetemp=data\cache\pytest-full-d4-final`
+  - 결과: 264 passed
   - 주의: Windows 기본 temp/cache 권한 문제를 피하기 위해 repo 내부
     `--basetemp`를 표준 테스트 명령으로 사용한다.
 - Web build:
@@ -255,6 +255,18 @@ Phase D 제외 범위:
 - 기존 warning 테스트 통과
 - UI warning card가 code/source/severity/impact/action을 안정 표시
 
+구현 상태: 완료
+
+- 공통 source taxonomy를 `bids`, `event_mapping`, `validation`, `worker`,
+  `artifact`, `export_bundle`, `batch`로 고정
+- legacy `preprocessing`, `epoch`, `epoching`, `erp`, `mne` source는
+  `worker`로, `analysis_report`/QC/manifest 계열 source는 `artifact`로
+  정규화
+- `warnings: list[str]`는 API/run 모델에 그대로 유지하고,
+  `diagnostics.warnings[]`만 구조화 payload로 병행 저장
+- API response와 UI type은 structured diagnostics를 우선 렌더링하는
+  기존 contract를 유지
+
 ### D5. Public Dataset Smoke Fixtures
 
 - PhysioNet EEGMMI smoke workflow 정리
@@ -396,7 +408,7 @@ Phase D 제외 범위:
 6. D1 BIDS sidecar discovery contract: 완료
 7. D2 dataset metadata/provenance attachment: 완료
 8. D3 BIDS events normalization hardening: 완료
-9. D4 diagnostic warning taxonomy
+9. D4 diagnostic warning taxonomy: 완료
 10. D5 public dataset smoke fixtures
 11. D6 QC/export review polish
 12. D7 Phase D exit gate

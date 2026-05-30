@@ -83,6 +83,7 @@ from eeg_core.domain import (  # noqa: E402
     WorkflowTemplateFieldPolicy,
     WorkflowTemplateFieldPolicyEntry,
     WorkflowTemplateWorkflow,
+    diagnostic_warning_source_from_value,
     diagnostic_warnings_from_strings,
     plan_batch_run,
     validate_ingestion_dataset,
@@ -1787,7 +1788,7 @@ def create_epoch_run(
             recording=recording,
         ),
         warnings=config_warnings,
-        diagnostics=_diagnostics_from_warnings(config_warnings, "epoch"),
+        diagnostics=_diagnostics_from_warnings(config_warnings, "validation"),
     )
     run_repository.save_epoch_run(run)
     epoch_worker.enqueue(run_id)
@@ -1859,7 +1860,7 @@ def create_erp_run(
         output_path=str(output_path),
         output_metadata=_erp_input_provenance(epoch_run),
         warnings=config_warnings,
-        diagnostics=_diagnostics_from_warnings(config_warnings, "erp"),
+        diagnostics=_diagnostics_from_warnings(config_warnings, "validation"),
     )
     run_repository.save_erp_run(run)
     erp_worker.enqueue(run_id)
@@ -3797,6 +3798,13 @@ def _diagnostic_warning_field(warning: object, field_name: str) -> str:
     value = _diagnostic_warning_optional_field(warning, field_name)
     if isinstance(value, ValidationSeverity):
         return value.value
+    if field_name == "severity":
+        try:
+            return ValidationSeverity(str(value)).value
+        except ValueError:
+            return ValidationSeverity.WARNING.value
+    if field_name == "source":
+        return diagnostic_warning_source_from_value(value).value
     return str(value) if value is not None else ""
 
 
