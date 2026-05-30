@@ -2,7 +2,7 @@
 
 작성일: 2026-05-25
 
-업데이트: 2026-05-30, Phase D6 QC/export review polish 반영
+업데이트: 2026-05-30, Phase D7 exit gate 반영
 
 ## 현재 판단
 
@@ -35,19 +35,19 @@ ingest -> preprocessing -> epoch -> ERP -> comparison 흐름을 반복 검증할
 | Dataset metadata/provenance attachment | 완료 | recording metadata에 source file manifest와 sidecar discovery snapshot 저장, discovered sidecars를 uploaded metadata files로 보존 | D3에서 event source row/source column 보존 |
 | Event mapping v2 | D3 hardening 완료 | preset, row filter, provenance snapshot에 더해 BIDS null token, condition derivation, source row/source column 보존 테스트 존재 | public data smoke에서 fixture 확대 |
 | Structured warning/diagnostics | D4 taxonomy 완료 | `DiagnosticWarningSource`로 공통 source 범주 고정, legacy source alias 정규화, UI는 structured warning 우선 표시 | public data smoke warning snapshot 유지 |
-| Public dataset smoke | D5 contract 완료 | PhysioNet EEGMMI manifest 생성, OpenNeuro/BIDS-style workflow 문서화, expected warning snapshots 추가 | D7에서 실제 local smoke 결과 기록 |
-| QC dashboard/summary | D6 polish 완료 | preprocessing/epoch/ERP QC summary에 Phase D sidecar/provenance/diagnostics context를 추가 노출 | D7 exit gate에서 public smoke 결과 기록 |
-| Export bundle | D6 polish 완료 | `phase_d_metadata.json`, analysis report Phase D section, structured optional-metadata warnings, batch context 유지 | D7 exit gate에서 bundle snapshot 확인 |
+| Public dataset smoke | D7 exit 기록 완료 | PhysioNet EEGMMI manifest 생성 결과와 OpenNeuro/BIDS-style documented smoke contract를 `docs/phase-d-exit-report.md`에 기록 | Phase E 이후 opt-in real-data CI 확대 |
+| QC dashboard/summary | D6 polish 완료 | preprocessing/epoch/ERP QC summary에 Phase D sidecar/provenance/diagnostics context를 추가 노출 | Phase E 이후 visual regression 확대 |
+| Export bundle | D6 polish 완료 | `phase_d_metadata.json`, analysis report Phase D section, structured optional-metadata warnings, batch context 유지 | Phase E 이후 reproducibility graph와 연결 |
 
 ## 현재 코드 검증 결과
 
-검증 기준 시점: 2026-05-30, Phase D6 이후 current-regression check
+검증 기준 시점: 2026-05-30, Phase D7 exit gate
 
 - Git 상태:
   - 명령: `git status --short --branch`
   - 결과: `## codex/phase-d-roadmap-sync...origin/codex/phase-d-roadmap-sync`
 - Python 테스트:
-  - 명령: `.\apps\api\.venv\Scripts\python.exe -m pytest --basetemp=data\cache\pytest-full-d6-final`
+  - 명령: `.\apps\api\.venv\Scripts\python.exe -m pytest --basetemp=data\cache\pytest-full-d7-final`
   - 결과: 271 passed
   - 주의: Windows 기본 temp/cache 권한 문제를 피하기 위해 repo 내부
     `--basetemp`를 표준 테스트 명령으로 사용한다.
@@ -62,6 +62,17 @@ ingest -> preprocessing -> epoch -> ERP -> comparison 흐름을 반복 검증할
   - 작업 경로: `apps/web`
   - 결과: Phase 2 preprocessing, Phase C batch retry, Phase 3 epoch,
     Phase 3 ERP smoke 통과
+- Public dataset smoke:
+  - PhysioNet EEGMMI command:
+    `.\apps\api\.venv\Scripts\python.exe .\scripts\prepare_physionet_eegmmi_demo.py`
+  - 결과: `data/raw/public-samples/S001R03.edf`,
+    `data/raw/public-samples/S001R03_events.csv`,
+    `data/raw/public-samples/S001R03_neuroweave_smoke.json` 준비,
+    manifest event count 30
+  - OpenNeuro/BIDS-style 결과:
+    `docs/public-demo-openneuro-bids.md`와 expected warning snapshot contract로
+    기록
+  - 세부 기록: `docs/phase-d-exit-report.md`
 
 ## 완료된 안정화
 
@@ -341,6 +352,16 @@ Phase D 제외 범위:
 - public dataset smoke 결과가 날짜/명령/결과와 함께 기록됨
 - Phase E 범위가 분리됨
 
+구현 상태: 완료
+
+- D7 exit report: `docs/phase-d-exit-report.md`
+- Python full test: 271 passed
+- Web build: passed
+- Browser smoke `npm.cmd run e2e:all`: passed
+- PhysioNet EEGMMI S001R03 local prepare smoke 결과 기록
+- OpenNeuro/BIDS-style opt-in smoke contract와 expected warning snapshot 기록
+- user guide와 release checklist가 D7 결과와 Phase E 이후 이관 범위를 참조함
+
 ## 6월 10일까지의 현실 목표
 
 완료 목표:
@@ -442,8 +463,8 @@ Phase D 제외 범위:
 9. D4 diagnostic warning taxonomy: 완료
 10. D5 public dataset smoke fixtures: 완료
 11. D6 QC/export review polish: 완료
-12. D7 Phase D exit gate
-13. statistics/reproducibility/collaboration
+12. D7 Phase D exit gate: 완료
+13. statistics/reproducibility/collaboration: Phase E 이후
 
 ## 결론
 
@@ -456,3 +477,7 @@ hardening이다.
 Phase D는 이 기반을 public dataset smoke로 검증 가능한 형태까지 끌어올리는
 단계다. 통계 검정, full reproducibility graph, collaboration snapshot은 Phase D
 이후로 분리한다.
+
+Phase D7 update: Phase D is now closed. The exit gate is recorded in
+`docs/phase-d-exit-report.md` with the 2026-05-30 regression commands, public
+smoke results, and Phase E-or-later carryover list.

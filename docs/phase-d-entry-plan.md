@@ -192,3 +192,16 @@ Acceptance:
 - Regression gate passes.
 - Public data smoke result is recorded with exact command/date.
 - Remaining work is explicitly moved to Phase E or later.
+
+Status: complete. See `docs/phase-d-exit-report.md`.
+
+Recorded D7 results:
+
+- `.\apps\api\.venv\Scripts\python.exe -m pytest --basetemp=data\cache\pytest-full-d7-final`:
+  271 passed.
+- `npm.cmd run build` in `apps/web`: passed.
+- `npm.cmd run e2e:all` in `apps/web`: passed.
+- PhysioNet EEGMMI S001R03 prepare smoke recorded with 30 manifest events.
+- OpenNeuro/BIDS-style opt-in smoke contract and expected warning snapshot
+  recorded.
+- Phase E-or-later carryover is listed in the exit report.

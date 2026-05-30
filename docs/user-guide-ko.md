@@ -269,3 +269,21 @@ Event Mapping에서는 다음처럼 지정합니다.
 
 이후 `Validate Dataset`, preprocessing, epoch, ERP preview 순서로 진행합니다.
 자세한 영어 문서는 `docs/public-demo-physionet-eegmmi.md`를 참고합니다.
+
+## 16. Phase D 공개 데이터와 export 상태
+
+Phase D exit 결과는 `docs/phase-d-exit-report.md`에 기록되어 있습니다.
+
+- PhysioNet EEGMMI S001R03 smoke 준비 결과는
+  `data/raw/public-samples/S001R03_neuroweave_smoke.json` manifest로
+  남습니다.
+- OpenNeuro/BIDS-style workflow는 `docs/public-demo-openneuro-bids.md`와
+  `docs/public-data-smoke-fixtures.md`에 opt-in 절차로 문서화되어 있습니다.
+- QC Dashboard는 sidecar, provenance, structured diagnostics 같은 Phase D
+  context를 우선 표시합니다.
+- export bundle은 가능한 경우 `diagnostics/phase_d_metadata.json`에
+  Phase D provenance/sidecar metadata를 포함합니다.
+- optional metadata가 없어도 export는 실패하지 않고 structured warning으로
+  기록합니다.
+- 통계 검정, full reproducibility graph, one-click rerun, 대형 public dataset
+  CI는 Phase E 이후 범위입니다.

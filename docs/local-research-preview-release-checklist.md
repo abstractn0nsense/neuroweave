@@ -42,6 +42,10 @@ For Phase C template and batch work, also keep the focused release gate in
 `docs/phase-c-release-gate.md` current. It records the mainline smoke result,
 Phase B artifact contract, and template/batch compatibility checklist.
 
+For Phase D public-data hardening, keep `docs/phase-d-exit-report.md` current.
+It records the full regression gate, PhysioNet EEGMMI smoke preparation result,
+OpenNeuro/BIDS-style smoke contract, and Phase E-or-later carryover list.
+
 ```powershell
 git status --short --branch
 ```
@@ -162,6 +166,15 @@ Pass criteria:
 - Epoch run completes.
 - ERP run completes.
 - ERP preview plot is visible.
+- `data/raw/public-samples/S001R03_neuroweave_smoke.json` records the local
+  smoke manifest and expected comparison contract.
+- Public EEG files and generated smoke manifests remain under ignored `data/`
+  paths.
+
+For the BIDS/OpenNeuro-style public smoke workflow, follow
+`docs/public-demo-openneuro-bids.md`. If the real dataset is not downloaded for
+the release gate, record that the opt-in workflow and expected warning snapshot
+were reviewed instead of marking it as a completed real-data run.
 
 ## Report And Export QA
 
@@ -182,6 +195,7 @@ artifact_manifest.json
 export_bundle_manifest.json
 configs/
 diagnostics/
+diagnostics/phase_d_metadata.json
 figures/
 provenance/
 artifacts/
@@ -193,8 +207,11 @@ Pass criteria:
   config, ERP config, warnings, artifact manifest, preview plot links, and
   comparison summary when available.
 - Export bundle contains report, manifest, plots, config snapshots, provenance,
-  diagnostics, and artifacts.
+  diagnostics, Phase D sidecar/provenance metadata when available, and
+  artifacts.
 - Missing artifacts are represented as structured warnings, not silent failures.
+- Missing optional Phase D metadata is represented as a structured warning, not
+  a hard export failure.
 
 ## Artifact Integrity QA
 
@@ -302,6 +319,7 @@ Record final results before publishing:
 | Install QA |  |  |
 | First launch QA |  |  |
 | Public demo workflow |  |  |
+| OpenNeuro/BIDS-style smoke |  |  |
 | Report/export QA |  |  |
 | Artifact integrity QA |  |  |
 | Uninstall QA |  |  |
@@ -327,3 +345,17 @@ Recorded on 2026-05-27 after the Phase A release gate cleanup.
 | Public demo workflow | Not rerun in B0 | Manual PhysioNet public demo remains a release sign-off gate. |
 | Report/export QA | Not rerun in B0 | Manual completed-run report/export inspection remains a release sign-off gate. |
 | Artifact integrity QA | Not rerun in B0 | Manual completed-run integrity inspection remains a release sign-off gate. |
+
+## D7 Verification Snapshot
+
+Recorded on 2026-05-30 for the Phase D exit gate. Full details are in
+`docs/phase-d-exit-report.md`.
+
+| Area | Result | Notes |
+| --- | --- | --- |
+| Python tests | Pass | `.\apps\api\.venv\Scripts\python.exe -m pytest --basetemp=data\cache\pytest-full-d7-final` completed with 271 passed and one non-fatal `.pytest_cache` permission warning. |
+| Web build | Pass | `npm.cmd run build` in `apps/web` completed successfully. |
+| Browser smoke | Pass | `npm.cmd run e2e:all` in `apps/web` passed Phase 2 preprocessing, Phase C batch retry, Phase 3 epoch, and Phase 3 ERP smoke specs. |
+| PhysioNet EEGMMI smoke | Pass | `.\apps\api\.venv\Scripts\python.exe .\scripts\prepare_physionet_eegmmi_demo.py` prepared `S001R03.edf`, `S001R03_events.csv`, and `S001R03_neuroweave_smoke.json` under ignored `data/raw/public-samples/`; manifest event count is 30. |
+| OpenNeuro/BIDS-style smoke | Documented contract pass | Opt-in workflow and expected warning snapshot are documented in `docs/public-demo-openneuro-bids.md`, `docs/public-data-smoke-fixtures.md`, and `tests/fixtures/public_smoke/openneuro_bids_style_expected_warnings.json`. |
+| User guide/release checklist | Pass | User guides and this checklist now reference Phase D provenance, diagnostics, export metadata, and Phase E-or-later carryover. |
