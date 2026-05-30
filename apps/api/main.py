@@ -2199,6 +2199,7 @@ def get_dataset_qc_summary(
     batch_context = _batch_context_for_run(run)
     if batch_context is not None:
         summary["batch"] = batch_context
+    summary["phase_d"] = _phase_d_metadata_for_run(run)
 
     return QcSummaryResponse(
         dataset_id=dataset_id,
@@ -4889,6 +4890,15 @@ def _report_dataset_metadata(
             "file_format": recording_metadata.file_format
             if recording_metadata is not None
             else None,
+            "source_files": [
+                _source_file_metadata_payload(source_file).model_dump()
+                for source_file in recording_metadata.source_files
+            ]
+            if recording_metadata is not None
+            else [],
+            "sidecar_discovery": recording_metadata.sidecar_discovery
+            if recording_metadata is not None
+            else {},
         },
     }
 
@@ -4916,6 +4926,23 @@ def _report_event_summary(event_log: EventLog | None) -> dict:
         "event_count": len(event_log.events),
         "condition_counts": condition_counts,
         "mapping": event_log.mapping.__dict__,
+        "condition_column": event_log.condition_column,
+        "provenance": event_log.provenance,
+        "source_columns": _event_source_column_summary(event_log),
+    }
+
+
+def _event_source_column_summary(event_log: EventLog) -> dict:
+    column_names: set[str] = set()
+    example_values: dict[str, str | None] = {}
+    for event in event_log.events:
+        for column_name, value in event.source_columns.items():
+            column_names.add(column_name)
+            if column_name not in example_values and value is not None:
+                example_values[column_name] = value
+    return {
+        "column_names": sorted(column_names),
+        "example_values": example_values,
     }
 
 
@@ -4953,6 +4980,7 @@ def _analysis_report_extra_sections(
     batch_context = _batch_context_for_run(run)
     if batch_context is not None:
         extra_sections["batch"] = batch_context
+    extra_sections["phase_d_metadata"] = _phase_d_metadata_for_run(run)
     return extra_sections
 
 
@@ -5003,12 +5031,25 @@ def _export_bundle_response(run: PreprocessingRun | EpochRun | ErpRun) -> FileRe
 
     output_directory = manifest_path.parent
     export_bundle_path = output_directory / "export_bundle.zip"
+    phase_d_metadata_path, phase_d_metadata = _write_phase_d_metadata_artifact(
+        run,
+        output_directory,
+    )
     try:
         build_export_bundle(
             artifact_manifest_path=manifest_path,
             analysis_report_path=analysis_report_path,
             output_zip_path=export_bundle_path,
-            extra_artifacts=_batch_export_artifacts_for_run(run),
+            extra_artifacts=[
+                *_batch_export_artifacts_for_run(run),
+                {
+                    "logical_name": "phase_d_metadata",
+                    "artifact_type": "phase_d_metadata_json",
+                    "path": str(phase_d_metadata_path),
+                    "archive_path": "diagnostics/phase_d_metadata.json",
+                },
+            ],
+            diagnostics_warnings=phase_d_metadata["diagnostics"]["warnings"],
         )
     except (AnalysisReportError, ArtifactManifestError, QcSummaryError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -5634,6 +5675,121 @@ def _batch_export_artifacts_for_run(
             "archive_path": "batch/batch_summary.json",
         }
     ]
+
+
+def _write_phase_d_metadata_artifact(
+    run: PreprocessingRun | EpochRun | ErpRun,
+    output_directory: Path,
+) -> tuple[Path, dict]:
+    payload = _phase_d_metadata_for_run(run)
+    path = output_directory / "phase_d_metadata.json"
+    _write_json_file(path, payload)
+    return path, payload
+
+
+def _phase_d_metadata_for_run(run: PreprocessingRun | EpochRun | ErpRun) -> dict:
+    dataset = registry_repository.get_dataset(run.dataset_id)
+    recording = registry_repository.get_recording(run.dataset_id)
+    event_log = registry_repository.get_event_log(run.dataset_id)
+    recording_metadata = recording.metadata if recording is not None else None
+    warnings = _phase_d_optional_metadata_warnings(
+        recording=recording,
+        event_log=event_log,
+    )
+
+    return {
+        "schema_version": 1,
+        "dataset": {
+            "dataset_id": dataset.dataset_id if dataset is not None else run.dataset_id,
+            "project_id": dataset.project_id if dataset is not None else None,
+            "experiment_id": dataset.experiment_id if dataset is not None else None,
+            "participant_id": dataset.participant_id if dataset is not None else None,
+            "session_id": dataset.session_id if dataset is not None else None,
+            "status": dataset.status.value if dataset is not None else None,
+            "metadata": dataset.metadata if dataset is not None else {},
+        },
+        "recording": {
+            "recording_id": recording.recording_id if recording is not None else None,
+            "file_id": recording.file_id if recording is not None else None,
+            "source_files": [
+                _source_file_metadata_payload(source_file).model_dump()
+                for source_file in recording_metadata.source_files
+            ]
+            if recording_metadata is not None
+            else [],
+            "sidecar_discovery": recording_metadata.sidecar_discovery
+            if recording_metadata is not None
+            else {},
+        },
+        "event_log": {
+            "event_log_id": event_log.event_log_id if event_log is not None else None,
+            "file_id": event_log.file_id if event_log is not None else None,
+            "row_count": event_log.row_count if event_log is not None else 0,
+            "filter_count": event_log.filter_count if event_log is not None else 0,
+            "condition_column": event_log.condition_column
+            if event_log is not None
+            else None,
+            "mapping": event_log.mapping.__dict__ if event_log is not None else {},
+            "provenance": event_log.provenance if event_log is not None else {},
+            "source_columns": _event_source_column_summary(event_log)
+            if event_log is not None
+            else {"column_names": [], "example_values": {}},
+        },
+        "run": {
+            "run_id": run.run_id,
+            "run_kind": _run_kind_value(run),
+            "status": _run_status_value(run),
+            "warnings": run.warnings,
+            "diagnostics": _diagnostics_report_payload(run.diagnostics),
+        },
+        "batch": _batch_context_for_run(run),
+        "diagnostics": {
+            "warnings": warnings,
+        },
+    }
+
+
+def _phase_d_optional_metadata_warnings(
+    *,
+    recording: Recording | None,
+    event_log: EventLog | None,
+) -> list[dict[str, str]]:
+    warnings: list[dict[str, str]] = []
+    if recording is not None and not recording.metadata.source_files:
+        warnings.append(
+            _optional_metadata_warning(
+                "recording_source_files_missing",
+                "Recording source file metadata is not available for this export.",
+            )
+        )
+    if recording is not None and not recording.metadata.sidecar_discovery:
+        warnings.append(
+            _optional_metadata_warning(
+                "sidecar_discovery_missing",
+                "BIDS sidecar discovery metadata is not available for this recording.",
+            )
+        )
+    if event_log is not None and not event_log.provenance:
+        warnings.append(
+            _optional_metadata_warning(
+                "event_provenance_missing",
+                "Event log provenance metadata is not available for this export.",
+            )
+        )
+    return warnings
+
+
+def _optional_metadata_warning(code: str, impact: str) -> dict[str, str]:
+    return {
+        "code": code,
+        "severity": "warning",
+        "source": "export_bundle",
+        "impact": impact,
+        "suggested_action": (
+            "Re-ingest or remap the dataset with Phase D metadata enabled if this "
+            "metadata is required for review."
+        ),
+    }
 
 
 def _save_batch_item(

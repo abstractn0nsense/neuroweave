@@ -18,14 +18,20 @@ from eeg_core.domain import (
     ErpConfig,
     ErpRun,
     ErpRunStatus,
+    EventColumnMapping,
+    EventLog,
+    NormalizedEvent,
     PreprocessingConfig,
     PreprocessingRun,
     PreprocessingRunStatus,
+    Recording,
     RunKind,
+    SourceFileMetadata,
     WorkflowTemplate,
     WorkflowTemplateWorkflow,
     create_batch_template_snapshot,
 )
+from eeg_core.domain.recording import RecordingMetadata
 from eeg_io.registry import JsonBatchRepository, JsonRegistryRepository, JsonRunRepository
 
 
@@ -208,6 +214,89 @@ def test_get_qc_summary_includes_batch_context_and_manifest_links(
     assert summary["items"][0]["artifact_manifests"]["preprocessing"][
         "artifact_manifest_path"
     ] == str(preprocessing_manifest)
+
+
+def test_get_qc_summary_includes_phase_d_metadata_context(tmp_path, monkeypatch):
+    client, run_repository = _client(tmp_path, monkeypatch)
+    registry_repository = api_main.registry_repository
+    preprocessing_manifest = _copy_fixture(tmp_path, "preprocessing")
+    registry_repository.save_recording(
+        Recording(
+            recording_id="recording-001",
+            dataset_id="dataset-001",
+            file_id="eeg-file-001",
+            metadata=RecordingMetadata(
+                dataset_id="dataset-001",
+                file_format="edf",
+                channel_count=64,
+                sampling_rate_hz=160.0,
+                duration_seconds=120.0,
+                channel_names=["Cz"],
+                source_files=[
+                    SourceFileMetadata(
+                        role="eeg",
+                        original_filename="S001R03.edf",
+                        stored_path="data/raw/uploads/S001R03.edf",
+                        size_bytes=1024,
+                        checksum_sha256="abc123",
+                    )
+                ],
+                sidecar_discovery={
+                    "schema_version": 1,
+                    "candidates": [{"sidecar_type": "eeg_json", "status": "valid"}],
+                },
+            ),
+        )
+    )
+    registry_repository.save_event_log(
+        EventLog(
+            event_log_id="events-001",
+            dataset_id="dataset-001",
+            file_id="events-file-001",
+            mapping=EventColumnMapping(onset_seconds="onset", trial_type="trial_type"),
+            row_count=1,
+            condition_column="trial_type",
+            provenance={"sources": [{"role": "event_file"}]},
+            events=[
+                NormalizedEvent(
+                    onset_seconds=1.0,
+                    source_row=1,
+                    trial_type="left_fist",
+                    source_columns={"trial_type": "left_fist", "value": "T1"},
+                )
+            ],
+        )
+    )
+    run_repository.save_preprocessing_run(
+        PreprocessingRun(
+            run_id="preprocess-001",
+            dataset_id="dataset-001",
+            config=PreprocessingConfig(),
+            status=PreprocessingRunStatus.COMPLETED,
+            finished_at_utc="2026-05-26T00:00:00+00:00",
+            output_metadata={"artifact_manifest_path": str(preprocessing_manifest)},
+        )
+    )
+
+    response = client.get(
+        "/datasets/dataset-001/qc-summary",
+        params={"run_id": "preprocess-001"},
+    )
+
+    assert response.status_code == 200
+    phase_d = response.json()["summary"]["phase_d"]
+    assert phase_d["recording"]["source_files"][0]["original_filename"] == (
+        "S001R03.edf"
+    )
+    assert phase_d["recording"]["sidecar_discovery"]["candidates"][0][
+        "sidecar_type"
+    ] == "eeg_json"
+    assert phase_d["event_log"]["provenance"]["sources"][0]["role"] == "event_file"
+    assert phase_d["event_log"]["source_columns"]["column_names"] == [
+        "trial_type",
+        "value",
+    ]
+    assert phase_d["diagnostics"]["warnings"] == []
 
 
 def test_get_qc_summary_includes_missing_artifact_diagnostics(tmp_path, monkeypatch):

@@ -177,6 +177,10 @@ Acceptance:
 - Batch-created runs retain batch context in QC/report/export.
 - Missing optional metadata creates warnings, not hard failures.
 
+Status: complete. QC summaries now expose Phase D context, and export bundles
+include `diagnostics/phase_d_metadata.json` alongside structured optional
+metadata warnings.
+
 ### D7. Phase D Exit Gate
 
 - Run the full Python test gate, web build, and `npm.cmd run e2e:all`.

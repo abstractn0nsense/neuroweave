@@ -2,7 +2,7 @@
 
 작성일: 2026-05-25
 
-업데이트: 2026-05-30, Phase D5 public dataset smoke fixtures 반영
+업데이트: 2026-05-30, Phase D6 QC/export review polish 반영
 
 ## 현재 판단
 
@@ -36,19 +36,19 @@ ingest -> preprocessing -> epoch -> ERP -> comparison 흐름을 반복 검증할
 | Event mapping v2 | D3 hardening 완료 | preset, row filter, provenance snapshot에 더해 BIDS null token, condition derivation, source row/source column 보존 테스트 존재 | public data smoke에서 fixture 확대 |
 | Structured warning/diagnostics | D4 taxonomy 완료 | `DiagnosticWarningSource`로 공통 source 범주 고정, legacy source alias 정규화, UI는 structured warning 우선 표시 | public data smoke warning snapshot 유지 |
 | Public dataset smoke | D5 contract 완료 | PhysioNet EEGMMI manifest 생성, OpenNeuro/BIDS-style workflow 문서화, expected warning snapshots 추가 | D7에서 실제 local smoke 결과 기록 |
-| QC dashboard/summary | MVP 있음 | preprocessing/epoch/ERP QC summary와 UI dashboard 경로 존재 | Phase D에서 sidecar/provenance/diagnostics 표시 보강 |
-| Export bundle | MVP 있음 | report, manifest, diagnostics, figures, provenance, artifacts, batch context 포함 | Phase D에서 public data metadata 포함 보강 |
+| QC dashboard/summary | D6 polish 완료 | preprocessing/epoch/ERP QC summary에 Phase D sidecar/provenance/diagnostics context를 추가 노출 | D7 exit gate에서 public smoke 결과 기록 |
+| Export bundle | D6 polish 완료 | `phase_d_metadata.json`, analysis report Phase D section, structured optional-metadata warnings, batch context 유지 | D7 exit gate에서 bundle snapshot 확인 |
 
 ## 현재 코드 검증 결과
 
-검증 기준 시점: 2026-05-30, Phase D5 이후 current-regression check
+검증 기준 시점: 2026-05-30, Phase D6 이후 current-regression check
 
 - Git 상태:
   - 명령: `git status --short --branch`
   - 결과: `## codex/phase-d-roadmap-sync...origin/codex/phase-d-roadmap-sync`
 - Python 테스트:
-  - 명령: `.\apps\api\.venv\Scripts\python.exe -m pytest --basetemp=data\cache\pytest-full-d5-final`
-  - 결과: 269 passed
+  - 명령: `.\apps\api\.venv\Scripts\python.exe -m pytest --basetemp=data\cache\pytest-full-d6-final`
+  - 결과: 271 passed
   - 주의: Windows 기본 temp/cache 권한 문제를 피하기 위해 repo 내부
     `--basetemp`를 표준 테스트 명령으로 사용한다.
 - Web build:
@@ -311,6 +311,21 @@ Phase D 제외 범위:
 - batch-created run도 QC/report/export에서 batch context 유지
 - bundle structure는 기존과 호환
 
+구현 상태: 완료
+
+- QC summary API와 web QC dashboard에 `phase_d` context 추가:
+  - recording source files
+  - BIDS sidecar discovery snapshot
+  - event provenance
+  - event source column summary
+  - run diagnostics
+  - batch context
+- analysis report에 `phase_d_metadata` section 추가
+- export bundle에 `diagnostics/phase_d_metadata.json` 추가
+- recording/event optional Phase D metadata가 비어 있으면 export manifest와
+  phase D metadata에 structured warning으로 기록하고 hard failure는 피함
+- batch-created run의 `batch_summary.json` export와 report/QC batch context 유지
+
 ### D7. Phase D Exit Gate
 
 - Python full test
@@ -426,7 +441,7 @@ Phase D 제외 범위:
 8. D3 BIDS events normalization hardening: 완료
 9. D4 diagnostic warning taxonomy: 완료
 10. D5 public dataset smoke fixtures: 완료
-11. D6 QC/export review polish
+11. D6 QC/export review polish: 완료
 12. D7 Phase D exit gate
 13. statistics/reproducibility/collaboration
 

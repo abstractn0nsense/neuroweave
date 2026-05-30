@@ -20,9 +20,15 @@ def build_export_bundle(
     output_zip_path: Path,
     analysis_report_path: Path | None = None,
     extra_artifacts: list[dict[str, Any]] | None = None,
+    diagnostics_warnings: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     manifest = load_artifact_manifest(artifact_manifest_path)
-    diagnostics = {"warnings": _missing_artifact_warnings(manifest.missing_artifacts)}
+    diagnostics = {
+        "warnings": [
+            *(diagnostics_warnings or []),
+            *_missing_artifact_warnings(manifest.missing_artifacts),
+        ]
+    }
     entries: list[dict[str, Any]] = []
 
     output_zip_path.parent.mkdir(parents=True, exist_ok=True)
