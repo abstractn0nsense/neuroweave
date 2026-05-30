@@ -2858,6 +2858,9 @@ function BatchRunsPanel({
   const filteredItems = selectedItems.filter((item) =>
     batchItemMatchesFilter(item, batchFilter),
   );
+  const filterCounts = selectedBatch
+    ? countBatchItemsByFilter(selectedBatch.items)
+    : { all: 0, pending: 0, completed: 0, failed: 0 };
   const batchSummary = selectedBatch ? summarizeBatchItems(selectedBatch.items) : null;
   const canCreateBatch =
     Boolean(activeDataset) &&
@@ -2910,11 +2913,13 @@ function BatchRunsPanel({
             <button
               aria-pressed={batchFilter === filter}
               className="workspace-mode-button"
+              data-testid={`batch-filter-${filter}`}
               key={filter}
               onClick={() => onFilterChange(filter)}
               type="button"
             >
-              {filter}
+              <span>{filter}</span>
+              <strong>{filterCounts[filter]}</strong>
             </button>
           ),
         )}
@@ -2922,6 +2927,10 @@ function BatchRunsPanel({
 
       {selectedBatch ? (
         <>
+          <p className="muted" data-testid="batch-filter-summary">
+            Showing {filteredItems.length} of {selectedItems.length} subject item(s)
+            for {batchFilter}.
+          </p>
           {isActiveBatchStatus(selectedBatch.status) ? (
             <p className="muted">Polling batch detail until execution settles.</p>
           ) : null}
@@ -6759,6 +6768,18 @@ function summarizeBatchItems(items: BatchSubjectRunPlan[]): string {
     ["pending", "running", "cancelling"].includes(item.status),
   ).length;
   return `${completed} completed / ${failed} failed / ${pending} pending`;
+}
+
+function countBatchItemsByFilter(
+  items: BatchSubjectRunPlan[],
+): Record<BatchItemFilter, number> {
+  return {
+    all: items.length,
+    pending: items.filter((item) => batchItemMatchesFilter(item, "pending")).length,
+    completed: items.filter((item) => batchItemMatchesFilter(item, "completed"))
+      .length,
+    failed: items.filter((item) => batchItemMatchesFilter(item, "failed")).length,
+  };
 }
 
 function formatBatchCurrentStep(

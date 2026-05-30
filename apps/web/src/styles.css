@@ -870,6 +870,24 @@ input[type="file"] {
   background: var(--color-surface-subtle);
 }
 
+.batch-filter-tabs .workspace-mode-button {
+  display: inline-flex;
+  gap: var(--space-2);
+  justify-content: center;
+  min-height: 40px;
+}
+
+.batch-filter-tabs strong {
+  min-width: 1.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: center;
+}
+
 .batch-table-wrap {
   overflow-x: auto;
   border: 1px solid var(--color-border);

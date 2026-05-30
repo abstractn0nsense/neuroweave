@@ -262,7 +262,27 @@ locator-level Playwright baselines for the deterministic Phase 3 ERP fixture:
 available through `npm.cmd run e2e:visual-seed` and remains separate from the
 default `e2e:all` browser gate.
 
-### E9. Phase E Exit Gate
+### E9. Multi-Subject Batch UI Completion Slice
+
+- Improve one Phase C batch UI surface for research use without expanding the
+  backend batch contract.
+- Selected slice: batch item filter.
+- Keep retry and execution behavior unchanged.
+
+Acceptance:
+
+- Batch item filters expose all, pending, completed, and failed views with clear
+  counts.
+- The selected filter shows how many subject/session items are visible.
+- Phase C browser smoke verifies failed, completed, and empty failed-filter
+  states around a retry.
+
+Status: complete. Batch filter buttons now include per-filter counts and the
+panel reports the visible item count for the active filter. The Phase C batch
+smoke exercises failed-only and completed-only views before retry, then verifies
+the empty failed view after the retry completes.
+
+### E10. Phase E Exit Gate
 
 - Run the full Python test gate, web build, and `npm.cmd run e2e:all`.
 - Record final statistics and reproducibility behavior.
