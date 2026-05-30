@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "status": "unavailable",
+  "implemented": false,
+  "phase": "Phase E",
+  "method": "paired_t_test",
+  "design": "within_subject",
+  "input_metric": "mean_amplitude_uv",
+  "observation_level": "subject",
+  "condition_pair": {
+    "a": "left_fist",
+    "b": "right_fist"
+  },
+  "sample": {
+    "unit": "subject",
+    "paired": true,
+    "n": 1,
+    "missing_pairs": 0
+  },
+  "result": null,
+  "assumptions": [],
+  "diagnostics": {
+    "warnings": [
+      {
+        "code": "insufficient_observations",
+        "severity": "warning",
+        "source": "artifact",
+        "impact": "Paired t-test requires at least two paired observations.",
+        "suggested_action": "Run the comparison from a multi-subject observation table."
+      }
+    ]
+  }
+}

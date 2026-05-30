@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "status": "implemented",
+  "implemented": true,
+  "phase": "Phase E",
+  "method": "paired_t_test",
+  "design": "within_subject",
+  "input_metric": "mean_amplitude_uv",
+  "observation_level": "subject",
+  "condition_pair": {
+    "a": "left_fist",
+    "b": "right_fist"
+  },
+  "sample": {
+    "unit": "subject",
+    "paired": true,
+    "n": 12,
+    "missing_pairs": 0
+  },
+  "result": {
+    "statistic_name": "t",
+    "statistic": 2.431,
+    "degrees_of_freedom": 11,
+    "p_value": 0.0334,
+    "p_value_kind": "uncorrected",
+    "effect_size": {
+      "name": "cohens_dz",
+      "value": 0.702,
+      "interpretation": null
+    },
+    "confidence_interval": {
+      "implemented": false,
+      "level": null,
+      "lower": null,
+      "upper": null,
+      "unit": "microvolt"
+    },
+    "multiple_comparison": {
+      "applied": false,
+      "method": null,
+      "family": null,
+      "adjusted_p_value": null
+    }
+  },
+  "assumptions": [
+    {
+      "name": "paired_observations",
+      "status": "met",
+      "detail": "Each row has both condition metrics for the same subject."
+    }
+  ],
+  "diagnostics": {
+    "warnings": []
+  }
+}

@@ -131,6 +131,10 @@ Acceptance:
 - Existing comparison summaries remain backward-compatible.
 - Documentation explains which statistics are implemented versus planned.
 
+Status: complete. See `docs/statistics-contract.md`,
+`docs/schemas/erp-comparison-statistics.schema.json`, and
+`tests/fixtures/statistics/`.
+
 ### E2. Mean-Amplitude Statistics MVP
 
 - Implement one initial inferential test for ERP mean-amplitude comparison.

@@ -1,0 +1,251 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neuroweave.local/schemas/erp-comparison-statistics.schema.json",
+  "title": "NeuroWeave ERP comparison statistics v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "implemented",
+    "phase",
+    "method",
+    "design",
+    "input_metric",
+    "observation_level",
+    "condition_pair",
+    "sample",
+    "result",
+    "assumptions",
+    "diagnostics"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "status": {
+      "enum": ["implemented", "unavailable", "not_requested", "planned"]
+    },
+    "implemented": {
+      "type": "boolean"
+    },
+    "phase": {
+      "type": "string",
+      "minLength": 1
+    },
+    "method": {
+      "enum": ["paired_t_test"]
+    },
+    "design": {
+      "enum": ["within_subject"]
+    },
+    "input_metric": {
+      "enum": ["mean_amplitude_uv"]
+    },
+    "observation_level": {
+      "enum": ["subject"]
+    },
+    "condition_pair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["a", "b"],
+      "properties": {
+        "a": {
+          "type": "string",
+          "minLength": 1
+        },
+        "b": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "sample": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unit", "paired", "n", "missing_pairs"],
+      "properties": {
+        "unit": {
+          "enum": ["subject"]
+        },
+        "paired": {
+          "const": true
+        },
+        "n": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "missing_pairs": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "result": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "statistic_name",
+            "statistic",
+            "degrees_of_freedom",
+            "p_value",
+            "p_value_kind",
+            "effect_size",
+            "confidence_interval",
+            "multiple_comparison"
+          ],
+          "properties": {
+            "statistic_name": {
+              "const": "t"
+            },
+            "statistic": {
+              "type": "number"
+            },
+            "degrees_of_freedom": {
+              "type": "number",
+              "minimum": 0
+            },
+            "p_value": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "p_value_kind": {
+              "enum": ["uncorrected"]
+            },
+            "effect_size": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "value", "interpretation"],
+              "properties": {
+                "name": {
+                  "enum": ["cohens_dz"]
+                },
+                "value": {
+                  "type": "number"
+                },
+                "interpretation": {
+                  "type": ["string", "null"]
+                }
+              }
+            },
+            "confidence_interval": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["implemented", "level", "lower", "upper", "unit"],
+              "properties": {
+                "implemented": {
+                  "const": false
+                },
+                "level": {
+                  "type": "null"
+                },
+                "lower": {
+                  "type": "null"
+                },
+                "upper": {
+                  "type": "null"
+                },
+                "unit": {
+                  "enum": ["microvolt"]
+                }
+              }
+            },
+            "multiple_comparison": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["applied", "method", "family", "adjusted_p_value"],
+              "properties": {
+                "applied": {
+                  "const": false
+                },
+                "method": {
+                  "type": "null"
+                },
+                "family": {
+                  "type": "null"
+                },
+                "adjusted_p_value": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "assumptions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "status", "detail"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "enum": ["met", "warning", "failed", "not_checked"]
+          },
+          "detail": {
+            "type": ["string", "null"]
+          }
+        }
+      }
+    },
+    "diagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["warnings"],
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "severity",
+              "source",
+              "impact",
+              "suggested_action"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "minLength": 1
+              },
+              "severity": {
+                "enum": ["warning", "error"]
+              },
+              "source": {
+                "enum": [
+                  "bids",
+                  "event_mapping",
+                  "validation",
+                  "worker",
+                  "artifact",
+                  "export_bundle",
+                  "batch"
+                ]
+              },
+              "impact": {
+                "type": "string",
+                "minLength": 1
+              },
+              "suggested_action": {
+                "type": ["string", "null"]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
