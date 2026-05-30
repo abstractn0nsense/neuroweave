@@ -176,6 +176,7 @@ class NormalizedEvent:
     response: str | None = None
     correct: bool | None = None
     reaction_time_seconds: float | None = None
+    source_columns: dict[str, str | None] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -187,6 +188,7 @@ class EventLog:
     row_count: int
     filter_count: int = 0
     row_filter: EventRowFilter | None = None
+    condition_column: str | None = None
     provenance: dict = field(default_factory=dict)
     events: list[NormalizedEvent] = field(default_factory=list)
 

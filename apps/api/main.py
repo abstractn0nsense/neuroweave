@@ -628,6 +628,7 @@ class NormalizedEventResponse(BaseModel):
     response: str | None
     correct: bool | None
     reaction_time_seconds: float | None
+    source_columns: dict[str, str | None] = Field(default_factory=dict)
 
 
 class EventLogResponse(BaseModel):
@@ -637,6 +638,7 @@ class EventLogResponse(BaseModel):
     mapping: EventColumnMappingPayload
     row_count: int
     filter_count: int
+    condition_column: str | None = None
     events: list[NormalizedEventResponse]
 
 
@@ -670,6 +672,7 @@ class EventMappingRequest(BaseModel):
     mapping: EventColumnMappingPayload | None = None
     preset: Literal["psychopy", "bids_events", "eeglab_annotations"] | None = None
     row_filter: EventRowFilterPayload | None = None
+    condition_column: str | None = None
 
 
 class BadChannelDetectionConfigPayload(BaseModel):
@@ -1545,6 +1548,7 @@ def map_dataset_events(
 
     mapping = _resolve_event_mapping(dataset, request.mapping, request.preset)
     row_filter = _event_row_filter_from_payload(request.row_filter)
+    condition_column = _event_condition_column_from_payload(request.condition_column)
     try:
         event_log = normalize_event_log(
             dataset_id=dataset_id,
@@ -1553,6 +1557,7 @@ def map_dataset_events(
             path=Path(uploaded_file.stored_path),
             mapping=mapping,
             row_filter=row_filter,
+            condition_column=condition_column,
             provenance=_event_log_provenance(
                 dataset_id=dataset_id,
                 uploaded_file=uploaded_file,
@@ -1560,6 +1565,7 @@ def map_dataset_events(
                 preset_applied=request.mapping is None and request.preset is not None,
                 mapping=mapping,
                 row_filter=row_filter,
+                condition_column=condition_column,
             ),
         )
     except (EventLogPreviewError, EventLogNormalizationError) as exc:
@@ -2781,6 +2787,7 @@ def _event_log_response(event_log: EventLog) -> EventLogResponse:
         mapping=EventColumnMappingPayload(**event_log.mapping.__dict__),
         row_count=event_log.row_count,
         filter_count=event_log.filter_count,
+        condition_column=event_log.condition_column,
         events=[
             NormalizedEventResponse(
                 onset_seconds=event.onset_seconds,
@@ -2791,6 +2798,7 @@ def _event_log_response(event_log: EventLog) -> EventLogResponse:
                 response=event.response,
                 correct=event.correct,
                 reaction_time_seconds=event.reaction_time_seconds,
+                source_columns=event.source_columns,
             )
             for event in event_log.events
         ],
@@ -6854,6 +6862,15 @@ def _event_row_filter_from_payload(
     )
 
 
+def _event_condition_column_from_payload(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    if stripped.lower() in {"", "n/a", "na", "none", "null"}:
+        return None
+    return stripped
+
+
 def _event_log_provenance(
     *,
     dataset_id: str,
@@ -6862,6 +6879,7 @@ def _event_log_provenance(
     preset_applied: bool,
     mapping: EventColumnMapping,
     row_filter: EventRowFilter | None,
+    condition_column: str | None,
 ) -> dict:
     payload = build_event_log_provenance_payload(
         dataset_id=dataset_id,
@@ -6880,6 +6898,7 @@ def _event_log_provenance(
         row_filter_snapshot=asdict(row_filter) if row_filter is not None else None,
         created_at_utc=_utc_now_iso(),
     )
+    payload["condition_column"] = condition_column
     payload["sources"].extend(
         _source_file_payload_from_upload(
             source_file,

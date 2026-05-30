@@ -130,6 +130,7 @@ type NormalizedEvent = {
   response: string | null;
   correct: boolean | null;
   reaction_time_seconds: number | null;
+  source_columns?: Record<string, string | null>;
 };
 
 type EventLogResponse = {
@@ -139,6 +140,7 @@ type EventLogResponse = {
   mapping: EventColumnMapping;
   row_count: number;
   filter_count: number;
+  condition_column?: string | null;
   events: NormalizedEvent[];
 };
 

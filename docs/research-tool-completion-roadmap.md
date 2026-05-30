@@ -2,7 +2,7 @@
 
 작성일: 2026-05-25
 
-업데이트: 2026-05-30, Phase C exit gate 및 Phase D entry plan 반영
+업데이트: 2026-05-30, Phase D3 BIDS events normalization hardening 반영
 
 ## 현재 판단
 
@@ -33,21 +33,21 @@ ingest -> preprocessing -> epoch -> ERP -> comparison 흐름을 반복 검증할
 | Batch execution | 완료 | persisted batch plan, worker execution, retry, cancellation, partial completion, summary artifact 구현 | Phase D에서는 public data smoke와 export 호환성 유지 |
 | BIDS sidecar discovery | 완료 | parser에서 adjacent sidecar discovery contract로 확장, EEG/event upload 응답에 discovery diagnostics 추가 | D3에서 BIDS events normalization hardening |
 | Dataset metadata/provenance attachment | 완료 | recording metadata에 source file manifest와 sidecar discovery snapshot 저장, discovered sidecars를 uploaded metadata files로 보존 | D3에서 event source row/source column 보존 |
-| Event mapping v2 | MVP 있음 | preset, row filter, provenance snapshot API/UI 경로와 테스트 존재 | Phase D에서 BIDS `events.tsv` normalization hardening |
+| Event mapping v2 | D3 hardening 완료 | preset, row filter, provenance snapshot에 더해 BIDS null token, condition derivation, source row/source column 보존 테스트 존재 | public data smoke에서 fixture 확대 |
 | Structured warning/diagnostics | MVP 있음 | run diagnostics에 structured warning 병행, UI는 structured warning 우선 표시 | Phase D에서 taxonomy 안정화 |
 | QC dashboard/summary | MVP 있음 | preprocessing/epoch/ERP QC summary와 UI dashboard 경로 존재 | Phase D에서 sidecar/provenance/diagnostics 표시 보강 |
 | Export bundle | MVP 있음 | report, manifest, diagnostics, figures, provenance, artifacts, batch context 포함 | Phase D에서 public data metadata 포함 보강 |
 
 ## 현재 코드 검증 결과
 
-검증 기준 시점: 2026-05-30, Phase C exit gate 이후 current-regression check
+검증 기준 시점: 2026-05-30, Phase D3 이후 current-regression check
 
 - Git 상태:
   - 명령: `git status --short --branch`
-  - 결과: `## main...origin/main`
+  - 결과: `## codex/phase-d-roadmap-sync...origin/codex/phase-d-roadmap-sync`
 - Python 테스트:
-  - 명령: `.\apps\api\.venv\Scripts\python.exe -m pytest --basetemp=data\cache\pytest`
-  - 결과: 250 passed
+  - 명령: `.\apps\api\.venv\Scripts\python.exe -m pytest --basetemp=data\cache\pytest-full-d3-final`
+  - 결과: 262 passed
   - 주의: Windows 기본 temp/cache 권한 문제를 피하기 위해 repo 내부
     `--basetemp`를 표준 테스트 명령으로 사용한다.
 - Web build:
@@ -209,7 +209,10 @@ Phase D 제외 범위:
 - `n/a`, `NA`, empty string 등 null 처리 일관화
 - row filter 결과와 원본 row count/filter count 보존
 - `source_row`, selected source columns 보존
-- condition derivation 지원
+- condition derivation 지원:
+  - `trial_type`
+  - `value`
+  - configured source column
 - 기존 PsychoPy/custom mapping 유지
 
 완료 기준:
@@ -217,6 +220,15 @@ Phase D 제외 범위:
 - BIDS events fixture가 EventLog로 안정 변환됨
 - API preview와 UI preview 결과 일치
 - 기존 event upload/mapping 테스트 유지
+
+구현 상태: 완료
+
+- `NormalizedEvent.source_columns`와 `EventLog.condition_column`을 additive
+  field로 추가해 기존 registry JSON backward compatibility 유지
+- BIDS `events.tsv` 정규화에서 `trial_type` null 시 `value` fallback 지원
+- API mapping 요청에 optional `condition_column` 추가
+- row filter 적용 후에도 `row_count`, `filter_count`, `source_row`,
+  selected source columns 보존
 
 ### D4. Diagnostic Warning Taxonomy
 
@@ -383,7 +395,7 @@ Phase D 제외 범위:
 5. D0 roadmap sync: 완료
 6. D1 BIDS sidecar discovery contract: 완료
 7. D2 dataset metadata/provenance attachment: 완료
-8. D3 BIDS events normalization hardening
+8. D3 BIDS events normalization hardening: 완료
 9. D4 diagnostic warning taxonomy
 10. D5 public dataset smoke fixtures
 11. D6 QC/export review polish

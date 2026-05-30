@@ -8,7 +8,16 @@ from eeg_core.domain import (
     NormalizedEvent,
 )
 
-_NULL_TOKENS = {"", "n/a", "na", "null"}
+_NULL_TOKENS = {"", "n/a", "na", "none", "null"}
+_MAPPING_SOURCE_FIELDS = (
+    "onset_seconds",
+    "duration_seconds",
+    "trial_type",
+    "stimulus",
+    "response",
+    "correct",
+    "reaction_time_seconds",
+)
 EVENT_MAPPING_PRESETS: dict[str, EventColumnMapping] = {
     "psychopy": EventColumnMapping(
         onset_seconds="stim_onset",
@@ -89,15 +98,24 @@ def normalize_event_log(
     path: Path,
     mapping: EventColumnMapping,
     row_filter: EventRowFilter | None = None,
+    condition_column: str | None = None,
     provenance: dict | None = None,
 ) -> EventLog:
+    condition_column = _normalized_condition_column(condition_column)
     columns, rows = read_event_log_rows(path)
     _require_column(columns, mapping.onset_seconds, "onset_seconds")
     _require_filter_columns(columns, row_filter)
+    _require_condition_column(columns, condition_column)
     filtered_rows = _filter_event_rows(rows, row_filter)
 
     events = [
-        _normalize_event(row=row, source_row=index, mapping=mapping)
+        _normalize_event(
+            row=row,
+            source_row=index,
+            mapping=mapping,
+            row_filter=row_filter,
+            condition_column=condition_column,
+        )
         for index, row in filtered_rows
     ]
     return EventLog(
@@ -108,6 +126,7 @@ def normalize_event_log(
         row_count=len(rows),
         filter_count=len(rows) - len(filtered_rows),
         row_filter=row_filter,
+        condition_column=condition_column,
         provenance=provenance or {},
         events=events,
     )
@@ -148,6 +167,18 @@ def _require_filter_columns(
             )
 
 
+def _require_condition_column(
+    columns: list[str],
+    condition_column: str | None,
+) -> None:
+    if condition_column is None:
+        return
+    if condition_column not in columns:
+        raise EventLogNormalizationError(
+            f"Condition column was not found: {condition_column}"
+        )
+
+
 def _row_matches_include(row: dict[str, str | None], row_filter: EventRowFilter) -> bool:
     return all(
         _row_value(row, condition.column) == _normalized_filter_value(condition.equals)
@@ -178,11 +209,22 @@ def _normalized_filter_value(value: str | None) -> str | None:
     return stripped
 
 
+def _normalized_condition_column(condition_column: str | None) -> str | None:
+    if condition_column is None:
+        return None
+    stripped = condition_column.strip()
+    if stripped.lower() in _NULL_TOKENS:
+        return None
+    return stripped
+
+
 def _normalize_event(
     *,
     row: dict[str, str | None],
     source_row: int,
     mapping: EventColumnMapping,
+    row_filter: EventRowFilter | None,
+    condition_column: str | None,
 ) -> NormalizedEvent:
     onset = _required_float(row, mapping.onset_seconds, "onset_seconds", source_row)
     duration = _optional_float(
@@ -200,13 +242,86 @@ def _normalize_event(
     return NormalizedEvent(
         onset_seconds=onset,
         duration_seconds=duration,
-        trial_type=_optional_str(row, mapping.trial_type),
+        trial_type=_derive_condition(row, mapping, condition_column),
         stimulus=_optional_str(row, mapping.stimulus),
         response=_optional_str(row, mapping.response),
         correct=_optional_bool(row, mapping.correct, source_row),
         reaction_time_seconds=reaction_time,
         source_row=source_row,
+        source_columns=_selected_source_columns(
+            row=row,
+            mapping=mapping,
+            row_filter=row_filter,
+            condition_column=condition_column,
+        ),
     )
+
+
+def _derive_condition(
+    row: dict[str, str | None],
+    mapping: EventColumnMapping,
+    condition_column: str | None,
+) -> str | None:
+    if condition_column is not None:
+        return _optional_str(row, condition_column)
+
+    mapped = _optional_str(row, mapping.trial_type)
+    if mapped is not None:
+        return mapped
+
+    bids_trial_type = _optional_str(row, "trial_type")
+    if bids_trial_type is not None:
+        return bids_trial_type
+
+    return _optional_str(row, "value")
+
+
+def _selected_source_columns(
+    *,
+    row: dict[str, str | None],
+    mapping: EventColumnMapping,
+    row_filter: EventRowFilter | None,
+    condition_column: str | None,
+) -> dict[str, str | None]:
+    column_names = _selected_source_column_names(
+        row=row,
+        mapping=mapping,
+        row_filter=row_filter,
+        condition_column=condition_column,
+    )
+    return {
+        column_name: _normalized_filter_value(row.get(column_name))
+        for column_name in column_names
+        if column_name in row
+    }
+
+
+def _selected_source_column_names(
+    *,
+    row: dict[str, str | None],
+    mapping: EventColumnMapping,
+    row_filter: EventRowFilter | None,
+    condition_column: str | None,
+) -> list[str]:
+    names: list[str] = []
+    for field_name in _MAPPING_SOURCE_FIELDS:
+        column_name = getattr(mapping, field_name)
+        if column_name:
+            names.append(column_name)
+
+    if row_filter is not None:
+        names.extend(condition.column for condition in row_filter.include)
+        names.extend(condition.column for condition in row_filter.exclude)
+
+    if condition_column:
+        names.append(condition_column)
+    else:
+        if "trial_type" in row:
+            names.append("trial_type")
+        if "value" in row:
+            names.append("value")
+
+    return list(dict.fromkeys(names))
 
 
 def _require_column(
