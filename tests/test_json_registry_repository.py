@@ -31,6 +31,7 @@ from eeg_core.domain import (
     Recording,
     RecordingMetadata,
     RunKind,
+    SourceFileMetadata,
     UploadedFile,
     UploadedFileKind,
     ValidationSeverity,
@@ -182,6 +183,8 @@ def test_registry_persists_uploaded_files_and_recording(tmp_path):
     assert stored["metadata"]["channel_details"] == []
     assert stored["metadata"]["line_frequency_hz"] is None
     assert stored["metadata"]["reference"] is None
+    assert stored["metadata"]["source_files"] == []
+    assert stored["metadata"]["sidecar_discovery"] == {}
 
 
 def test_registry_loads_legacy_recording_metadata_without_sidecar_fields(tmp_path):
@@ -214,6 +217,8 @@ def test_registry_loads_legacy_recording_metadata_without_sidecar_fields(tmp_pat
     assert recording.metadata.channel_details == []
     assert recording.metadata.line_frequency_hz is None
     assert recording.metadata.reference is None
+    assert recording.metadata.source_files == []
+    assert recording.metadata.sidecar_discovery == {}
 
 
 def test_registry_loads_recording_metadata_with_sidecar_fields(tmp_path):
@@ -279,6 +284,65 @@ def test_registry_loads_recording_metadata_with_sidecar_fields(tmp_path):
     ]
     assert recording.metadata.line_frequency_hz == 60.0
     assert recording.metadata.reference == "Cz"
+
+
+def test_registry_persists_recording_source_files_and_sidecar_discovery(tmp_path):
+    repository = JsonRegistryRepository(tmp_path / "uploads")
+    recording = Recording(
+        recording_id="recording-001",
+        dataset_id="dataset-001",
+        file_id="file-001",
+        metadata=RecordingMetadata(
+            dataset_id="dataset-001",
+            file_format="fif",
+            channel_count=2,
+            sampling_rate_hz=256,
+            duration_seconds=4,
+            channel_names=["Fp1", "Fp2"],
+            source_files=[
+                SourceFileMetadata(
+                    role="eeg_file",
+                    original_filename="sub-001_task-rest_eeg.fif",
+                    stored_path="data/raw/uploads/dataset-001/eeg/sub-001_task-rest_eeg.fif",
+                    size_bytes=123,
+                    checksum_sha256="abc123",
+                    content_type="application/octet-stream",
+                ),
+                SourceFileMetadata(
+                    role="bids_sidecar",
+                    original_filename="sub-001_task-rest_eeg.json",
+                    stored_path="data/raw/uploads/dataset-001/eeg/sub-001_task-rest_eeg.json",
+                    size_bytes=45,
+                    checksum_sha256="def456",
+                    content_type="application/json",
+                    sidecar_type="eeg_json",
+                    status="valid",
+                ),
+            ],
+            sidecar_discovery={
+                "schema_version": 1,
+                "bids_basename": "sub-001_task-rest",
+                "candidates": [
+                    {
+                        "sidecar_type": "eeg_json",
+                        "status": "valid",
+                    }
+                ],
+            },
+        ),
+    )
+
+    repository.save_recording(recording)
+
+    loaded = repository.get_recording("dataset-001")
+    assert loaded == recording
+    stored = json.loads(
+        repository.recording_path("dataset-001").read_text(encoding="utf-8")
+    )
+    assert stored["metadata"]["source_files"][1]["sidecar_type"] == "eeg_json"
+    assert stored["metadata"]["sidecar_discovery"]["bids_basename"] == (
+        "sub-001_task-rest"
+    )
 
 
 def test_registry_preserves_concurrent_uploaded_file_writes(tmp_path):

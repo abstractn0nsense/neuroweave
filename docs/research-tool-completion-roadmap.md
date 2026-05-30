@@ -31,7 +31,8 @@ ingest -> preprocessing -> epoch -> ERP -> comparison 흐름을 반복 검증할
 | Phase 2/3/C browser smoke | 완료 | `npm run e2e:all`이 Phase 2, Phase C batch, Phase 3 epoch, Phase 3 ERP smoke 실행 | CI/릴리스 검증에 계속 사용 |
 | Workflow templates | 완료 | template persistence, apply preview, subject-specific field exclusion, review-required handling 테스트 보유 | Phase D에서는 호환성 유지 |
 | Batch execution | 완료 | persisted batch plan, worker execution, retry, cancellation, partial completion, summary artifact 구현 | Phase D에서는 public data smoke와 export 호환성 유지 |
-| BIDS sidecar discovery | 완료 | parser에서 adjacent sidecar discovery contract로 확장, EEG/event upload 응답에 discovery diagnostics 추가 | D2에서 metadata/provenance attachment |
+| BIDS sidecar discovery | 완료 | parser에서 adjacent sidecar discovery contract로 확장, EEG/event upload 응답에 discovery diagnostics 추가 | D3에서 BIDS events normalization hardening |
+| Dataset metadata/provenance attachment | 완료 | recording metadata에 source file manifest와 sidecar discovery snapshot 저장, discovered sidecars를 uploaded metadata files로 보존 | D3에서 event source row/source column 보존 |
 | Event mapping v2 | MVP 있음 | preset, row filter, provenance snapshot API/UI 경로와 테스트 존재 | Phase D에서 BIDS `events.tsv` normalization hardening |
 | Structured warning/diagnostics | MVP 있음 | run diagnostics에 structured warning 병행, UI는 structured warning 우선 표시 | Phase D에서 taxonomy 안정화 |
 | QC dashboard/summary | MVP 있음 | preprocessing/epoch/ERP QC summary와 UI dashboard 경로 존재 | Phase D에서 sidecar/provenance/diagnostics 표시 보강 |
@@ -381,7 +382,7 @@ Phase D 제외 범위:
 4. workflow template + batch foundation: 완료
 5. D0 roadmap sync: 완료
 6. D1 BIDS sidecar discovery contract: 완료
-7. D2 dataset metadata/provenance attachment
+7. D2 dataset metadata/provenance attachment: 완료
 8. D3 BIDS events normalization hardening
 9. D4 diagnostic warning taxonomy
 10. D5 public dataset smoke fixtures

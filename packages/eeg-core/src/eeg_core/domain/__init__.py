@@ -70,8 +70,10 @@ from eeg_core.domain.batch_planning import (
 from eeg_core.domain.recording import (
     ChannelMetadata,
     RecordingMetadata,
+    SourceFileMetadata,
     channel_metadata_from_dict,
     recording_metadata_from_dict,
+    source_file_metadata_from_dict,
 )
 from eeg_core.domain.validation import validate_ingestion_dataset
 
@@ -118,8 +120,10 @@ __all__ = [
     "Recording",
     "ChannelMetadata",
     "RecordingMetadata",
+    "SourceFileMetadata",
     "channel_metadata_from_dict",
     "recording_metadata_from_dict",
+    "source_file_metadata_from_dict",
     "RunDiagnostics",
     "RunKind",
     "Session",

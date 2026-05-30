@@ -97,6 +97,7 @@ def test_upload_bids_events_file_discovers_events_sidecar(tmp_path, monkeypatch)
             "diagnostics": [],
         }
     ]
+    assert payload["sidecar_files"] == []
 
 
 def test_upload_event_log_requires_existing_dataset(tmp_path, monkeypatch):

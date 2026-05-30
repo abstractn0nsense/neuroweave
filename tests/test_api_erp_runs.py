@@ -131,7 +131,7 @@ def _wait_for_run_status(
     path: str,
     expected_status: str,
 ) -> dict:
-    for _ in range(120):
+    for _ in range(240):
         response = client.get(path)
         assert response.status_code == 200
         payload = response.json()

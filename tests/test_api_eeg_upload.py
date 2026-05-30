@@ -198,12 +198,45 @@ def test_upload_eeg_file_discovers_adjacent_bids_sidecars(tmp_path, monkeypatch)
         "events_tsv": "valid",
     }
     assert payload["sidecar_discovery"]["diagnostics"] == []
+    assert [
+        sidecar_file["original_filename"]
+        for sidecar_file in payload["sidecar_files"]
+    ] == [
+        "sub-001_task-oddball_eeg.json",
+        "sub-001_task-oddball_channels.tsv",
+        "sub-001_task-oddball_events.tsv",
+    ]
+    assert all(
+        sidecar_file["kind"] == "metadata"
+        and sidecar_file["checksum_sha256"]
+        for sidecar_file in payload["sidecar_files"]
+    )
     assert payload["recording"]["metadata"]["line_frequency_hz"] == 60.0
     assert payload["recording"]["metadata"]["reference"] == "Cz"
     assert payload["recording"]["metadata"]["channel_details"][1]["status"] == "bad"
+    source_files = payload["recording"]["metadata"]["source_files"]
+    assert [source_file["role"] for source_file in source_files] == [
+        "eeg_file",
+        "bids_sidecar",
+        "bids_sidecar",
+        "bids_sidecar",
+    ]
+    assert {source_file["sidecar_type"] for source_file in source_files[1:]} == {
+        "eeg_json",
+        "channels_tsv",
+        "events_tsv",
+    }
+    assert source_files[0]["checksum_sha256"] == payload["uploaded_file"][
+        "checksum_sha256"
+    ]
+    assert payload["recording"]["metadata"]["sidecar_discovery"][
+        "bids_basename"
+    ] == "sub-001_task-oddball"
     stored_recording = repository.get_recording("dataset-001")
     assert stored_recording is not None
     assert stored_recording.metadata.reference == "Cz"
+    assert len(stored_recording.metadata.source_files) == 4
+    assert len(repository.list_uploaded_files("dataset-001")) == 4
 
 
 def test_upload_eeg_file_reports_invalid_discovered_sidecar_without_failing(
@@ -240,6 +273,11 @@ def test_upload_eeg_file_reports_invalid_discovered_sidecar_without_failing(
     assert payload["sidecar_discovery"]["diagnostics"][0]["code"] == (
         "bids_sidecar_invalid"
     )
+    assert payload["sidecar_files"][0]["kind"] == "metadata"
+    assert payload["recording"]["metadata"]["source_files"][1]["status"] == "invalid"
+    assert payload["recording"]["metadata"]["source_files"][1]["diagnostics"][0][
+        "code"
+    ] == "bids_sidecar_invalid"
     assert payload["recording"]["metadata"]["line_frequency_hz"] is None
 
 
@@ -293,6 +331,8 @@ def test_upload_channels_sidecar_enriches_recording_metadata(tmp_path, monkeypat
     stored_recording = repository.get_recording("dataset-001")
     assert stored_recording is not None
     assert stored_recording.metadata.channel_details[1].status == "bad"
+    assert stored_recording.metadata.source_files[-1].sidecar_type == "channels_tsv"
+    assert stored_recording.metadata.source_files[-1].checksum_sha256
 
 
 def test_upload_eeg_json_sidecar_enriches_line_frequency_and_reference(

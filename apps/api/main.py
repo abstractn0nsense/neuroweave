@@ -67,7 +67,9 @@ from eeg_core.domain import (  # noqa: E402
     PreprocessingRunStatus,
     Project,
     Recording,
+    RecordingMetadata,
     RunKind,
+    SourceFileMetadata,
     UploadedFile as IngestionUploadedFile,
     UploadedFileKind,
     ValidationIssue,
@@ -483,6 +485,18 @@ class ChannelMetadataPayload(BaseModel):
     status_description: str | None = None
 
 
+class SourceFileMetadataPayload(BaseModel):
+    role: str
+    original_filename: str
+    stored_path: str
+    size_bytes: int | None = None
+    checksum_sha256: str | None = None
+    content_type: str | None = None
+    sidecar_type: str | None = None
+    status: str | None = None
+    diagnostics: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class DatasetMetadata(BaseModel):
     id: str
     format: str
@@ -493,6 +507,8 @@ class DatasetMetadata(BaseModel):
     channel_details: list[ChannelMetadataPayload] = Field(default_factory=list)
     line_frequency_hz: float | None = None
     reference: str | None = None
+    source_files: list[SourceFileMetadataPayload] = Field(default_factory=list)
+    sidecar_discovery: dict[str, Any] = Field(default_factory=dict)
 
 
 class CreateDatasetRequest(BaseModel):
@@ -569,6 +585,7 @@ class EegUploadResponse(BaseModel):
     uploaded_file: UploadedFileResponse
     recording: RecordingResponse
     sidecar_discovery: BidsSidecarDiscoveryResponse | None = None
+    sidecar_files: list[UploadedFileResponse] = Field(default_factory=list)
 
 
 class SidecarUploadResponse(BaseModel):
@@ -589,6 +606,7 @@ class EventUploadResponse(BaseModel):
     uploaded_file: UploadedFileResponse
     preview: EventLogPreviewResponse
     sidecar_discovery: BidsSidecarDiscoveryResponse | None = None
+    sidecar_files: list[UploadedFileResponse] = Field(default_factory=list)
 
 
 class EventColumnMappingPayload(BaseModel):
@@ -1346,13 +1364,24 @@ def upload_dataset_eeg_file(
     )
     registry_repository.save_uploaded_file(uploaded_file)
 
+    sidecar_discovery = discover_bids_sidecars(stored_path)
+    sidecar_files = _save_discovered_sidecar_files(
+        dataset_id=dataset_id,
+        discovery=sidecar_discovery,
+    )
+    metadata = _recording_metadata_with_source_manifest(
+        metadata=metadata,
+        primary_file=uploaded_file,
+        primary_role="eeg_file",
+        sidecar_files=sidecar_files,
+        sidecar_discovery=sidecar_discovery,
+    )
     recording = Recording(
         recording_id=_new_id("recording"),
         dataset_id=dataset_id,
         file_id=uploaded_file.file_id,
         metadata=metadata,
     )
-    sidecar_discovery = discover_bids_sidecars(stored_path)
     recording = _recording_with_discovered_sidecars(recording, sidecar_discovery)
     registry_repository.save_recording(recording)
 
@@ -1368,6 +1397,10 @@ def upload_dataset_eeg_file(
         uploaded_file=_uploaded_file_response(uploaded_file),
         recording=_recording_response(recording),
         sidecar_discovery=_bids_sidecar_discovery_response(sidecar_discovery),
+        sidecar_files=[
+            _uploaded_file_response(sidecar_file)
+            for sidecar_file in sidecar_files
+        ],
     )
 
 
@@ -1409,6 +1442,20 @@ def upload_dataset_sidecar_file(
         checksum_sha256=_sha256_file(stored_path),
     )
     registry_repository.save_uploaded_file(uploaded_file)
+    enriched_recording = replace(
+        enriched_recording,
+        metadata=_recording_metadata_with_added_sources(
+            enriched_recording.metadata,
+            [
+                _source_file_metadata_from_upload(
+                    uploaded_file,
+                    role="bids_sidecar",
+                    sidecar_type=_sidecar_type_for_path(stored_path),
+                    status="valid",
+                )
+            ],
+        ),
+    )
     registry_repository.save_recording(enriched_recording)
 
     return SidecarUploadResponse(
@@ -1454,6 +1501,10 @@ def upload_dataset_events_file(
     registry_repository.save_uploaded_file(uploaded_file)
     registry_repository.save_events_preview(dataset_id, preview)
     sidecar_discovery = discover_bids_sidecars(stored_path)
+    sidecar_files = _save_discovered_sidecar_files(
+        dataset_id=dataset_id,
+        discovery=sidecar_discovery,
+    )
 
     updated_dataset = replace(
         dataset,
@@ -1467,6 +1518,10 @@ def upload_dataset_events_file(
         uploaded_file=_uploaded_file_response(uploaded_file),
         preview=EventLogPreviewResponse(**preview),
         sidecar_discovery=_bids_sidecar_discovery_response(sidecar_discovery),
+        sidecar_files=[
+            _uploaded_file_response(sidecar_file)
+            for sidecar_file in sidecar_files
+        ],
     )
 
 
@@ -2372,7 +2427,28 @@ def _recording_response(recording: Recording) -> RecordingResponse:
             ],
             line_frequency_hz=recording.metadata.line_frequency_hz,
             reference=recording.metadata.reference,
+            source_files=[
+                _source_file_metadata_payload(source_file)
+                for source_file in recording.metadata.source_files
+            ],
+            sidecar_discovery=recording.metadata.sidecar_discovery,
         ),
+    )
+
+
+def _source_file_metadata_payload(
+    source_file: SourceFileMetadata,
+) -> SourceFileMetadataPayload:
+    return SourceFileMetadataPayload(
+        role=source_file.role,
+        original_filename=source_file.original_filename,
+        stored_path=source_file.stored_path,
+        size_bytes=source_file.size_bytes,
+        checksum_sha256=source_file.checksum_sha256,
+        content_type=source_file.content_type,
+        sidecar_type=source_file.sidecar_type,
+        status=source_file.status,
+        diagnostics=source_file.diagnostics,
     )
 
 
@@ -2412,6 +2488,224 @@ def _bids_sidecar_discovery_response(
             for diagnostic in discovery.diagnostics
         ],
     )
+
+
+def _save_discovered_sidecar_files(
+    *,
+    dataset_id: str,
+    discovery: BidsSidecarDiscovery,
+) -> list[IngestionUploadedFile]:
+    existing_paths = {
+        str(Path(uploaded_file.stored_path).resolve())
+        for uploaded_file in registry_repository.list_uploaded_files(dataset_id)
+    }
+    reference_path = str(discovery.reference_path.resolve())
+    uploaded_sidecars: list[IngestionUploadedFile] = []
+
+    for candidate in discovery.candidates:
+        resolved_path = str(candidate.path.resolve())
+        if resolved_path == reference_path or resolved_path in existing_paths:
+            continue
+        uploaded_file = IngestionUploadedFile(
+            file_id=_new_id("file"),
+            dataset_id=dataset_id,
+            kind=UploadedFileKind.METADATA,
+            original_filename=candidate.path.name,
+            stored_path=str(candidate.path),
+            content_type=_content_type_for_path(candidate.path),
+            size_bytes=candidate.path.stat().st_size,
+            checksum_sha256=_sha256_file(candidate.path),
+        )
+        registry_repository.save_uploaded_file(uploaded_file)
+        existing_paths.add(resolved_path)
+        uploaded_sidecars.append(uploaded_file)
+
+    return uploaded_sidecars
+
+
+def _recording_metadata_with_source_manifest(
+    *,
+    metadata: RecordingMetadata,
+    primary_file: IngestionUploadedFile,
+    primary_role: str,
+    sidecar_files: list[IngestionUploadedFile],
+    sidecar_discovery: BidsSidecarDiscovery,
+) -> RecordingMetadata:
+    return replace(
+        _recording_metadata_with_added_sources(
+            metadata,
+            [
+                _source_file_metadata_from_upload(primary_file, role=primary_role),
+                *[
+                    _source_file_metadata_from_upload(
+                        sidecar_file,
+                        role="bids_sidecar",
+                        sidecar_type=_sidecar_type_for_path(
+                            Path(sidecar_file.stored_path)
+                        ),
+                        status=_sidecar_status_for_path(
+                            sidecar_discovery,
+                            Path(sidecar_file.stored_path),
+                        ),
+                        diagnostics=_sidecar_diagnostics_for_path(
+                            sidecar_discovery,
+                            Path(sidecar_file.stored_path),
+                        ),
+                    )
+                    for sidecar_file in sidecar_files
+                ],
+            ],
+        ),
+        sidecar_discovery=_bids_sidecar_discovery_metadata(sidecar_discovery),
+    )
+
+
+def _recording_metadata_with_added_sources(
+    metadata: RecordingMetadata,
+    source_files: list[SourceFileMetadata],
+) -> RecordingMetadata:
+    by_key = {
+        (source_file.role, source_file.stored_path): source_file
+        for source_file in metadata.source_files
+    }
+    for source_file in source_files:
+        by_key[(source_file.role, source_file.stored_path)] = source_file
+    return replace(metadata, source_files=list(by_key.values()))
+
+
+def _source_file_metadata_from_upload(
+    uploaded_file: IngestionUploadedFile,
+    *,
+    role: str,
+    sidecar_type: str | None = None,
+    status: str | None = None,
+    diagnostics: list[dict[str, Any]] | None = None,
+) -> SourceFileMetadata:
+    return SourceFileMetadata(
+        role=role,
+        original_filename=uploaded_file.original_filename,
+        stored_path=uploaded_file.stored_path,
+        size_bytes=uploaded_file.size_bytes,
+        checksum_sha256=uploaded_file.checksum_sha256,
+        content_type=uploaded_file.content_type,
+        sidecar_type=sidecar_type,
+        status=status,
+        diagnostics=diagnostics or [],
+    )
+
+
+def _source_file_payload_from_upload(
+    uploaded_file: IngestionUploadedFile,
+    *,
+    role: str,
+    sidecar_type: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "role": role,
+        "file_id": uploaded_file.file_id,
+        "original_filename": uploaded_file.original_filename,
+        "stored_path": uploaded_file.stored_path,
+        "path": uploaded_file.stored_path,
+        "content_type": uploaded_file.content_type,
+        "size_bytes": uploaded_file.size_bytes,
+        "checksum_sha256": uploaded_file.checksum_sha256,
+    }
+    if sidecar_type is not None:
+        payload["sidecar_type"] = sidecar_type
+    return payload
+
+
+def _bids_sidecar_discovery_metadata(discovery: BidsSidecarDiscovery) -> dict[str, Any]:
+    return {
+        "schema_version": discovery.schema_version,
+        "reference_path": str(discovery.reference_path),
+        "bids_basename": discovery.bids_basename,
+        "candidates": [
+            {
+                "sidecar_type": candidate.sidecar_type,
+                "path": str(candidate.path),
+                "status": candidate.status,
+                "diagnostics": [
+                    {
+                        "severity": diagnostic.severity,
+                        "source": diagnostic.source,
+                        "code": diagnostic.code,
+                        "impact": diagnostic.impact,
+                        "suggested_action": diagnostic.suggested_action,
+                    }
+                    for diagnostic in candidate.diagnostics
+                ],
+            }
+            for candidate in discovery.candidates
+        ],
+        "diagnostics": [
+            {
+                "severity": diagnostic.severity,
+                "source": diagnostic.source,
+                "code": diagnostic.code,
+                "impact": diagnostic.impact,
+                "suggested_action": diagnostic.suggested_action,
+            }
+            for diagnostic in discovery.diagnostics
+        ],
+    }
+
+
+def _sidecar_status_for_path(
+    discovery: BidsSidecarDiscovery,
+    path: Path,
+) -> str | None:
+    resolved_path = path.resolve()
+    for candidate in discovery.candidates:
+        if candidate.path.resolve() == resolved_path:
+            return candidate.status
+    return None
+
+
+def _sidecar_diagnostics_for_path(
+    discovery: BidsSidecarDiscovery,
+    path: Path,
+) -> list[dict[str, Any]]:
+    resolved_path = path.resolve()
+    for candidate in discovery.candidates:
+        if candidate.path.resolve() == resolved_path:
+            return [
+                {
+                    "severity": diagnostic.severity,
+                    "source": diagnostic.source,
+                    "code": diagnostic.code,
+                    "impact": diagnostic.impact,
+                    "suggested_action": diagnostic.suggested_action,
+                }
+                for diagnostic in candidate.diagnostics
+            ]
+    return []
+
+
+def _sidecar_type_for_path(path: Path) -> str | None:
+    lower_name = path.name.lower()
+    if lower_name.endswith("_eeg.json"):
+        return "eeg_json"
+    if lower_name.endswith("_channels.tsv"):
+        return "channels_tsv"
+    if lower_name.endswith("_events.tsv"):
+        return "events_tsv"
+    if lower_name.endswith("_electrodes.tsv"):
+        return "electrodes_tsv"
+    if lower_name.endswith("_coordsystem.json"):
+        return "coordsystem_json"
+    return None
+
+
+def _content_type_for_path(path: Path) -> str | None:
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        return "application/json"
+    if suffix == ".tsv":
+        return "text/tab-separated-values"
+    if suffix == ".csv":
+        return "text/csv"
+    return None
 
 
 def _recording_with_discovered_sidecars(
@@ -6569,7 +6863,7 @@ def _event_log_provenance(
     mapping: EventColumnMapping,
     row_filter: EventRowFilter | None,
 ) -> dict:
-    return build_event_log_provenance_payload(
+    payload = build_event_log_provenance_payload(
         dataset_id=dataset_id,
         event_log_id=uploaded_file.file_id,
         event_file={
@@ -6586,6 +6880,16 @@ def _event_log_provenance(
         row_filter_snapshot=asdict(row_filter) if row_filter is not None else None,
         created_at_utc=_utc_now_iso(),
     )
+    payload["sources"].extend(
+        _source_file_payload_from_upload(
+            source_file,
+            role="bids_sidecar",
+            sidecar_type=_sidecar_type_for_path(Path(source_file.stored_path)),
+        )
+        for source_file in registry_repository.list_uploaded_files(dataset_id)
+        if source_file.kind == UploadedFileKind.METADATA
+    )
+    return payload
 
 
 def _new_id(prefix: str) -> str:

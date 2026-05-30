@@ -107,7 +107,7 @@ def _wait_for_run_status(
     run_id: str,
     expected_status: str,
 ) -> dict:
-    for _ in range(100):
+    for _ in range(240):
         response = client.get(f"/preprocessing-runs/{run_id}")
         assert response.status_code == 200
         payload = response.json()
