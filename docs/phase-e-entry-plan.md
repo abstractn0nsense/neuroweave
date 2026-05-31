@@ -72,14 +72,17 @@ The following items are explicitly not required to close Phase E:
 - Group-level subject statistics and publication-grade tables.
 - Automatic one-click rerun execution.
 - Broad public dataset CI that downloads and runs multiple large EEG datasets by
-  default.
-- Complete multi-subject batch UI beyond the Phase C foundation.
-- Collaboration, project archive sharing, and immutable shareable snapshots.
-- Advanced artifact workflows such as ICA execution, bad-channel interpolation,
-  and manual artifact review.
-- Large visual regression suite for all ERP and QC views.
-- Data governance polish such as explicit local data deletion, preview-version
-  migration tooling, and retention-policy workflows.
+  default; Phase E only adds the opt-in workflow contract.
+- Complete multi-subject batch UI beyond the E9 filter slice, including richer
+  subject/session grouping and failed-only retry UX.
+- Hosted collaboration, project archive generation/import UI, and snapshot
+  exchange workflows beyond the E12 immutable manifest contract.
+- Advanced artifact workflow execution such as ICA, bad-channel interpolation,
+  and manual artifact review beyond the E10 action/state contract.
+- Large visual regression suite for all ERP and QC views beyond the E8 seed.
+- Data governance polish beyond the E11 dataset-local deletion MVP, such as
+  project export/delete, preview-version migration tooling, and retention-policy
+  workflows.
 
 ## Compatibility Rules
 
@@ -359,3 +362,35 @@ Acceptance:
 - Regression gate passes.
 - Phase E artifacts and contracts are documented.
 - Phase F-or-later carryover is explicit.
+
+Status: complete. Final gate on 2026-05-31:
+
+- `.\apps\api\.venv\Scripts\python.exe -m pytest tests -o cache_dir=data/cache/pytest-cache --basetemp data/cache/pytest-phase-e-final`:
+  297 passed.
+- `npm.cmd run build` in `apps/web`: passed.
+- `npm.cmd run e2e:all` in `apps/web`: passed, including Phase 2
+  preprocessing, Phase C batch retry, Phase 3 epoch, and Phase 3 ERP smoke
+  tests.
+
+Final Phase E behavior:
+
+- ERP comparisons now have a Phase E statistics contract and one paired
+  mean-amplitude t-test MVP, with statistics surfaced in API responses,
+  `analysis_report.json`, export manifests, and structured diagnostics.
+- Completed analysis paths now have a reproducibility graph contract,
+  read-only lineage UI, and deterministic rerun-plan preview that separates
+  blockers from warnings without executing reruns.
+- Phase E also closes the agreed narrow MVP/contract slices for public dataset
+  opt-in CI, visual regression seed coverage, batch item filtering, advanced
+  artifact action planning, dataset-local deletion, and immutable collaboration
+  snapshots.
+
+Phase F-or-later carryover:
+
+- Productionized public-data CI matrices and larger dataset coverage.
+- Full ERP/QC visual regression suite.
+- Richer multi-subject batch grouping and retry UX beyond the E9 filter slice.
+- Actual artifact review execution for ICA, interpolation, and manual review.
+- Project archive generation/import UI and hosted collaboration workflows.
+- Broader data governance, including project-level export/delete, migration,
+  retention-policy, and audit workflows.
