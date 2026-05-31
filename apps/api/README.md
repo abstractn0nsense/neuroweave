@@ -46,6 +46,7 @@ GET /projects/{project_id}/experiments
 POST /datasets
 GET /datasets
 GET /datasets/{dataset_id}
+DELETE /datasets/{dataset_id}/local-data?confirm_dataset_id={dataset_id}
 POST /datasets/{dataset_id}/files/eeg
 POST /datasets/{dataset_id}/files/events
 POST /datasets/{dataset_id}/events/mapping
@@ -79,6 +80,12 @@ Project, experiment, dataset, upload, and event endpoints write through
 `data/raw/uploads/`.
 
 Run metadata is written through `eeg_io.registry.JsonRunRepository` under `data/runs/`. New run records include a `run_kind` and `schema_version` marker while remaining compatible with older preprocessing run JSON that does not have those fields. Processed FIF outputs are written under `data/processed/`.
+
+Dataset-scoped local data deletion is available through
+`DELETE /datasets/{dataset_id}/local-data?confirm_dataset_id={dataset_id}`.
+The endpoint supports `dry_run=true`, refuses to run while dataset runs are
+pending/running/cancelling, and deletes only paths under known local data roots.
+See `docs/data-governance-mvp.md`.
 
 Workflow templates are written through
 `eeg_io.registry.JsonWorkflowTemplateRepository` under `data/templates/`, or

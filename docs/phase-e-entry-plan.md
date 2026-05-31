@@ -305,7 +305,26 @@ contract is pinned by `docs/schemas/artifact-action.schema.json`,
 `tests/fixtures/artifacts/artifact_action_manual_review_v1.json`, and
 `tests/test_advanced_artifact_workflow_contract.py`.
 
-### E11. Phase E Exit Gate
+### E11. Data Governance MVP
+
+- Add one minimal local data management feature for the preview version.
+- Selected slice: explicit dataset-scoped local data deletion.
+- Keep project export/delete deferred.
+
+Acceptance:
+
+- Dataset-local deletion requires an explicit matching confirmation id.
+- Dry-run mode previews paths and run ids without deleting files.
+- Active pending/running/cancelling runs block deletion.
+- Deletion is constrained to known local data roots and documented.
+
+Status: complete. `DELETE /datasets/{dataset_id}/local-data` now deletes
+dataset upload registry files, dataset run metadata, and dataset-scoped
+processed/epoch/ERP output directories only after `confirm_dataset_id` matches.
+The endpoint supports `dry_run=true`, blocks active runs, and is documented in
+`docs/data-governance-mvp.md`.
+
+### E12. Phase E Exit Gate
 
 - Run the full Python test gate, web build, and `npm.cmd run e2e:all`.
 - Record final statistics and reproducibility behavior.

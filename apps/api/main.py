@@ -541,6 +541,15 @@ class DatasetsResponse(BaseModel):
     datasets: list[DatasetResponse]
 
 
+class DatasetLocalDataDeletionResponse(BaseModel):
+    dataset_id: str
+    dry_run: bool
+    deleted: bool
+    deleted_paths: list[str] = Field(default_factory=list)
+    run_ids: dict[str, list[str]] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class UploadedFileResponse(BaseModel):
     file_id: str
     dataset_id: str
@@ -1307,6 +1316,51 @@ def list_datasets(project_id: str | None = None) -> DatasetsResponse:
             _dataset_response(dataset)
             for dataset in registry_repository.list_datasets(project_id=project_id)
         ]
+    )
+
+
+@app.delete(
+    "/datasets/{dataset_id}/local-data",
+    response_model=DatasetLocalDataDeletionResponse,
+)
+def delete_dataset_local_data(
+    dataset_id: str,
+    confirm_dataset_id: str,
+    dry_run: bool = False,
+) -> DatasetLocalDataDeletionResponse:
+    dataset = registry_repository.get_dataset(dataset_id)
+    if dataset is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    if confirm_dataset_id != dataset_id:
+        raise HTTPException(
+            status_code=400,
+            detail="confirm_dataset_id must match dataset_id",
+        )
+
+    plan = _dataset_local_data_deletion_plan(dataset_id)
+    if plan["active_run_ids"]:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Dataset has active runs; wait for them to settle before deletion.",
+                "active_run_ids": plan["active_run_ids"],
+            },
+        )
+
+    if not dry_run:
+        for path in plan["paths"]:
+            if path.is_dir():
+                shutil.rmtree(path)
+            elif path.is_file():
+                path.unlink()
+
+    return DatasetLocalDataDeletionResponse(
+        dataset_id=dataset_id,
+        dry_run=dry_run,
+        deleted=not dry_run,
+        deleted_paths=[str(path) for path in plan["paths"]],
+        run_ids=plan["run_ids"],
+        warnings=plan["warnings"],
     )
 
 
@@ -4816,6 +4870,121 @@ def _find_run_by_id(run_id: str) -> PreprocessingRun | EpochRun | ErpRun | None:
         run_repository.get_preprocessing_run(run_id)
         or run_repository.get_epoch_run(run_id)
         or run_repository.get_erp_run(run_id)
+    )
+
+
+def _dataset_local_data_deletion_plan(dataset_id: str) -> dict[str, Any]:
+    preprocessing_runs = run_repository.list_preprocessing_runs(dataset_id)
+    epoch_runs = run_repository.list_epoch_runs(dataset_id)
+    erp_runs = run_repository.list_erp_runs(dataset_id)
+    runs: list[PreprocessingRun | EpochRun | ErpRun] = [
+        *preprocessing_runs,
+        *epoch_runs,
+        *erp_runs,
+    ]
+    warnings: list[str] = []
+    paths: list[Path] = []
+
+    _append_safe_deletion_path(
+        paths,
+        registry_repository.dataset_directory(dataset_id),
+        allowed_roots=[registry_repository.datasets_root],
+        warnings=warnings,
+        label="dataset directory",
+    )
+    for run in preprocessing_runs:
+        _append_safe_deletion_path(
+            paths,
+            run_repository.preprocessing_run_directory(run.run_id),
+            allowed_roots=[run_repository.runs_root],
+            warnings=warnings,
+            label=f"preprocessing run {run.run_id}",
+        )
+    for run in epoch_runs:
+        _append_safe_deletion_path(
+            paths,
+            run_repository.epoch_run_directory(run.run_id),
+            allowed_roots=[run_repository.runs_root],
+            warnings=warnings,
+            label=f"epoch run {run.run_id}",
+        )
+    for run in erp_runs:
+        _append_safe_deletion_path(
+            paths,
+            run_repository.erp_run_directory(run.run_id),
+            allowed_roots=[run_repository.runs_root],
+            warnings=warnings,
+            label=f"ERP run {run.run_id}",
+        )
+
+    for output_root in (PROCESSED_DIR, EPOCHS_DIR, ERP_DIR):
+        _append_safe_deletion_path(
+            paths,
+            output_root / dataset_id,
+            allowed_roots=[output_root],
+            warnings=warnings,
+            label=f"output directory {output_root.name}",
+        )
+
+    for run in runs:
+        for path_value, label in (
+            (run.output_path, f"{_run_kind_value(run)} output path {run.run_id}"),
+            (
+                run.output_metadata.get("artifact_manifest_path"),
+                f"{_run_kind_value(run)} artifact manifest directory {run.run_id}",
+            ),
+        ):
+            if isinstance(path_value, str) and path_value.strip():
+                _append_safe_deletion_path(
+                    paths,
+                    Path(path_value).parent,
+                    allowed_roots=[PROCESSED_DIR, EPOCHS_DIR, ERP_DIR],
+                    warnings=warnings,
+                    label=label,
+                )
+
+    return {
+        "paths": _dedupe_paths_deepest_first(paths),
+        "active_run_ids": [
+            run.run_id
+            for run in runs
+            if _run_status_value(run) in {"pending", "running", "cancelling"}
+        ],
+        "run_ids": {
+            "preprocessing": [run.run_id for run in preprocessing_runs],
+            "epoch": [run.run_id for run in epoch_runs],
+            "erp": [run.run_id for run in erp_runs],
+        },
+        "warnings": warnings,
+    }
+
+
+def _append_safe_deletion_path(
+    paths: list[Path],
+    path: Path,
+    *,
+    allowed_roots: list[Path],
+    warnings: list[str],
+    label: str,
+) -> None:
+    resolved_path = path.resolve()
+    resolved_roots = [root.resolve() for root in allowed_roots]
+    if not any(
+        resolved_path == root or resolved_path.is_relative_to(root)
+        for root in resolved_roots
+    ):
+        warnings.append(f"Skipped unsafe {label}: {path}")
+        return
+    if resolved_path.exists():
+        paths.append(resolved_path)
+
+
+def _dedupe_paths_deepest_first(paths: list[Path]) -> list[Path]:
+    deduped = {str(path): path for path in paths}
+    return sorted(
+        deduped.values(),
+        key=lambda path: len(path.parts),
+        reverse=True,
     )
 
 
