@@ -231,11 +231,17 @@ def generate_comparison_summary(
     )
     mean_a = _mean_amplitude_uv(evoked_a, config)
     mean_b = _mean_amplitude_uv(evoked_b, config)
+    statistics = _comparison_statistics(config)
+    note = (
+        "Inferential statistics are available when paired observations are supplied."
+        if statistics["implemented"]
+        else "Inferential statistics are unavailable until paired observations are supplied."
+    )
     payload = {
         "schema_version": 1,
         "erp_run_id": config.erp_run_id,
         "source_metadata_path": str(erp_metadata_path),
-        "note": "Statistical testing is not implemented in Phase 3.",
+        "note": note,
         "metric": config.metric,
         "target": target,
         "window": {
@@ -260,10 +266,7 @@ def generate_comparison_summary(
             "label": f"{config.condition_a} - {config.condition_b}",
             "mean_amplitude_uv": mean_a - mean_b,
         },
-        "statistics": {
-            "implemented": False,
-            "phase": "Phase 4",
-        },
+        "statistics": statistics,
         "mne_version": str(mne.__version__),
         "numpy_version": str(np.__version__),
     }
@@ -273,6 +276,160 @@ def generate_comparison_summary(
         encoding="utf-8",
     )
     return payload
+
+
+def _comparison_statistics(config: ComparisonConfig) -> dict[str, Any]:
+    observations = config.paired_observations
+    if len(observations) < 2:
+        return _statistics_unavailable(
+            config=config,
+            n=len(observations),
+            code="insufficient_observations",
+            impact="Paired t-test requires at least two paired observations.",
+            suggested_action=(
+                "Run the comparison from a multi-subject observation table."
+            ),
+        )
+
+    import numpy as np
+    from scipy import stats
+
+    condition_a = np.array(
+        [observation.condition_a_mean_amplitude_uv for observation in observations],
+        dtype=float,
+    )
+    condition_b = np.array(
+        [observation.condition_b_mean_amplitude_uv for observation in observations],
+        dtype=float,
+    )
+    differences = condition_a - condition_b
+    difference_std = float(np.std(differences, ddof=1))
+    if not np.isfinite(difference_std) or difference_std == 0.0:
+        return _statistics_unavailable(
+            config=config,
+            n=len(observations),
+            code="zero_variance",
+            impact=(
+                "Paired t-test requires non-zero variance in paired differences."
+            ),
+            suggested_action=(
+                "Review the observation table or use a descriptive comparison."
+            ),
+        )
+
+    test_result = stats.ttest_rel(condition_a, condition_b, nan_policy="raise")
+    statistic = float(test_result.statistic)
+    p_value = float(test_result.pvalue)
+    mean_difference = float(np.mean(differences))
+    effect_size = mean_difference / difference_std
+    n = len(observations)
+    return {
+        "schema_version": 1,
+        "status": "implemented",
+        "implemented": True,
+        "phase": "Phase E",
+        "method": "paired_t_test",
+        "design": "within_subject",
+        "input_metric": config.metric,
+        "observation_level": "subject",
+        "condition_pair": {
+            "a": config.condition_a,
+            "b": config.condition_b,
+        },
+        "sample": {
+            "unit": "subject",
+            "paired": True,
+            "n": n,
+            "missing_pairs": 0,
+        },
+        "result": {
+            "statistic_name": "t",
+            "statistic": statistic,
+            "degrees_of_freedom": n - 1,
+            "p_value": p_value,
+            "p_value_kind": "uncorrected",
+            "effect_size": {
+                "name": "cohens_dz",
+                "value": float(effect_size),
+                "interpretation": None,
+            },
+            "confidence_interval": {
+                "implemented": False,
+                "level": None,
+                "lower": None,
+                "upper": None,
+                "unit": "microvolt",
+            },
+            "multiple_comparison": {
+                "applied": False,
+                "method": None,
+                "family": None,
+                "adjusted_p_value": None,
+            },
+        },
+        "assumptions": [
+            {
+                "name": "paired_observations",
+                "status": "met",
+                "detail": (
+                    "Each row has both condition metrics for the same subject."
+                ),
+            },
+            {
+                "name": "nonzero_difference_variance",
+                "status": "met",
+                "detail": (
+                    "Paired differences have non-zero sample standard deviation."
+                ),
+            },
+        ],
+        "diagnostics": {
+            "warnings": [],
+        },
+    }
+
+
+def _statistics_unavailable(
+    *,
+    config: ComparisonConfig,
+    n: int,
+    code: str,
+    impact: str,
+    suggested_action: str,
+) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "status": "unavailable",
+        "implemented": False,
+        "phase": "Phase E",
+        "method": "paired_t_test",
+        "design": "within_subject",
+        "input_metric": config.metric,
+        "observation_level": "subject",
+        "condition_pair": {
+            "a": config.condition_a,
+            "b": config.condition_b,
+        },
+        "sample": {
+            "unit": "subject",
+            "paired": True,
+            "n": n,
+            "missing_pairs": 0,
+        },
+        "result": None,
+        "assumptions": [],
+        "diagnostics": {
+            "warnings": [
+                {
+                    "code": code,
+                    "severity": "warning",
+                    "source": "artifact",
+                    "impact": impact,
+                    "suggested_action": suggested_action,
+                }
+            ],
+        },
+    }
 
 
 def _metadata_conditions_by_label(erp_metadata: dict[str, Any]) -> dict[str, dict[str, Any]]:

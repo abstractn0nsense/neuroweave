@@ -2858,6 +2858,9 @@ function BatchRunsPanel({
   const filteredItems = selectedItems.filter((item) =>
     batchItemMatchesFilter(item, batchFilter),
   );
+  const filterCounts = selectedBatch
+    ? countBatchItemsByFilter(selectedBatch.items)
+    : { all: 0, pending: 0, completed: 0, failed: 0 };
   const batchSummary = selectedBatch ? summarizeBatchItems(selectedBatch.items) : null;
   const canCreateBatch =
     Boolean(activeDataset) &&
@@ -2910,11 +2913,13 @@ function BatchRunsPanel({
             <button
               aria-pressed={batchFilter === filter}
               className="workspace-mode-button"
+              data-testid={`batch-filter-${filter}`}
               key={filter}
               onClick={() => onFilterChange(filter)}
               type="button"
             >
-              {filter}
+              <span>{filter}</span>
+              <strong>{filterCounts[filter]}</strong>
             </button>
           ),
         )}
@@ -2922,6 +2927,10 @@ function BatchRunsPanel({
 
       {selectedBatch ? (
         <>
+          <p className="muted" data-testid="batch-filter-summary">
+            Showing {filteredItems.length} of {selectedItems.length} subject item(s)
+            for {batchFilter}.
+          </p>
           {isActiveBatchStatus(selectedBatch.status) ? (
             <p className="muted">Polling batch detail until execution settles.</p>
           ) : null}
@@ -4235,6 +4244,7 @@ function PreprocessingRunList({
               </button>
             ) : null}
           </div>
+          <ReproducibilityLineage run={run} />
           <RunWarnings diagnostics={run.diagnostics} warnings={run.warnings} />
           {run.errors.length > 0 ? (
             <p className="error-text">{run.errors.join(" ")}</p>
@@ -4526,6 +4536,7 @@ function EpochRunList({
             ) : null}
           </div>
           <ConditionCountSummary metadata={run.output_metadata} />
+          <ReproducibilityLineage run={run} />
           <RunWarnings diagnostics={run.diagnostics} warnings={run.warnings} />
           {run.errors.length > 0 ? (
             <p className="error-text">{run.errors.join(" ")}</p>
@@ -4882,6 +4893,7 @@ function ErpRunList({
                 {exportBusy ? "Preparing..." : "Export ZIP"}
               </button>
             </div>
+            <ReproducibilityLineage run={run} />
             <ErpPreview run={run} />
             <RunWarnings diagnostics={run.diagnostics} warnings={run.warnings} />
             {run.errors.length > 0 ? (
@@ -4892,6 +4904,119 @@ function ErpRunList({
       })}
     </div>
   );
+}
+
+type LineageRun = PreprocessingRun | EpochRun | ErpRun;
+
+type LineageStage = {
+  label: string;
+  value: string;
+  kind: string;
+};
+
+function ReproducibilityLineage({ run }: { run: LineageRun }) {
+  const stages = reproducibilityStages(run);
+  const batchLabel = runBatchLabel(run.output_metadata);
+
+  return (
+    <section
+      aria-label={`Reproducibility lineage ${run.run_id}`}
+      className="lineage-panel"
+      data-testid={`reproducibility-lineage-${run.run_id}`}
+    >
+      <div className="lineage-heading">
+        <strong>Lineage</strong>
+        {batchLabel ? <span>{batchLabel}</span> : null}
+      </div>
+      <ol className="lineage-list">
+        {stages.map((stage) => (
+          <li data-kind={stage.kind} key={`${stage.kind}-${stage.value}`}>
+            <span>{stage.label}</span>
+            <strong>{stage.value}</strong>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+function reproducibilityStages(run: LineageRun): LineageStage[] {
+  const metadata = run.output_metadata;
+  const stages: LineageStage[] = [
+    {
+      label: "Dataset",
+      value: run.dataset_id,
+      kind: "dataset",
+    },
+  ];
+
+  if (run.run_kind === "preprocessing") {
+    stages.push({
+      label: "Preprocessing",
+      value: run.run_id,
+      kind: "preprocessing",
+    });
+    return stages;
+  }
+
+  const preprocessingRunId =
+    metadataString(metadata.input_preprocessing_run_id) ??
+    ("preprocessing_run_id" in run.config
+      ? metadataString(run.config.preprocessing_run_id)
+      : null);
+  if (preprocessingRunId) {
+    stages.push({
+      label: "Preprocessing",
+      value: preprocessingRunId,
+      kind: "preprocessing",
+    });
+  }
+
+  if (run.run_kind === "epoch") {
+    stages.push({
+      label: "Epoch",
+      value: run.run_id,
+      kind: "epoch",
+    });
+    return stages;
+  }
+
+  const epochRunId =
+    metadataString(metadata.input_epoch_run_id) ??
+    ("epoch_run_id" in run.config ? metadataString(run.config.epoch_run_id) : null);
+  if (epochRunId) {
+    stages.push({
+      label: "Epoch",
+      value: epochRunId,
+      kind: "epoch",
+    });
+  }
+  stages.push({
+    label: "ERP",
+    value: run.run_id,
+    kind: "erp",
+  });
+  if (metadata.comparison_available === true) {
+    stages.push({
+      label: "Comparison",
+      value: "comparison_summary",
+      kind: "comparison",
+    });
+  }
+  return stages;
+}
+
+function runBatchLabel(metadata: Record<string, MetadataValue>): string | null {
+  const batchId = metadataString(metadata.batch_id);
+  const batchItemId = metadataString(metadata.batch_item_id);
+  if (!batchId) {
+    return null;
+  }
+  return batchItemId ? `${batchId} / ${batchItemId}` : batchId;
+}
+
+function metadataString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
 }
 
 function ArtifactIntegritySummary({
@@ -5528,6 +5653,22 @@ function ComparisonSummary({ run }: { run: ErpRun }) {
   if (metadata.comparison_available !== true) {
     return null;
   }
+  const statisticsStatus =
+    typeof metadata.comparison_statistics_status === "string"
+      ? metadata.comparison_statistics_status
+      : "deferred";
+  const statisticsMethod =
+    typeof metadata.comparison_statistics_method === "string"
+      ? metadata.comparison_statistics_method
+      : null;
+  const statisticsPValue =
+    typeof metadata.comparison_statistics_p_value === "number"
+      ? metadata.comparison_statistics_p_value
+      : null;
+  const statisticsText =
+    metadata.comparison_statistics_implemented === true && statisticsPValue !== null
+      ? `${statisticsMethod ?? "statistics"} p=${statisticsPValue.toPrecision(3)}`
+      : statisticsStatus;
 
   return (
     <dl className="run-summary-grid" data-testid="comparison-summary">
@@ -5564,7 +5705,7 @@ function ComparisonSummary({ run }: { run: ErpRun }) {
       </div>
       <div>
         <dt>Statistics</dt>
-        <dd>deferred</dd>
+        <dd>{statisticsText}</dd>
       </div>
     </dl>
   );
@@ -6627,6 +6768,18 @@ function summarizeBatchItems(items: BatchSubjectRunPlan[]): string {
     ["pending", "running", "cancelling"].includes(item.status),
   ).length;
   return `${completed} completed / ${failed} failed / ${pending} pending`;
+}
+
+function countBatchItemsByFilter(
+  items: BatchSubjectRunPlan[],
+): Record<BatchItemFilter, number> {
+  return {
+    all: items.length,
+    pending: items.filter((item) => batchItemMatchesFilter(item, "pending")).length,
+    completed: items.filter((item) => batchItemMatchesFilter(item, "completed"))
+      .length,
+    failed: items.filter((item) => batchItemMatchesFilter(item, "failed")).length,
+  };
 }
 
 function formatBatchCurrentStep(

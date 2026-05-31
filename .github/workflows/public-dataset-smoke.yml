@@ -1,0 +1,61 @@
+name: Public Dataset Smoke (Opt-In)
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "Public smoke profile to prepare"
+        required: true
+        default: "physionet_eegmmi_s001r03"
+        type: choice
+        options:
+          - "contracts_only"
+          - "physionet_eegmmi_s001r03"
+      download_public_data:
+        description: "Download public EEG data into ignored data/ paths"
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  public-dataset-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PUBLIC_SMOKE_OUTPUT_DIR: data/raw/public-samples
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install API dependencies
+        run: python -m pip install -r apps/api/requirements.txt
+
+      - name: Validate offline public smoke contracts
+        run: python -m pytest tests/test_public_smoke_contracts.py -o cache_dir=data/cache/pytest-cache
+
+      - name: Prepare PhysioNet EEGMMI smoke files
+        if: ${{ inputs.profile == 'physionet_eegmmi_s001r03' && inputs.download_public_data }}
+        run: python scripts/prepare_physionet_eegmmi_demo.py --output-dir "$PUBLIC_SMOKE_OUTPUT_DIR"
+
+      - name: Summarize skipped public download
+        if: ${{ !inputs.download_public_data }}
+        run: |
+          echo "Public EEG download skipped."
+          echo "Set download_public_data=true when intentionally running the opt-in data smoke."
+
+      - name: Upload public smoke manifest
+        if: ${{ inputs.profile == 'physionet_eegmmi_s001r03' && inputs.download_public_data }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: physionet-eegmmi-smoke-manifest
+          if-no-files-found: error
+          path: |
+            data/raw/public-samples/*_neuroweave_smoke.json
+            data/raw/public-samples/*_events.csv

@@ -49,3 +49,22 @@ The committed tests stay offline. They verify scripts, manifest contracts,
 expected warning snapshots, and documentation references. Network-dependent
 downloads and real public EEG files are opt-in local checks because they can be
 large, slow, and license-sensitive.
+
+## Opt-In CI
+
+The default GitHub Actions CI does not download public EEG data. Public-data
+checks live in `.github/workflows/public-dataset-smoke.yml`, which only runs via
+manual `workflow_dispatch`.
+
+Manual inputs:
+
+- `profile`: choose `contracts_only` for offline contract verification or
+  `physionet_eegmmi_s001r03` for the PhysioNet smoke profile.
+- `download_public_data`: defaults to `false`. Set it to `true` only when the
+  run is intentionally allowed to download the public EDF into
+  `data/raw/public-samples/`.
+
+The workflow always runs `tests/test_public_smoke_contracts.py`. It only runs
+`scripts/prepare_physionet_eegmmi_demo.py` when `download_public_data=true`, and
+it uploads the generated smoke manifest and event CSV as artifacts without
+committing or uploading the EDF recording.

@@ -46,6 +46,7 @@ GET /projects/{project_id}/experiments
 POST /datasets
 GET /datasets
 GET /datasets/{dataset_id}
+DELETE /datasets/{dataset_id}/local-data?confirm_dataset_id={dataset_id}
 POST /datasets/{dataset_id}/files/eeg
 POST /datasets/{dataset_id}/files/events
 POST /datasets/{dataset_id}/events/mapping
@@ -79,6 +80,12 @@ Project, experiment, dataset, upload, and event endpoints write through
 `data/raw/uploads/`.
 
 Run metadata is written through `eeg_io.registry.JsonRunRepository` under `data/runs/`. New run records include a `run_kind` and `schema_version` marker while remaining compatible with older preprocessing run JSON that does not have those fields. Processed FIF outputs are written under `data/processed/`.
+
+Dataset-scoped local data deletion is available through
+`DELETE /datasets/{dataset_id}/local-data?confirm_dataset_id={dataset_id}`.
+The endpoint supports `dry_run=true`, refuses to run while dataset runs are
+pending/running/cancelling, and deletes only paths under known local data roots.
+See `docs/data-governance-mvp.md`.
 
 Workflow templates are written through
 `eeg_io.registry.JsonWorkflowTemplateRepository` under `data/templates/`, or
@@ -126,7 +133,7 @@ Phase 3 analysis output roots are configurable with `NEUROWEAVE_EPOCHS_DIR` and 
 
 Artifact files are served through `GET /artifacts/{run_id}/{filename}` with run artifact-root validation instead of exposing unrestricted filesystem paths.
 
-`POST /erp-runs/{run_id}/comparison-summary` writes descriptive Phase 3 comparison prep under the ERP run artifact directory as `comparison_summary.json`. The summary stores the selected condition pair, channel or GFP target, mean-amplitude window, condition means, A-B difference, and an explicit marker that statistical testing is deferred to Phase 4.
+`POST /erp-runs/{run_id}/comparison-summary` writes comparison prep under the ERP run artifact directory as `comparison_summary.json`. The summary stores the selected condition pair, channel or GFP target, mean-amplitude window, condition means, and A-B difference. Phase E adds an optional paired mean-amplitude t-test when the request supplies subject-level paired observations; otherwise the statistics object is written as `unavailable` with structured diagnostics instead of inventing inferential values from two evoked averages.
 
 Preprocessing runs also persist captured MNE/Python warnings in `warnings`. Failed runs persist `errors`, retain input provenance, and remain available through the run lookup endpoints.
 

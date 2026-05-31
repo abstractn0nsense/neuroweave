@@ -1,0 +1,266 @@
+{
+  "schema_version": 1,
+  "graph_kind": "reproducibility_graph",
+  "created_at_utc": "2026-05-30T00:00:00+00:00",
+  "dataset_id": "dataset-001",
+  "root_node_id": "dataset:dataset-001",
+  "terminal_node_id": "comparison:erp-001:comparison_summary",
+  "nodes": [
+    {
+      "node_id": "dataset:dataset-001",
+      "kind": "dataset",
+      "label": "dataset-001",
+      "dataset_id": "dataset-001",
+      "phase_d": {
+        "recording_source_files": [
+          {
+            "role": "eeg",
+            "original_filename": "sub-001_task-demo_eeg.edf",
+            "stored_path": "data/raw/uploads/sub-001_task-demo_eeg.edf",
+            "checksum_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ],
+        "sidecar_discovery": {
+          "schema_version": 1,
+          "candidates": [
+            {
+              "sidecar_type": "eeg_json",
+              "status": "valid",
+              "path": "data/raw/uploads/sub-001_task-demo_eeg.json"
+            }
+          ]
+        },
+        "event_provenance": {
+          "sources": [
+            {
+              "role": "event_file",
+              "path": "data/raw/uploads/sub-001_task-demo_events.tsv"
+            }
+          ]
+        },
+        "event_source_columns": {
+          "column_names": ["onset", "duration", "trial_type"]
+        }
+      },
+      "diagnostics": {
+        "warnings": []
+      }
+    },
+    {
+      "node_id": "run:preprocessing:preprocess-001",
+      "kind": "preprocessing_run",
+      "label": "preprocess-001",
+      "dataset_id": "dataset-001",
+      "run_id": "preprocess-001",
+      "run_kind": "preprocessing",
+      "status": "completed",
+      "config_snapshot": {
+        "high_pass_hz": 1.0,
+        "low_pass_hz": 40.0,
+        "reference": "average"
+      },
+      "config_digest_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "artifact_manifest": {
+        "path": "data/processed/dataset-001/preprocess-001/artifact_manifest.json",
+        "artifact_count": 4
+      },
+      "artifacts": [
+        {
+          "logical_name": "raw_preprocessed",
+          "artifact_type": "preprocessed_fif",
+          "path": "data/processed/dataset-001/preprocess-001/raw_preprocessed_raw.fif",
+          "checksum_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "size_bytes": 4096,
+          "exists": true
+        },
+        {
+          "logical_name": "artifact_summary",
+          "artifact_type": "diagnostic_json",
+          "path": "data/processed/dataset-001/preprocess-001/artifact_summary.json",
+          "checksum_sha256": null,
+          "size_bytes": 512,
+          "exists": true
+        }
+      ],
+      "worker": {
+        "schema_version": 1,
+        "exit_code": 0,
+        "payload_path": "data/runs/preprocess-001/worker_payload.json",
+        "result_path": "data/runs/preprocess-001/worker_result.json",
+        "stdout_path": "data/runs/preprocess-001/worker_stdout.log",
+        "stderr_path": "data/runs/preprocess-001/worker_stderr.log"
+      },
+      "provenance": {
+        "path": "data/processed/dataset-001/preprocess-001/provenance.json",
+        "schema_version": 1
+      },
+      "batch": {
+        "batch_id": "batch-001",
+        "batch_item_id": "batch-001-item-001",
+        "template_id": "template-001",
+        "template_digest_sha256": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "attempt": 1
+      },
+      "diagnostics": {
+        "warnings": []
+      }
+    },
+    {
+      "node_id": "run:epoch:epoch-001",
+      "kind": "epoch_run",
+      "label": "epoch-001",
+      "dataset_id": "dataset-001",
+      "run_id": "epoch-001",
+      "run_kind": "epoch",
+      "status": "completed",
+      "config_snapshot": {
+        "preprocessing_run_id": "preprocess-001",
+        "condition_field": "trial_type",
+        "tmin_seconds": -0.2,
+        "tmax_seconds": 0.8
+      },
+      "config_digest_sha256": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "artifact_manifest": {
+        "path": "data/epochs/dataset-001/epoch-001/artifact_manifest.json",
+        "artifact_count": 5
+      },
+      "artifacts": [
+        {
+          "logical_name": "epochs",
+          "artifact_type": "epochs_fif",
+          "path": "data/epochs/dataset-001/epoch-001/epochs-epo.fif",
+          "checksum_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "size_bytes": 8192,
+          "exists": true
+        }
+      ],
+      "worker": {
+        "schema_version": 1,
+        "exit_code": 0,
+        "payload_path": "data/runs/epoch-001/worker_payload.json",
+        "result_path": "data/runs/epoch-001/worker_result.json",
+        "stdout_path": "data/runs/epoch-001/worker_stdout.log",
+        "stderr_path": "data/runs/epoch-001/worker_stderr.log"
+      },
+      "provenance": {
+        "path": "data/epochs/dataset-001/epoch-001/provenance.json",
+        "schema_version": 1
+      },
+      "batch": null,
+      "diagnostics": {
+        "warnings": []
+      }
+    },
+    {
+      "node_id": "run:erp:erp-001",
+      "kind": "erp_run",
+      "label": "erp-001",
+      "dataset_id": "dataset-001",
+      "run_id": "erp-001",
+      "run_kind": "erp",
+      "status": "completed",
+      "config_snapshot": {
+        "epoch_run_id": "epoch-001",
+        "conditions": ["standard", "target"],
+        "method": "mean",
+        "plot_mode": "gfp"
+      },
+      "config_digest_sha256": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "artifact_manifest": {
+        "path": "data/erp/dataset-001/erp-001/artifact_manifest.json",
+        "artifact_count": 8
+      },
+      "artifacts": [
+        {
+          "logical_name": "erp_metadata",
+          "artifact_type": "erp_metadata_json",
+          "path": "data/erp/dataset-001/erp-001/erp_metadata.json",
+          "checksum_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "size_bytes": 2048,
+          "exists": true
+        }
+      ],
+      "worker": {
+        "schema_version": 1,
+        "exit_code": 0,
+        "payload_path": "data/runs/erp-001/worker_payload.json",
+        "result_path": "data/runs/erp-001/worker_result.json",
+        "stdout_path": "data/runs/erp-001/worker_stdout.log",
+        "stderr_path": "data/runs/erp-001/worker_stderr.log"
+      },
+      "provenance": {
+        "path": "data/erp/dataset-001/erp-001/provenance.json",
+        "schema_version": 1
+      },
+      "batch": null,
+      "diagnostics": {
+        "warnings": []
+      }
+    },
+    {
+      "node_id": "comparison:erp-001:comparison_summary",
+      "kind": "comparison",
+      "label": "target - standard",
+      "dataset_id": "dataset-001",
+      "run_id": "erp-001",
+      "comparison_summary_path": "data/erp/dataset-001/erp-001/comparison_summary.json",
+      "metric": "mean_amplitude_uv",
+      "condition_pair": {
+        "a": "target",
+        "b": "standard"
+      },
+      "statistics": {
+        "schema_version": 1,
+        "status": "implemented",
+        "implemented": true,
+        "method": "paired_t_test",
+        "sample": {
+          "unit": "subject",
+          "paired": true,
+          "n": 4,
+          "missing_pairs": 0
+        },
+        "result": {
+          "statistic_name": "t",
+          "p_value": 0.067,
+          "effect_size": {
+            "name": "cohens_dz",
+            "value": 1.4
+          }
+        }
+      },
+      "diagnostics": {
+        "warnings": []
+      }
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge:dataset-001:preprocess-001",
+      "source": "dataset:dataset-001",
+      "target": "run:preprocessing:preprocess-001",
+      "relation": "produced"
+    },
+    {
+      "edge_id": "edge:preprocess-001:epoch-001",
+      "source": "run:preprocessing:preprocess-001",
+      "target": "run:epoch:epoch-001",
+      "relation": "derived_from"
+    },
+    {
+      "edge_id": "edge:epoch-001:erp-001",
+      "source": "run:epoch:epoch-001",
+      "target": "run:erp:erp-001",
+      "relation": "derived_from"
+    },
+    {
+      "edge_id": "edge:erp-001:comparison",
+      "source": "run:erp:erp-001",
+      "target": "comparison:erp-001:comparison_summary",
+      "relation": "compares"
+    }
+  ],
+  "diagnostics": {
+    "warnings": []
+  }
+}

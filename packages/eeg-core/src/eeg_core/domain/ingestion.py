@@ -532,6 +532,13 @@ class BatchRunPlan:
 
 
 @dataclass(frozen=True)
+class ComparisonObservation:
+    subject_id: str
+    condition_a_mean_amplitude_uv: float
+    condition_b_mean_amplitude_uv: float
+
+
+@dataclass(frozen=True)
 class ComparisonConfig:
     erp_run_id: str
     condition_a: str
@@ -541,6 +548,7 @@ class ComparisonConfig:
     window_start_seconds: float
     window_end_seconds: float
     metric: str = "mean_amplitude_uv"
+    paired_observations: list[ComparisonObservation] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

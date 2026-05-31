@@ -66,6 +66,30 @@ test("runs a multi-dataset batch and retries one failed subject", async ({
   await expect(batchTable).toContainText(failedDataset.datasetId);
   await expect(batchTable).toContainText("failed", { timeout: 90_000 });
   await expect(batchTable).toContainText("completed");
+  await expect(page.getByTestId("batch-filter-all")).toContainText("2");
+  await expect(page.getByTestId("batch-filter-completed")).toContainText("1");
+  await expect(page.getByTestId("batch-filter-failed")).toContainText("1");
+  await expect(page.getByTestId("batch-filter-summary")).toHaveText(
+    "Showing 2 of 2 subject item(s) for all.",
+  );
+
+  await page.getByTestId("batch-filter-failed").click();
+  await expect(page.getByTestId("batch-filter-failed")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(page.getByTestId("batch-filter-summary")).toHaveText(
+    "Showing 1 of 2 subject item(s) for failed.",
+  );
+  await expect(batchTable).toContainText(failedDataset.datasetId);
+  await expect(batchTable).not.toContainText(datasetId);
+
+  await page.getByTestId("batch-filter-completed").click();
+  await expect(page.getByTestId("batch-filter-summary")).toHaveText(
+    "Showing 1 of 2 subject item(s) for completed.",
+  );
+  await expect(batchTable).toContainText(datasetId);
+  await expect(batchTable).not.toContainText(failedDataset.datasetId);
 
   let batch = await getBatch(page, batchId);
   const failedItem = batch.items.find(
@@ -74,6 +98,8 @@ test("runs a multi-dataset batch and retries one failed subject", async ({
   expect(failedItem?.status).toBe("failed");
   expect(failedItem?.run_ids.preprocessing).toMatch(/^preprocess-/);
 
+  await page.getByTestId("batch-filter-all").click();
+  await expect(batchTable).toContainText(failedDataset.datasetId);
   await uploadValidEeg(page, failedDataset.datasetId);
   await page.getByTestId(`retry-batch-item-${failedItem?.item_id}`).click();
   await expect(page.getByText(`Retry queued for ${failedItem?.item_id}.`)).toBeVisible();
@@ -85,6 +111,12 @@ test("runs a multi-dataset batch and retries one failed subject", async ({
     "completed",
     "completed",
   ]);
+  await expect(page.getByTestId("batch-filter-completed")).toContainText("2");
+  await page.getByTestId("batch-filter-failed").click();
+  await expect(page.getByTestId("batch-filter-summary")).toHaveText(
+    "Showing 0 of 2 subject item(s) for failed.",
+  );
+  await expect(page.getByText("No failed subject items.")).toBeVisible();
   const retriedItem = batch.items.find(
     (item: BatchItem) => item.dataset_id === failedDataset.datasetId,
   );

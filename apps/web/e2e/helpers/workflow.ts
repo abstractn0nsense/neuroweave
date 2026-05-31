@@ -202,6 +202,9 @@ export async function createCompletedEpochRun(page: Page) {
     timeout: 60_000,
   });
   await expect(page.getByTestId("epoch-runs")).toContainText("2 cond");
+  await expect(page.getByTestId("epoch-runs")).toContainText("Lineage");
+  await expect(page.getByTestId("epoch-runs")).toContainText("Preprocessing");
+  await expect(page.getByTestId("epoch-runs")).toContainText("Epoch");
 }
 
 export async function createCompletedErpRun(page: Page) {
@@ -214,6 +217,10 @@ export async function createCompletedErpRun(page: Page) {
     timeout: 60_000,
   });
   await expect(page.getByTestId("erp-runs")).toContainText("2 plots");
+  await expect(page.getByTestId("erp-runs")).toContainText("Lineage");
+  await expect(page.getByTestId("erp-runs")).toContainText("Preprocessing");
+  await expect(page.getByTestId("erp-runs")).toContainText("Epoch");
+  await expect(page.getByTestId("erp-runs")).toContainText("ERP");
   await expect(page.getByTestId("erp-preview")).toBeVisible();
 }
 
@@ -224,5 +231,6 @@ export async function createComparisonSummary(page: Page) {
   await page.getByTestId("start-comparison-button").click();
   await expect(page.getByText("Comparison summary generated.")).toBeVisible();
   await expect(page.getByTestId("comparison-summary")).toContainText("Difference");
-  await expect(page.getByTestId("comparison-summary")).toContainText("deferred");
+  await expect(page.getByTestId("comparison-summary")).toContainText("unavailable");
+  await expect(page.getByTestId("erp-runs")).toContainText("Comparison");
 }

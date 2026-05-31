@@ -166,7 +166,66 @@ def test_create_erp_analysis_report_writes_report_and_manifest_entry(
     manifest_path = _copy_erp_fixture_with_figure(tmp_path)
     comparison_path = manifest_path.parent / "comparison_summary.json"
     comparison_path.write_text(
-        json.dumps({"metric": "mean_amplitude_uv", "difference": {"mean": 1.2}})
+        json.dumps(
+            {
+                "metric": "mean_amplitude_uv",
+                "conditions": {
+                    "a": {"label": "target", "mean_amplitude_uv": 1.7},
+                    "b": {"label": "standard", "mean_amplitude_uv": 0.5},
+                },
+                "difference": {"mean_amplitude_uv": 1.2},
+                "statistics": {
+                    "schema_version": 1,
+                    "status": "implemented",
+                    "implemented": True,
+                    "phase": "Phase E",
+                    "method": "paired_t_test",
+                    "design": "within_subject",
+                    "input_metric": "mean_amplitude_uv",
+                    "observation_level": "subject",
+                    "condition_pair": {"a": "target", "b": "standard"},
+                    "sample": {
+                        "unit": "subject",
+                        "paired": True,
+                        "n": 4,
+                        "missing_pairs": 0,
+                    },
+                    "result": {
+                        "statistic_name": "t",
+                        "statistic": 2.8,
+                        "degrees_of_freedom": 3,
+                        "p_value": 0.067,
+                        "p_value_kind": "uncorrected",
+                        "effect_size": {
+                            "name": "cohens_dz",
+                            "value": 1.4,
+                            "interpretation": None,
+                        },
+                        "confidence_interval": {
+                            "implemented": False,
+                            "level": None,
+                            "lower": None,
+                            "upper": None,
+                            "unit": "microvolt",
+                        },
+                        "multiple_comparison": {
+                            "applied": False,
+                            "method": None,
+                            "family": None,
+                            "adjusted_p_value": None,
+                        },
+                    },
+                    "assumptions": [
+                        {
+                            "name": "paired_observations",
+                            "status": "met",
+                            "detail": "Each row has both condition metrics.",
+                        }
+                    ],
+                    "diagnostics": {"warnings": []},
+                },
+            }
+        )
         + "\n",
         encoding="utf-8",
     )
@@ -286,6 +345,10 @@ def test_create_erp_analysis_report_writes_report_and_manifest_entry(
     assert report["warnings"]["erp"]["warnings"] == ["erp warning"]
     assert report["preview_plot"]["url"] == "/artifacts/erp-001/erp_standard.png"
     assert report["comparison_summary"]["metric"] == "mean_amplitude_uv"
+    assert report["comparison_statistics"]["available"] is True
+    assert report["comparison_statistics"]["status"] == "implemented"
+    assert report["comparison_statistics"]["method"] == "paired_t_test"
+    assert report["comparison_statistics"]["result"]["p_value"] == 0.067
     assert payload["report_url"] == "/artifacts/erp-001/analysis_report.json"
     assert payload["erp_run"]["output_metadata"]["analysis_report_available"] is True
 
@@ -296,6 +359,97 @@ def test_create_erp_analysis_report_writes_report_and_manifest_entry(
         artifact["logical_name"] == "analysis_report"
         for artifact in manifest["artifacts"]
     )
+
+
+def test_export_bundle_manifest_includes_comparison_statistics(
+    tmp_path,
+    monkeypatch,
+):
+    client, run_repository = _client(tmp_path, monkeypatch)
+    manifest_path = _copy_erp_fixture_with_figure(tmp_path)
+    comparison_path = manifest_path.parent / "comparison_summary.json"
+    comparison_path.write_text(
+        json.dumps(
+            {
+                "metric": "mean_amplitude_uv",
+                "target": {"type": "gfp", "channel": None},
+                "window": {"start_seconds": -0.05, "end_seconds": 0.2},
+                "conditions": {
+                    "a": {"label": "target", "mean_amplitude_uv": 1.7},
+                    "b": {"label": "standard", "mean_amplitude_uv": 0.5},
+                },
+                "difference": {"mean_amplitude_uv": 1.2},
+                "statistics": {
+                    "schema_version": 1,
+                    "status": "unavailable",
+                    "implemented": False,
+                    "phase": "Phase E",
+                    "method": "paired_t_test",
+                    "design": "within_subject",
+                    "input_metric": "mean_amplitude_uv",
+                    "observation_level": "subject",
+                    "condition_pair": {"a": "target", "b": "standard"},
+                    "sample": {
+                        "unit": "subject",
+                        "paired": True,
+                        "n": 1,
+                        "missing_pairs": 0,
+                    },
+                    "result": None,
+                    "assumptions": [],
+                    "diagnostics": {
+                        "warnings": [
+                            {
+                                "code": "insufficient_observations",
+                                "severity": "warning",
+                                "source": "artifact",
+                                "impact": (
+                                    "Paired t-test requires at least two paired "
+                                    "observations."
+                                ),
+                                "suggested_action": (
+                                    "Run the comparison from a multi-subject "
+                                    "observation table."
+                                ),
+                            }
+                        ]
+                    },
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    run_repository.save_erp_run(
+        ErpRun(
+            run_id="erp-001",
+            dataset_id="dataset-001",
+            config=ErpConfig(epoch_run_id="epoch-001"),
+            status=ErpRunStatus.COMPLETED,
+            finished_at_utc="2026-05-26T00:00:00+00:00",
+            output_metadata={
+                "artifact_manifest_path": str(manifest_path),
+                "comparison_summary_path": str(comparison_path),
+            },
+        )
+    )
+
+    response = client.get("/erp-runs/erp-001/export-bundle")
+
+    assert response.status_code == 200
+    with zipfile.ZipFile(BytesIO(response.content)) as bundle:
+        analysis_report = json.loads(bundle.read("analysis_report.json"))
+        bundle_manifest = json.loads(bundle.read("export_bundle_manifest.json"))
+
+    assert analysis_report["comparison_statistics"]["status"] == "unavailable"
+    assert bundle_manifest["comparison_summary"]["available"] is True
+    assert bundle_manifest["comparison_summary"]["condition_a"] == "target"
+    assert bundle_manifest["comparison_statistics"]["status"] == "unavailable"
+    warning_codes = {
+        warning["code"]
+        for warning in bundle_manifest["diagnostics"]["warnings"]
+    }
+    assert "insufficient_observations" in warning_codes
 
 
 def test_get_export_bundle_includes_missing_artifact_warning(tmp_path, monkeypatch):

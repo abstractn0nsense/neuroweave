@@ -507,7 +507,14 @@ def test_comparison_summary_writes_descriptive_json(tmp_path, monkeypatch):
     assert summary["erp_run_id"] == erp_run["run_id"]
     assert summary["metric"] == "mean_amplitude_uv"
     assert summary["target"] == {"type": "gfp", "channel": None}
-    assert summary["statistics"] == {"implemented": False, "phase": "Phase 4"}
+    assert summary["statistics"]["schema_version"] == 1
+    assert summary["statistics"]["status"] == "unavailable"
+    assert summary["statistics"]["implemented"] is False
+    assert summary["statistics"]["method"] == "paired_t_test"
+    assert summary["statistics"]["result"] is None
+    assert summary["statistics"]["diagnostics"]["warnings"][0]["code"] == (
+        "insufficient_observations"
+    )
     assert summary["conditions"]["a"]["label"] == "target"
     assert summary["conditions"]["b"]["label"] == "standard"
     assert isinstance(summary["conditions"]["a"]["mean_amplitude_uv"], float)
@@ -520,6 +527,10 @@ def test_comparison_summary_writes_descriptive_json(tmp_path, monkeypatch):
     assert metadata["comparison_condition_a"] == "target"
     assert metadata["comparison_condition_b"] == "standard"
     assert metadata["comparison_statistics_implemented"] is False
+    assert metadata["comparison_statistics_status"] == "unavailable"
+    assert metadata["comparison_statistics_method"] == "paired_t_test"
+    assert metadata["comparison_statistics_p_value"] is None
+    assert metadata["comparison_statistics_effect_size"] is None
     assert metadata["comparison_difference_uv"] == pytest.approx(
         summary["difference"]["mean_amplitude_uv"]
     )
@@ -547,6 +558,106 @@ def test_comparison_summary_writes_descriptive_json(tmp_path, monkeypatch):
     )
     assert repeat_response.status_code == 200
     assert repeat_response.json()["summary"]["difference"] == summary["difference"]
+
+
+def test_comparison_summary_writes_paired_statistics(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _seed_epochable_dataset(tmp_path)
+    erp_run = _create_completed_erp_run(client)
+    observations = [
+        {
+            "subject_id": "sub-001",
+            "condition_a_mean_amplitude_uv": 2.0,
+            "condition_b_mean_amplitude_uv": 1.1,
+        },
+        {
+            "subject_id": "sub-002",
+            "condition_a_mean_amplitude_uv": 2.4,
+            "condition_b_mean_amplitude_uv": 1.2,
+        },
+        {
+            "subject_id": "sub-003",
+            "condition_a_mean_amplitude_uv": 1.8,
+            "condition_b_mean_amplitude_uv": 1.0,
+        },
+        {
+            "subject_id": "sub-004",
+            "condition_a_mean_amplitude_uv": 2.7,
+            "condition_b_mean_amplitude_uv": 1.3,
+        },
+    ]
+
+    response = client.post(
+        f"/erp-runs/{erp_run['run_id']}/comparison-summary",
+        json={
+            "condition_a": "target",
+            "condition_b": "standard",
+            "use_gfp": True,
+            "window_start_seconds": -0.05,
+            "window_end_seconds": 0.2,
+            "paired_observations": observations,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    summary = payload["summary"]
+    statistics = summary["statistics"]
+    result = statistics["result"]
+    differences = [
+        observation["condition_a_mean_amplitude_uv"]
+        - observation["condition_b_mean_amplitude_uv"]
+        for observation in observations
+    ]
+    mean_difference = sum(differences) / len(differences)
+    difference_variance = sum(
+        (difference - mean_difference) ** 2 for difference in differences
+    ) / (len(differences) - 1)
+    difference_std = difference_variance**0.5
+    expected_t = mean_difference / (difference_std / (len(differences) ** 0.5))
+    expected_dz = mean_difference / difference_std
+
+    assert statistics["schema_version"] == 1
+    assert statistics["status"] == "implemented"
+    assert statistics["implemented"] is True
+    assert statistics["phase"] == "Phase E"
+    assert statistics["method"] == "paired_t_test"
+    assert statistics["design"] == "within_subject"
+    assert statistics["input_metric"] == "mean_amplitude_uv"
+    assert statistics["condition_pair"] == {"a": "target", "b": "standard"}
+    assert statistics["sample"] == {
+        "unit": "subject",
+        "paired": True,
+        "n": 4,
+        "missing_pairs": 0,
+    }
+    assert result["statistic_name"] == "t"
+    assert result["statistic"] == pytest.approx(expected_t)
+    assert result["degrees_of_freedom"] == 3
+    assert 0 <= result["p_value"] <= 1
+    assert result["p_value_kind"] == "uncorrected"
+    assert result["effect_size"] == {
+        "name": "cohens_dz",
+        "value": pytest.approx(expected_dz),
+        "interpretation": None,
+    }
+    assert result["confidence_interval"]["implemented"] is False
+    assert result["multiple_comparison"]["applied"] is False
+    assert statistics["assumptions"][0]["name"] == "paired_observations"
+    assert statistics["diagnostics"]["warnings"] == []
+
+    metadata = payload["erp_run"]["output_metadata"]
+    assert metadata["comparison_statistics_implemented"] is True
+    assert metadata["comparison_statistics_status"] == "implemented"
+    assert metadata["comparison_statistics_method"] == "paired_t_test"
+    assert metadata["comparison_statistics_p_value"] == pytest.approx(
+        result["p_value"]
+    )
+    assert metadata["comparison_statistics_effect_size"] == pytest.approx(
+        expected_dz
+    )
+    summary_path = Path(str(metadata["comparison_summary_path"]))
+    assert json.loads(summary_path.read_text(encoding="utf-8")) == summary
 
 
 def test_comparison_summary_rejects_invalid_inputs(tmp_path, monkeypatch):
@@ -606,3 +717,28 @@ def test_comparison_summary_rejects_invalid_inputs(tmp_path, monkeypatch):
     )
     assert missing_channel.status_code == 422
     assert "A channel is required" in missing_channel.text
+
+    duplicate_observations = client.post(
+        f"/erp-runs/{erp_run['run_id']}/comparison-summary",
+        json={
+            "condition_a": "target",
+            "condition_b": "standard",
+            "use_gfp": True,
+            "window_start_seconds": -0.05,
+            "window_end_seconds": 0.2,
+            "paired_observations": [
+                {
+                    "subject_id": "sub-001",
+                    "condition_a_mean_amplitude_uv": 1.0,
+                    "condition_b_mean_amplitude_uv": 0.5,
+                },
+                {
+                    "subject_id": "sub-001",
+                    "condition_a_mean_amplitude_uv": 1.1,
+                    "condition_b_mean_amplitude_uv": 0.4,
+                },
+            ],
+        },
+    )
+    assert duplicate_observations.status_code == 422
+    assert "subject_id values must be unique" in duplicate_observations.text

@@ -1,0 +1,120 @@
+{
+  "archive_id": "project-archive-001",
+  "checksums": {
+    "algorithm": "sha256",
+    "archive_digest_sha256": null,
+    "entry_count": 5,
+    "manifest_payload_digest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "created_at_utc": "2026-05-31T00:00:00+00:00",
+  "created_by": "local-preview",
+  "diagnostics": {
+    "warnings": [
+      {
+        "code": "raw_data_excluded",
+        "impact": "The archive can be reviewed for provenance and reports, but it cannot recreate analysis without local or separately shared raw data.",
+        "severity": "warning",
+        "source": "export_bundle",
+        "suggested_action": "Share raw data through an approved data-use channel or regenerate the archive with include_raw_uploads enabled."
+      }
+    ]
+  },
+  "entries": [
+    {
+      "archive_path": "project/project.json",
+      "checksum_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dataset_id": null,
+      "entry_kind": "project_metadata",
+      "logical_name": "project_metadata",
+      "run_id": null,
+      "size_bytes": 512,
+      "source_path": "data/raw/uploads/projects.json"
+    },
+    {
+      "archive_path": "datasets/dataset-001/metadata.json",
+      "checksum_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "dataset_id": "dataset-001",
+      "entry_kind": "dataset_metadata",
+      "logical_name": "dataset_metadata",
+      "run_id": null,
+      "size_bytes": 1024,
+      "source_path": "data/raw/uploads/datasets/dataset-001/metadata.json"
+    },
+    {
+      "archive_path": "runs/preprocess-001/run.json",
+      "checksum_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "dataset_id": "dataset-001",
+      "entry_kind": "run_metadata",
+      "logical_name": "preprocessing_run",
+      "run_id": "preprocess-001",
+      "size_bytes": 2048,
+      "source_path": "data/runs/preprocess-001/run.json"
+    },
+    {
+      "archive_path": "runs/preprocess-001/artifact_manifest.json",
+      "checksum_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "dataset_id": "dataset-001",
+      "entry_kind": "artifact_manifest",
+      "logical_name": "artifact_manifest",
+      "run_id": "preprocess-001",
+      "size_bytes": 1536,
+      "source_path": "data/processed/dataset-001/preprocess-001/artifact_manifest.json"
+    },
+    {
+      "archive_path": "runs/preprocess-001/analysis_report.json",
+      "checksum_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "dataset_id": "dataset-001",
+      "entry_kind": "analysis_report",
+      "logical_name": "analysis_report",
+      "run_id": "preprocess-001",
+      "size_bytes": 4096,
+      "source_path": "data/processed/dataset-001/preprocess-001/analysis_report.json"
+    }
+  ],
+  "excluded_data_policy": {
+    "excluded_categories": [
+      "raw_eeg",
+      "event_logs",
+      "sidecars",
+      "local_logs",
+      "runtime_cache",
+      "secrets"
+    ],
+    "reason": "Preview collaboration snapshots default to provenance, manifests, reports, and metadata without redistributing raw participant data.",
+    "redaction_required": true
+  },
+  "immutability": {
+    "content_addressed": true,
+    "manifest_digest_sha256": null,
+    "mutation_policy": "append_new_archive_only",
+    "snapshot": true
+  },
+  "included_data_policy": {
+    "include_derivatives": false,
+    "include_manifests": true,
+    "include_provenance": true,
+    "include_raw_uploads": false,
+    "include_reports": true
+  },
+  "manifest_kind": "project_archive_manifest",
+  "project": {
+    "dataset_ids": [
+      "dataset-001"
+    ],
+    "experiment_ids": [
+      "experiment-001"
+    ],
+    "project_id": "project-001",
+    "run_ids": {
+      "epoch": [],
+      "erp": [],
+      "preprocessing": [
+        "preprocess-001"
+      ]
+    },
+    "workflow_template_ids": [
+      "template-001"
+    ]
+  },
+  "schema_version": 1
+}

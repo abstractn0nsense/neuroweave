@@ -870,6 +870,24 @@ input[type="file"] {
   background: var(--color-surface-subtle);
 }
 
+.batch-filter-tabs .workspace-mode-button {
+  display: inline-flex;
+  gap: var(--space-2);
+  justify-content: center;
+  min-height: 40px;
+}
+
+.batch-filter-tabs strong {
+  min-width: 1.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: center;
+}
+
 .batch-table-wrap {
   overflow-x: auto;
   border: 1px solid var(--color-border);
@@ -1246,6 +1264,66 @@ input[type="file"] {
 .run-summary-grid dd {
   margin-top: 4px;
   font-size: 15px;
+}
+
+.lineage-panel {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: var(--space-2);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-subtle);
+  padding: var(--space-3);
+}
+
+.lineage-heading,
+.lineage-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.lineage-heading {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.lineage-heading strong {
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.lineage-heading span {
+  color: var(--color-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.lineage-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lineage-list li {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  padding: 6px 8px;
+}
+
+.lineage-list li span {
+  color: var(--color-muted);
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.lineage-list li strong {
+  color: var(--color-text);
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .erp-preview {

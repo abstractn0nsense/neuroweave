@@ -1,0 +1,261 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neuroweave.local/schemas/artifact-action.schema.json",
+  "title": "NeuroWeave artifact action v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "action_id",
+    "action_kind",
+    "status",
+    "review_state",
+    "source",
+    "targets",
+    "config_patch",
+    "effects",
+    "export_report_policy",
+    "diagnostics"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "action_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "action_kind": {
+      "enum": [
+        "mark_bad_channels",
+        "interpolate_bad_channels",
+        "ica_exclude_components",
+        "reject_artifact_annotations",
+        "manual_review_note"
+      ]
+    },
+    "status": {
+      "enum": [
+        "proposed",
+        "pending_manual_review",
+        "approved",
+        "applied",
+        "rejected",
+        "skipped",
+        "failed",
+        "superseded"
+      ]
+    },
+    "review_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required",
+        "state",
+        "reason",
+        "reviewer",
+        "reviewed_at_utc"
+      ],
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "state": {
+          "enum": ["not_required", "pending", "approved", "rejected"]
+        },
+        "reason": {
+          "type": ["string", "null"]
+        },
+        "reviewer": {
+          "type": ["string", "null"]
+        },
+        "reviewed_at_utc": {
+          "type": ["string", "null"]
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset_id",
+        "run_id",
+        "run_kind",
+        "artifact_manifest_path",
+        "qc_summary_path"
+      ],
+      "properties": {
+        "dataset_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "run_kind": {
+          "enum": ["preprocessing", "epoch", "erp"]
+        },
+        "artifact_manifest_path": {
+          "type": ["string", "null"]
+        },
+        "qc_summary_path": {
+          "type": ["string", "null"]
+        }
+      }
+    },
+    "targets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["channels", "ica_components", "annotations", "time_windows"],
+      "properties": {
+        "channels": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "ica_components": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "annotations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "time_windows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["start_seconds", "end_seconds", "label"],
+            "properties": {
+              "start_seconds": {
+                "type": "number"
+              },
+              "end_seconds": {
+                "type": "number"
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "config_patch": {
+      "type": "object"
+    },
+    "effects": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutates_signal",
+        "requires_new_run",
+        "creates_artifacts",
+        "invalidates_downstream"
+      ],
+      "properties": {
+        "mutates_signal": {
+          "type": "boolean"
+        },
+        "requires_new_run": {
+          "type": "boolean"
+        },
+        "creates_artifacts": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "invalidates_downstream": {
+          "type": "array",
+          "items": {
+            "enum": ["preprocessing", "epoch", "erp", "comparison", "report", "export"]
+          }
+        }
+      }
+    },
+    "export_report_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "include_in_artifact_manifest",
+        "include_in_analysis_report",
+        "include_in_export_bundle",
+        "block_export_when_pending"
+      ],
+      "properties": {
+        "include_in_artifact_manifest": {
+          "type": "boolean"
+        },
+        "include_in_analysis_report": {
+          "type": "boolean"
+        },
+        "include_in_export_bundle": {
+          "type": "boolean"
+        },
+        "block_export_when_pending": {
+          "const": false
+        }
+      }
+    },
+    "diagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["warnings"],
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "severity",
+              "source",
+              "impact",
+              "suggested_action"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "minLength": 1
+              },
+              "severity": {
+                "enum": ["warning", "error"]
+              },
+              "source": {
+                "enum": [
+                  "bids",
+                  "event_mapping",
+                  "validation",
+                  "worker",
+                  "artifact",
+                  "export_bundle",
+                  "batch"
+                ]
+              },
+              "impact": {
+                "type": ["string", "null"]
+              },
+              "suggested_action": {
+                "type": ["string", "null"]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,396 @@
+# Phase E Entry Plan
+
+Recorded on 2026-05-30 after the Phase D exit gate and current-regression
+check.
+
+## Entry Decision
+
+Phase E is cleared to start.
+
+Current gate results from `main` before opening Phase E implementation work:
+
+- `git status --short --branch`: `## main...origin/main`
+- `.\apps\api\.venv\Scripts\python.exe -m pytest tests -o cache_dir=data/cache/pytest-cache --basetemp data/cache/pytest-phase-e-preflight`:
+  271 passed.
+- `npm.cmd run build` in `apps/web`: passed.
+- `npm.cmd run e2e:all` in `apps/web`: passed, including Phase 2
+  preprocessing, Phase C batch retry, Phase 3 epoch, and Phase 3 ERP smoke
+  tests.
+
+Phase D can be treated as closed. The exit decision, regression gate, public
+dataset smoke results, and carryover list are recorded in
+`docs/phase-d-exit-report.md`.
+
+## Phase E Goal
+
+Phase E should turn the current descriptive ERP comparison and run-artifact
+foundation into a first reproducible analysis layer.
+
+This phase should prioritize:
+
+- a stable inferential statistics contract for ERP comparison outputs;
+- one narrow statistics MVP that can be validated against deterministic
+  fixtures;
+- report, export, and QC integration for the new statistics output;
+- a read-only reproducibility graph that records dataset, run, config, artifact,
+  and parent-child lineage;
+- a safe rerun planning contract before any one-click rerun execution exists.
+
+Phase E should not become a broad product-polish phase. Batch UI completion,
+collaboration, advanced artifact review, broad public-data CI, and local data
+governance are important, but they should stay out of the first Phase E track
+unless the statistics and reproducibility foundation is already closed.
+
+## Included In Phase E
+
+The following items are in scope for this phase:
+
+- Define a statistics result schema for ERP comparison summaries.
+- Add one initial inferential statistics implementation for ERP mean-amplitude
+  comparison.
+- Preserve the existing descriptive comparison fields and the previous
+  statistics-deferred marker as backward-compatible metadata where needed.
+- Surface statistics results in API responses, `analysis_report.json`, export
+  bundles, and QC-facing summaries.
+- Define and generate a run reproducibility graph artifact for completed
+  preprocessing, epoch, ERP, and comparison paths.
+- Add a read-only reproducibility graph view in the web UI if the backend graph
+  contract is stable.
+- Add rerun-plan validation that reports whether a completed analysis can be
+  recreated from available source files, configs, parent run IDs, and artifacts.
+- Keep public dataset smoke workflows opt-in and local-data-safe.
+- Add targeted tests for every new contract and keep the existing Phase 2,
+  Phase C, and Phase 3 browser smokes passing.
+
+## Deferred To Phase F Or Later
+
+The following items are explicitly not required to close Phase E:
+
+- Full statistics suite across all likely EEG designs.
+- Permutation tests as the default path for every comparison.
+- Cluster-based or time-by-channel multiple-comparison workflows.
+- Group-level subject statistics and publication-grade tables.
+- Automatic one-click rerun execution.
+- Broad public dataset CI that downloads and runs multiple large EEG datasets by
+  default; Phase E only adds the opt-in workflow contract.
+- Complete multi-subject batch UI beyond the E9 filter slice, including richer
+  subject/session grouping and failed-only retry UX.
+- Hosted collaboration, project archive generation/import UI, and snapshot
+  exchange workflows beyond the E12 immutable manifest contract.
+- Advanced artifact workflow execution such as ICA, bad-channel interpolation,
+  and manual artifact review beyond the E10 action/state contract.
+- Large visual regression suite for all ERP and QC views beyond the E8 seed.
+- Data governance polish beyond the E11 dataset-local deletion MVP, such as
+  project export/delete, preview-version migration tooling, and retention-policy
+  workflows.
+
+## Compatibility Rules
+
+Phase E changes must follow these rules:
+
+- Do not rewrite completed run configs.
+- Add fields and artifacts instead of renaming existing Phase 2, Phase C, Phase
+  D, or Phase 3 fields.
+- Keep legacy `raw_preprocessed.fif`, `epochs.fif`, and `evoked_*.fif` artifact
+  names readable for at least this phase.
+- Keep existing `comparison_summary.json` descriptive fields readable.
+- Treat missing optional Phase D metadata as warnings, not hard failures.
+- Keep public EEG data and generated local smoke manifests under ignored
+  `data/` paths.
+- Do not require network downloads in the default test gate.
+
+## One-Prompt Work Slices
+
+Each item below is sized so it can be given to Codex as one implementation
+request.
+
+### E0. Phase E Entry Plan
+
+- Add this entry plan.
+- Link the plan to the Phase D exit baseline.
+- Separate Phase E scope from Phase F-or-later work.
+- Do not change runtime code.
+
+Acceptance:
+
+- `docs/phase-e-entry-plan.md` exists.
+- Phase E included and deferred scopes are explicit.
+- Current regression gate results are recorded.
+
+Status: complete in this document.
+
+### E1. Statistics Contract Baseline
+
+- Define the statistics output shape for ERP comparisons.
+- Include method, design, assumptions, input metric, condition pair, sample
+  counts, statistic value, p-value, effect size, confidence interval fields, and
+  diagnostics.
+- Add deterministic fixture expectations without implementing the full
+  statistics engine.
+
+Acceptance:
+
+- Contract tests define the expected JSON shape.
+- Existing comparison summaries remain backward-compatible.
+- Documentation explains which statistics are implemented versus planned.
+
+Status: complete. See `docs/statistics-contract.md`,
+`docs/schemas/erp-comparison-statistics.schema.json`, and
+`tests/fixtures/statistics/`.
+
+### E2. Mean-Amplitude Statistics MVP
+
+- Implement one initial inferential test for ERP mean-amplitude comparison.
+- Prefer the simplest defensible design supported by the existing comparison
+  inputs.
+- Return structured diagnostics when the selected comparison cannot support the
+  requested test.
+
+Acceptance:
+
+- Deterministic tests cover a successful comparison and an unsupported
+  comparison.
+- `comparison_summary.json` includes the new statistics object.
+- Existing Phase 3 ERP smoke still passes.
+
+Status: complete. ERP comparison summaries now support Phase E paired
+mean-amplitude t-test statistics when subject-level paired observations are
+supplied, and structured unavailable diagnostics otherwise.
+
+### E3. Statistics Report And Export Integration
+
+- Surface the E2 statistics result in ERP comparison API responses.
+- Add the result to `analysis_report.json`.
+- Include the result and diagnostics in export bundles without changing the
+  existing bundle structure.
+
+Acceptance:
+
+- Report and export tests cover both implemented and unavailable statistics.
+- Missing or unsupported statistics appear as structured diagnostics.
+- Existing export bundle tests still pass.
+
+Status: complete. Analysis reports now include `comparison_statistics`, and
+export bundle manifests include comparison/statistics summaries plus statistics
+diagnostics.
+
+### E4. Reproducibility Graph Contract
+
+- Define a reproducibility graph artifact for completed analysis paths.
+- Include dataset IDs, run IDs, config hashes or snapshots, parent-child run
+  relationships, artifact logical names, artifact paths, checksums when
+  available, worker metadata, and Phase D provenance links.
+
+Acceptance:
+
+- Completed runs can generate `reproducibility_graph.json`.
+- Tests cover preprocessing, epoch, ERP, comparison, and batch-created run
+  lineage.
+- Missing optional provenance creates warnings, not hard failures.
+
+Status: contract complete. See `docs/reproducibility-graph-contract.md`,
+`docs/schemas/reproducibility-graph.schema.json`, and
+`tests/fixtures/reproducibility/`.
+
+### E5. Reproducibility Graph Read-Only UI
+
+- Add a compact read-only view for the reproducibility graph.
+- Show dataset, preprocessing, epoch, ERP, comparison, config, and artifact
+  lineage without adding rerun execution.
+
+Acceptance:
+
+- The UI handles missing graph data gracefully.
+- Existing test IDs used by Phase 2, Phase C, and Phase 3 browser smokes remain
+  stable.
+- Web build passes.
+
+Status: complete. Run rows now show a read-only lineage list for dataset,
+preprocessing, epoch, ERP, and comparison stages using existing run metadata.
+
+### E6. One-Click Rerun Planning Contract
+
+- Add an API path or service that creates a rerun plan for a completed analysis.
+- Validate source file availability, parent runs, config snapshots, artifact
+  presence, and compatibility warnings.
+- Do not execute the rerun in this slice.
+
+Acceptance:
+
+- Rerun plan tests cover ready, blocked, and partially recoverable cases.
+- The plan is deterministic and does not mutate existing runs.
+- The response clearly separates blockers from warnings.
+
+Status: complete. `GET /runs/{run_id}/rerun-plan` now returns a read-only
+preview with chain, source, parent-run, config, and artifact checks. The plan
+uses `ready`, `partially_recoverable`, and `blocked` states; it exposes
+`blockers` and `warnings` separately and never queues or mutates reruns.
+
+### E7. Public Dataset CI Opt-In
+
+- Add a manual GitHub Actions workflow or equivalent script contract for public
+  dataset smoke checks.
+- Keep large public data downloads out of default pull request and `main` push
+  CI.
+- Make the download step explicit and opt-in.
+
+Acceptance:
+
+- Default CI still does not download public EEG data.
+- The opt-in path can run offline contract checks without downloading data.
+- Public-data downloads, when enabled, write only under ignored `data/` paths
+  and publish small manifest artifacts instead of committing raw data.
+
+Status: complete. `.github/workflows/public-dataset-smoke.yml` is a manual-only
+workflow with `download_public_data=false` by default. It always runs the offline
+public smoke contract tests and only prepares the PhysioNet EEGMMI files when a
+maintainer explicitly enables the download input.
+
+### E8. ERP/QC Visual Regression Seed
+
+- Add one or two Playwright screenshot baselines before building a larger visual
+  regression suite.
+- Center the seed on deterministic ERP preview and QC dashboard UI.
+- Keep the visual seed separate from the default browser smoke gate.
+
+Acceptance:
+
+- Playwright stores stable screenshots for deterministic fixture data.
+- ERP preview and QC dashboard are covered by locator-level snapshots.
+- The seed can be run explicitly without changing the default `e2e:all` gate.
+
+Status: complete. `apps/web/e2e/visual-regression-seed.spec.ts` adds two
+locator-level Playwright baselines for the deterministic Phase 3 ERP fixture:
+`erp-preview-seed-win32.png` and `qc-dashboard-erp-seed-win32.png`. The seed is
+available through `npm.cmd run e2e:visual-seed` and remains separate from the
+default `e2e:all` browser gate.
+
+### E9. Multi-Subject Batch UI Completion Slice
+
+- Improve one Phase C batch UI surface for research use without expanding the
+  backend batch contract.
+- Selected slice: batch item filter.
+- Keep retry and execution behavior unchanged.
+
+Acceptance:
+
+- Batch item filters expose all, pending, completed, and failed views with clear
+  counts.
+- The selected filter shows how many subject/session items are visible.
+- Phase C browser smoke verifies failed, completed, and empty failed-filter
+  states around a retry.
+
+Status: complete. Batch filter buttons now include per-filter counts and the
+panel reports the visible item count for the active filter. The Phase C batch
+smoke exercises failed-only and completed-only views before retry, then verifies
+the empty failed view after the retry completes.
+
+### E10. Advanced Artifact Workflow Planning
+
+- Split advanced artifact workflow planning from immediate ICA/manual review
+  execution.
+- Define artifact action schema, pending/manual-review states, and export/report
+  impact.
+- Keep current preprocessing worker behavior unchanged.
+
+Acceptance:
+
+- Artifact actions have a schema covering ICA component exclusions, bad-channel
+  marking/interpolation, manual artifact annotation rejection, and review notes.
+- Pending manual review is an auditable state, not an implicit data mutation.
+- Report/export behavior is explicit: include pending actions as diagnostics,
+  warn when review is pending, and do not block export solely because review is
+  pending.
+
+Status: complete. `docs/advanced-artifact-workflow-contract.md` now defines the
+artifact action lifecycle, manual-review states, and report/export policy. The
+contract is pinned by `docs/schemas/artifact-action.schema.json`,
+`tests/fixtures/artifacts/artifact_action_manual_review_v1.json`, and
+`tests/test_advanced_artifact_workflow_contract.py`.
+
+### E11. Data Governance MVP
+
+- Add one minimal local data management feature for the preview version.
+- Selected slice: explicit dataset-scoped local data deletion.
+- Keep project export/delete deferred.
+
+Acceptance:
+
+- Dataset-local deletion requires an explicit matching confirmation id.
+- Dry-run mode previews paths and run ids without deleting files.
+- Active pending/running/cancelling runs block deletion.
+- Deletion is constrained to known local data roots and documented.
+
+Status: complete. `DELETE /datasets/{dataset_id}/local-data` now deletes
+dataset upload registry files, dataset run metadata, and dataset-scoped
+processed/epoch/ERP output directories only after `confirm_dataset_id` matches.
+The endpoint supports `dry_run=true`, blocks active runs, and is documented in
+`docs/data-governance-mvp.md`.
+
+### E12. Collaboration Snapshot Contract
+
+- Define immutable, shareable project archive snapshots without server
+  collaboration features.
+- Fix project archive manifest shape, included/excluded data policy, and checksum
+  contract.
+- Keep archive generation/import UI deferred.
+
+Acceptance:
+
+- Project archive manifests are content-addressed immutable snapshots.
+- Included data policy distinguishes raw uploads, derivatives, reports,
+  manifests, and provenance.
+- Excluded data policy explicitly covers secrets, runtime cache, local logs, raw
+  EEG, event logs, sidecars, and derived FIF data.
+- Every archive entry has a SHA-256 checksum contract.
+
+Status: complete. `docs/collaboration-snapshot-contract.md` now defines the
+immutable project archive snapshot contract. The contract is pinned by
+`docs/schemas/project-archive-manifest.schema.json`,
+`tests/fixtures/collaboration/project_archive_manifest_v1.json`, and
+`tests/test_collaboration_snapshot_contract.py`.
+
+### E13. Phase E Exit Gate
+
+- Run the full Python test gate, web build, and `npm.cmd run e2e:all`.
+- Record final statistics and reproducibility behavior.
+- Move unfinished public-data CI, collaboration, advanced artifact workflow,
+  visual regression, batch UI, and data governance items to Phase F or later.
+
+Acceptance:
+
+- Regression gate passes.
+- Phase E artifacts and contracts are documented.
+- Phase F-or-later carryover is explicit.
+
+Status: complete. Final gate on 2026-05-31:
+
+- `.\apps\api\.venv\Scripts\python.exe -m pytest tests -o cache_dir=data/cache/pytest-cache --basetemp data/cache/pytest-phase-e-final`:
+  297 passed.
+- `npm.cmd run build` in `apps/web`: passed.
+- `npm.cmd run e2e:all` in `apps/web`: passed, including Phase 2
+  preprocessing, Phase C batch retry, Phase 3 epoch, and Phase 3 ERP smoke
+  tests.
+
+Final Phase E behavior:
+
+- ERP comparisons now have a Phase E statistics contract and one paired
+  mean-amplitude t-test MVP, with statistics surfaced in API responses,
+  `analysis_report.json`, export manifests, and structured diagnostics.
+- Completed analysis paths now have a reproducibility graph contract,
+  read-only lineage UI, and deterministic rerun-plan preview that separates
+  blockers from warnings without executing reruns.
+- Phase E also closes the agreed narrow MVP/contract slices for public dataset
+  opt-in CI, visual regression seed coverage, batch item filtering, advanced
+  artifact action planning, dataset-local deletion, and immutable collaboration
+  snapshots.
+
+Phase F-or-later carryover:
+
+- Productionized public-data CI matrices and larger dataset coverage.
+- Full ERP/QC visual regression suite.
+- Richer multi-subject batch grouping and retry UX beyond the E9 filter slice.
+- Actual artifact review execution for ICA, interpolation, and manual review.
+- Project archive generation/import UI and hosted collaboration workflows.
+- Broader data governance, including project-level export/delete, migration,
+  retention-policy, and audit workflows.
