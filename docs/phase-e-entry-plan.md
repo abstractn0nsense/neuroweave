@@ -324,7 +324,30 @@ processed/epoch/ERP output directories only after `confirm_dataset_id` matches.
 The endpoint supports `dry_run=true`, blocks active runs, and is documented in
 `docs/data-governance-mvp.md`.
 
-### E12. Phase E Exit Gate
+### E12. Collaboration Snapshot Contract
+
+- Define immutable, shareable project archive snapshots without server
+  collaboration features.
+- Fix project archive manifest shape, included/excluded data policy, and checksum
+  contract.
+- Keep archive generation/import UI deferred.
+
+Acceptance:
+
+- Project archive manifests are content-addressed immutable snapshots.
+- Included data policy distinguishes raw uploads, derivatives, reports,
+  manifests, and provenance.
+- Excluded data policy explicitly covers secrets, runtime cache, local logs, raw
+  EEG, event logs, sidecars, and derived FIF data.
+- Every archive entry has a SHA-256 checksum contract.
+
+Status: complete. `docs/collaboration-snapshot-contract.md` now defines the
+immutable project archive snapshot contract. The contract is pinned by
+`docs/schemas/project-archive-manifest.schema.json`,
+`tests/fixtures/collaboration/project_archive_manifest_v1.json`, and
+`tests/test_collaboration_snapshot_contract.py`.
+
+### E13. Phase E Exit Gate
 
 - Run the full Python test gate, web build, and `npm.cmd run e2e:all`.
 - Record final statistics and reproducibility behavior.

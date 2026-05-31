@@ -1,0 +1,304 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neuroweave.local/schemas/project-archive-manifest.schema.json",
+  "title": "NeuroWeave project archive manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "manifest_kind",
+    "archive_id",
+    "created_at_utc",
+    "created_by",
+    "immutability",
+    "project",
+    "included_data_policy",
+    "excluded_data_policy",
+    "entries",
+    "checksums",
+    "diagnostics"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "manifest_kind": {
+      "const": "project_archive_manifest"
+    },
+    "archive_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at_utc": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_by": {
+      "type": ["string", "null"]
+    },
+    "immutability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "snapshot",
+        "content_addressed",
+        "mutation_policy",
+        "manifest_digest_sha256"
+      ],
+      "properties": {
+        "snapshot": {
+          "const": true
+        },
+        "content_addressed": {
+          "const": true
+        },
+        "mutation_policy": {
+          "enum": ["append_new_archive_only"]
+        },
+        "manifest_digest_sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project_id",
+        "experiment_ids",
+        "dataset_ids",
+        "run_ids",
+        "workflow_template_ids"
+      ],
+      "properties": {
+        "project_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "experiment_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "dataset_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "run_ids": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["preprocessing", "epoch", "erp"],
+          "properties": {
+            "preprocessing": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "epoch": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "erp": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "workflow_template_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "included_data_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["include_raw_uploads", "include_derivatives", "include_reports", "include_manifests", "include_provenance"],
+      "properties": {
+        "include_raw_uploads": {
+          "type": "boolean"
+        },
+        "include_derivatives": {
+          "type": "boolean"
+        },
+        "include_reports": {
+          "const": true
+        },
+        "include_manifests": {
+          "const": true
+        },
+        "include_provenance": {
+          "const": true
+        }
+      }
+    },
+    "excluded_data_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["excluded_categories", "reason", "redaction_required"],
+      "properties": {
+        "excluded_categories": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "raw_eeg",
+              "event_logs",
+              "sidecars",
+              "derived_fif",
+              "local_logs",
+              "runtime_cache",
+              "secrets"
+            ]
+          }
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "redaction_required": {
+          "type": "boolean"
+        }
+      }
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "archive_path",
+          "source_path",
+          "entry_kind",
+          "dataset_id",
+          "run_id",
+          "logical_name",
+          "size_bytes",
+          "checksum_sha256"
+        ],
+        "properties": {
+          "archive_path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_path": {
+            "type": ["string", "null"]
+          },
+          "entry_kind": {
+            "enum": [
+              "project_metadata",
+              "dataset_metadata",
+              "run_metadata",
+              "artifact_manifest",
+              "reproducibility_graph",
+              "analysis_report",
+              "export_manifest",
+              "diagnostic",
+              "figure",
+              "provenance",
+              "raw_data",
+              "derived_data"
+            ]
+          },
+          "dataset_id": {
+            "type": ["string", "null"]
+          },
+          "run_id": {
+            "type": ["string", "null"]
+          },
+          "logical_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "checksum_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      }
+    },
+    "checksums": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "entry_count", "manifest_payload_digest_sha256", "archive_digest_sha256"],
+      "properties": {
+        "algorithm": {
+          "const": "sha256"
+        },
+        "entry_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "manifest_payload_digest_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "archive_digest_sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "diagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["warnings"],
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "severity", "source", "impact", "suggested_action"],
+            "properties": {
+              "code": {
+                "type": "string",
+                "minLength": 1
+              },
+              "severity": {
+                "enum": ["warning", "error"]
+              },
+              "source": {
+                "enum": [
+                  "bids",
+                  "event_mapping",
+                  "validation",
+                  "worker",
+                  "artifact",
+                  "export_bundle",
+                  "batch"
+                ]
+              },
+              "impact": {
+                "type": ["string", "null"]
+              },
+              "suggested_action": {
+                "type": ["string", "null"]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
